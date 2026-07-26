@@ -380,10 +380,11 @@ public class LocalCodegenExecutionService
         var entityId = GetRequiredLong(request.Payload, "entityId", "id");
         var pageType = GetRequiredString(request.Payload, "pageType");
         var scriptJson = GetRequiredString(request.Payload, "scriptJson");
+        var scriptKey = GetString(request.Payload, "scriptKey");
         var bundle = await GetBundleByEntityAsync(request, entityId);
 
         using var context = await _metadataStore.CreateAsync(bundle, GetFullProjectPathOverride(bundle.Project, request.Payload));
-        var result = await context.ModuleEntityService.SavePageScriptAsync(entityId, pageType, scriptJson);
+        var result = await context.ModuleEntityService.SavePageScriptAsync(entityId, pageType, scriptJson, scriptKey);
         return LocalExecutionResult.OkData(result);
     }
 

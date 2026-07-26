@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System;
 using System.IO;
 using CodeMaster.Application.Services.CodeGen;
@@ -157,6 +158,110 @@ public class CodeGeneratorServiceTests
             Assert.Contains("public DateTime OrderDate", dtoCode);
             Assert.DoesNotContain("public datetime OrderDate", entityCode);
             Assert.DoesNotContain("public datetime OrderDate", dtoCode);
+        }
+        finally
+        {
+            db.Dispose();
+            TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
+    public async Task Generation_ShouldUseTypedRangesForOneToManyLongIds()
+    {
+        var (db, dbFile) = CreateMetadataDb();
+        try
+        {
+            const long orderId = 200;
+            const long orderItemId = 201;
+
+            db.Insertable(new[]
+            {
+                new ModuleEntity
+                {
+                    Id = orderId,
+                    ProjectId = 1,
+                    ModuleId = 1,
+                    Name = "Order",
+                    Description = "Order",
+                    HasPrimaryKey = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                },
+                new ModuleEntity
+                {
+                    Id = orderItemId,
+                    ProjectId = 1,
+                    ModuleId = 1,
+                    Name = "OrderItem",
+                    Description = "Order item",
+                    HasPrimaryKey = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+
+            db.Insertable(new[]
+            {
+                SystemField(202, orderId, "Id", "long", isPrimaryKey: true),
+                SystemField(203, orderItemId, "Id", "long", isPrimaryKey: true),
+                new EntityField
+                {
+                    Id = 204,
+                    ModuleEntityId = orderItemId,
+                    Name = "OrderId",
+                    Description = "Order",
+                    DataType = "long",
+                    IsRequired = true,
+                    MinValue = "1",
+                    ShowInAddForm = true,
+                    ShowInEditForm = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                },
+                new EntityField
+                {
+                    Id = 205,
+                    ModuleEntityId = orderItemId,
+                    Name = "ProductId",
+                    Description = "Product",
+                    DataType = "long?",
+                    IsNullable = true,
+                    MinValue = "1",
+                    ShowInAddForm = true,
+                    ShowInEditForm = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+
+            db.Insertable(new OneToManyRelation
+            {
+                Id = 206,
+                ModuleEntityId = orderId,
+                MasterField = "Id",
+                ChildEntityId = orderItemId,
+                ChildEntityName = "OrderItem",
+                ChildForeignKey = "OrderId",
+                CreateBy = "test",
+                UpdateUserId = 0
+            }).ExecuteCommand();
+
+            var generator = new CodeGeneratorService(db);
+            var orderDtoCode = await generator.GenerateDtoAsync(orderId, "Demo", "Orders");
+            var orderItemDtoCode = await generator.GenerateDtoAsync(orderItemId, "Demo", "Orders");
+
+            Assert.Contains("public List<CreateOrderItemDto>? OrderItems", orderDtoCode);
+            Assert.Contains(
+                "[Range(typeof(long), \"1\", \"9223372036854775807\")]",
+                orderItemDtoCode);
+            Assert.DoesNotContain("[Range(1, int.MaxValue)]", orderItemDtoCode);
+
+            var generatedRange = new RangeAttribute(
+                typeof(long),
+                "1",
+                "9223372036854775807");
+            Assert.True(generatedRange.IsValid(2_078_909_676_682_088_448L));
         }
         finally
         {

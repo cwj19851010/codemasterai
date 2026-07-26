@@ -1494,6 +1494,76 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.Contains("ownedDetail.OrderId = id", serviceCode);
     }
 
+    [Fact]
+    public async Task EntityDesigner_ResolvesNestedProjectRoot_And_SavesSelectedChildScript()
+    {
+        const long projectId = 9301;
+        const long moduleId = 9302;
+        const long entityId = 9303;
+        const string projectName = "NestedDesignerProject";
+        const string moduleName = "Orders";
+        const string entityName = "DesignerOrder";
+
+        var storedParentPath = Path.Combine(_tempProjectPath, "exports");
+        var actualProjectRoot = Path.Combine(storedParentPath, projectName);
+        var viewPath = Path.Combine(actualProjectRoot, $"{projectName}.Vue", "src", "views", "orders", "designerorder");
+        Directory.CreateDirectory(viewPath);
+
+        var treeJson = "[{\"id\":\"designer-root\",\"tag\":\"div\",\"props\":[],\"children\":[]}]";
+        await File.WriteAllTextAsync(Path.Combine(viewPath, "index.vue"), "<template><div>nested designer</div></template>");
+        await File.WriteAllTextAsync(Path.Combine(viewPath, "designerOrder.index.tree.json"), treeJson);
+        await File.WriteAllTextAsync(Path.Combine(viewPath, "add.vue"), "<template><div>add</div></template>");
+        await File.WriteAllTextAsync(Path.Combine(viewPath, "designerOrder.add.script.json"), "{\"name\":\"main\"}");
+        await File.WriteAllTextAsync(Path.Combine(viewPath, "orderItem.add.script.json"), "{\"name\":\"old-child\"}");
+
+        _db.Insertable(new Project
+        {
+            Id = projectId,
+            ProjectName = projectName,
+            ProjectPath = storedParentPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile}",
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new ProjectModule
+        {
+            Id = moduleId,
+            ProjectId = projectId,
+            ModuleName = moduleName,
+            ModuleDescription = moduleName,
+            Icon = "folder",
+            RoutePath = "/orders",
+            LastSyncTime = DateTime.UtcNow,
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new ModuleEntity
+        {
+            Id = entityId,
+            ProjectId = projectId,
+            ModuleId = moduleId,
+            Name = entityName,
+            Description = entityName,
+            TableName = "designer_order",
+            HasPrimaryKey = true,
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+
+        var page = await service.GetPageContentAsync(entityId, "index");
+        Assert.Equal(treeJson, page.TreeJson);
+
+        const string updatedChildScript = "{\"name\":\"updated-child\"}";
+        Assert.True(await service.SavePageScriptAsync(entityId, "add", updatedChildScript, "orderItem"));
+        Assert.Equal(updatedChildScript, await File.ReadAllTextAsync(Path.Combine(viewPath, "orderItem.add.script.json")));
+        Assert.Equal("{\"name\":\"main\"}", await File.ReadAllTextAsync(Path.Combine(viewPath, "designerOrder.add.script.json")));
+    }
+
     private void SeedMinimalTemplates()
     {
         const string emptyScript = "{\"imports\":[],\"uses\":[],\"refs\":[],\"reactives\":[],\"functions\":[],\"hooks\":[],\"computed\":[],\"watches\":[]}";

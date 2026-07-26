@@ -1,5 +1,5 @@
 <template>
-  <div class="designer-root" style="position:relative">
+  <div ref="designerRootRef" class="designer-root" style="position:relative">
     <!-- 工具栏 -->
     <div class="toolbar">
       <el-button @click="handleBack" size="small">← 返回</el-button>
@@ -85,7 +85,7 @@
       </teleport>
 
       <!-- 画布 -->
-      <div class="canvas-area">
+      <div ref="canvasAreaRef" class="canvas-area" @scroll.passive="scheduleRefresh">
         <DesignCanvas v-if="tree.length" :list="tree" :selectedId="selectedId" @select="onSelect" />
       </div>
       <!-- 属性栏 -->
@@ -266,8 +266,8 @@
         @dragstart="onDragStart($event, h.id)"
         @dragover.prevent="onDragOver($event, h.id)"
         @dragleave="onDragLeave(h.id)"
-        @drop.prevent
-                @dragend="onDragEnd">{{ h.tag }}</div>
+        @drop.prevent.stop="onDrop($event, h.id, 'after')"
+        @dragend="onDragEnd">{{ h.tag }}</div>
     </div>
 
     <!-- Script 查看/编辑对话框 -->
@@ -437,7 +437,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close, Delete } from '@element-plus/icons-vue'
@@ -638,14 +638,10 @@ function ctxInsertAfter() {
 }
 
 function insertSibling(targetId, newNode, position) {
-  const parent = findParentNode(tree.value, targetId)
-  if (parent && parent.children) {
-    const idx = parent.children.findIndex(c => c.id === targetId)
-    if (idx >= 0) parent.children.splice(position === 'before' ? idx : idx + 1, 0, newNode)
-  } else {
-    const idx = tree.value.findIndex(c => c.id === targetId)
-    if (idx >= 0) tree.value.splice(position === 'before' ? idx : idx + 1, 0, newNode)
-  }
+  const location = findNodeLocation(tree.value, targetId)
+  if (!location) return false
+  location.collection.splice(position === 'before' ? location.index : location.index + 1, 0, newNode)
+  return true
 }
 
 function insertDesignerNode(targetId, newNode, position = 'after') {
@@ -806,11 +802,15 @@ const savingPageScript = ref(false)
 const scriptActiveNames = ref(['imports', 'functions'])
 const childScripts = ref({})       // 子表脚本 { 'orderItem': {...} }
 const selectedScriptKey = ref('')  // 当前选中的脚本 key: '' = 主表, 'orderItem' = 子表
+const activeScriptKey = ref('')    // editingPageScript 当前实际对应的 key
+const scriptDirtyStates = ref({})
 
 watch(showScriptDialog, async (val) => {
   if (val && entityId.value) {
     scriptLoading.value = true
     selectedScriptKey.value = ''
+    activeScriptKey.value = ''
+    scriptDirtyStates.value = {}
     try {
       const res = await getPageScript(entityId.value, pageType.value)
       const parsed = res ? (typeof res === 'string' ? JSON.parse(res) : res) : null
@@ -840,28 +840,33 @@ watch(showScriptDialog, async (val) => {
 // 主表原始脚本备份（切换子表后恢复用）
 const mainPageScriptBackup = ref(null)
 
-// 当前选中的脚本（主表或子表）
-const activeScript = computed(() => {
-  if (!selectedScriptKey.value) return editingPageScript.value
-  return childScripts.value[selectedScriptKey.value] || null
-})
+function cloneScript(script) {
+  return script ? JSON.parse(JSON.stringify(script)) : null
+}
 
-function onScriptKeyChange() {
-  // 保存当前编辑状态
-  if (selectedScriptKey.value && editingPageScript.value) {
-    childScripts.value[selectedScriptKey.value] = JSON.parse(JSON.stringify(editingPageScript.value))
+function onScriptKeyChange(nextKey) {
+  const previousKey = activeScriptKey.value
+
+  // Element Plus 的 change 发生在 v-model 更新之后，因此必须用单独保存的
+  // activeScriptKey 记录旧脚本，不能拿 selectedScriptKey 覆盖新目标。
+  if (editingPageScript.value) {
+    if (previousKey) childScripts.value[previousKey] = cloneScript(editingPageScript.value)
+    else mainPageScriptBackup.value = cloneScript(editingPageScript.value)
   }
-  if (!selectedScriptKey.value && editingPageScript.value) {
-    mainPageScriptBackup.value = JSON.parse(JSON.stringify(editingPageScript.value))
+  scriptDirtyStates.value = {
+    ...scriptDirtyStates.value,
+    [previousKey]: pageScriptDirty.value
   }
-  // 加载新脚本
-  if (!selectedScriptKey.value) {
+
+  const targetKey = nextKey ?? selectedScriptKey.value ?? ''
+  activeScriptKey.value = targetKey
+  if (!targetKey) {
     editingPageScript.value = mainPageScriptBackup.value ? JSON.parse(JSON.stringify(mainPageScriptBackup.value)) : (pageScript.value ? JSON.parse(JSON.stringify(pageScript.value)) : null)
   } else {
-    const s = childScripts.value[selectedScriptKey.value]
+    const s = childScripts.value[targetKey]
     editingPageScript.value = s ? JSON.parse(JSON.stringify(s)) : null
   }
-  pageScriptDirty.value = false
+  pageScriptDirty.value = !!scriptDirtyStates.value[targetKey]
 }
 
 async function savePageScriptNow() {
@@ -873,17 +878,12 @@ async function savePageScriptNow() {
       // 主表
       await savePageScript(entityId.value, pageType.value, JSON.stringify(s))
       pageScript.value = JSON.parse(JSON.stringify(s))
+      mainPageScriptBackup.value = JSON.parse(JSON.stringify(s))
     } else {
-      // 子表：写入 fieldScripts 并保存
-      const fs = JSON.parse(JSON.stringify(fieldScripts.value || {}))
-      for (const k of Object.keys(fs)) {
-        if (k.startsWith('child_') && k.includes(selectedScriptKey.value)) {
-          fs[k] = JSON.stringify(s)
-        }
-      }
-      await saveFieldScripts(entityId.value, pageType.value, JSON.stringify(fs))
+      await savePageScript(entityId.value, pageType.value, JSON.stringify(s), selectedScriptKey.value)
       childScripts.value[selectedScriptKey.value] = JSON.parse(JSON.stringify(s))
     }
+    scriptDirtyStates.value = { ...scriptDirtyStates.value, [selectedScriptKey.value]: false }
     pageScriptDirty.value = false
     ElMessage.success('Script 已保存')
   } catch (e) {
@@ -1311,8 +1311,14 @@ function collapseAll() {
   Object.values(nodes).forEach(n => n.expanded = false)
 }
 
-function allowDrag(node) { return true }
-function allowDrop(draggingNode, dropNode, type) { return type !== 'inner' || dropNode.data.tag !== 'text' }
+function allowDrag(node) { return node.data.tag !== 'slot' }
+function allowDrop(draggingNode, dropNode, type) {
+  if (dropNode.data.tag === 'slot') return false
+  const sourceNode = findNode(tree.value, draggingNode.data.id)
+  const targetNode = findNode(tree.value, dropNode.data.id)
+  if (!sourceNode || !targetNode || containsNode(sourceNode, targetNode.id)) return false
+  return type !== 'inner' || canHaveChildren(targetNode)
+}
 
 function onTreeDragStart(node, ev) {
   pushUndo()
@@ -1328,75 +1334,31 @@ function onTreeNodeDrop(draggingNode, dropNode, dropType, ev) {
   const sourceId = draggingNode.data.id
   const targetId = dropNode.data.id
   if (!sourceId || sourceId === targetId) return
-  
-  const sourceNode = findNode(tree.value, sourceId)
-  const targetNode = findNode(tree.value, targetId)
-  console.log("findNode result:", !!sourceNode, !!targetNode)
-  if (!sourceNode || !targetNode) return
-  
-  // Remove source from wherever it is (children or slot components)
-  removeNodeFromTree(tree.value, sourceId)
-  
-  if (dropType === 'inner') {
-    // Drop inside target: add to children
-    targetNode.children = targetNode.children || []
-    targetNode.children.push(sourceNode)
-  } else {
-    // Drop before/after target: find target's parent and insert
-    const tgtParent = findParentNode(tree.value, targetId)
-    if (tgtParent) {
-      const tgtArr = tgtParent.children || []
-      let idx = tgtArr.findIndex(c => c.id === targetId)
-      if (idx >= 0) {
-        if (dropType === 'after') idx++
-        tgtArr.splice(idx, 0, sourceNode)
-        tgtParent.children = [...tgtArr]
-      }
-    }
-  }
-  
-  onTreeChange()
-}
-
-function removeNodeFromTree(nodes, nodeId) {
-  for (const n of nodes) {
-    if (n.children) {
-      const before = n.children.length
-      n.children = n.children.filter(c => c.id !== nodeId)
-      if (n.children.length !== before) return true
-      if (removeNodeFromTree(n.children, nodeId)) return true
-    }
-    if (n.useSlots) {
-      for (const s of n.useSlots) {
-        if (s.components) {
-          const before = s.components.length
-          s.components = s.components.filter(c => c.id !== nodeId)
-          if (s.components.length !== before) return true
-          if (removeNodeFromTree(s.components, nodeId)) return true
-        }
-      }
-    }
-  }
-  return false
+  if (moveDesignerNode(sourceId, targetId, dropType)) onTreeChange()
 }
 
 
 const allHandles = ref([])
-let _rt = 0
+const designerRootRef = ref(null)
+const canvasAreaRef = ref(null)
+let refreshFrame = null
 function scheduleRefresh() {
-  clearTimeout(_rt)
-  _rt = setTimeout(() => {
-    const c = document.querySelector('.designer-root')
+  if (refreshFrame !== null) return
+  refreshFrame = requestAnimationFrame(() => {
+    refreshFrame = null
+    const c = designerRootRef.value
     const cr = c ? c.getBoundingClientRect() : { left: 0, top: 0 }
+    const canvasRect = canvasAreaRef.value?.getBoundingClientRect()
     const r = []
     handleMap.forEach((el, id) => {
       if (typeof id==='string' && id.startsWith('__tag__')) return
       if (!el || !document.contains(el)) return
       const b = el.getBoundingClientRect()
+      if (canvasRect && (b.bottom < canvasRect.top || b.top > canvasRect.bottom || b.right < canvasRect.left || b.left > canvasRect.right)) return
       r.push({ id, tag: handleMap.get('__tag__'+id)||'?', x: b.left-cr.left, y: b.top-cr.top-20 })
     })
     allHandles.value = r
-  }, 50)
+  })
 }
 window.__DESIGNER_REFRESH__ = scheduleRefresh
 
@@ -1408,13 +1370,65 @@ function findNode(nodes, id) {
   }
   return null
 }
-function findParentNode(nodes, childId) {
-  for (const n of nodes) {
-    if ((n.children||[]).some(c => c.id===childId)) return n
-    if (n.children) { const f = findParentNode(n.children, childId); if (f) return f }
-    for (const s of (n.useSlots||[])) { if (s.components) { const f = findParentNode(s.components, childId); if (f) return f } }
+function findNodeLocation(nodes, id, parentNode = null, slot = null) {
+  for (let index = 0; index < (nodes || []).length; index++) {
+    const node = nodes[index]
+    if (node.id === id) return { node, collection: nodes, index, parentNode, slot }
+    const childLocation = findNodeLocation(node.children || [], id, node, null)
+    if (childLocation) return childLocation
+    for (const currentSlot of (node.useSlots || [])) {
+      const slotLocation = findNodeLocation(currentSlot.components || [], id, node, currentSlot)
+      if (slotLocation) return slotLocation
+    }
   }
   return null
+}
+function containsNode(node, id) {
+  if (!node || !id) return false
+  if (node.id === id) return true
+  if ((node.children || []).some(child => containsNode(child, id))) return true
+  return (node.useSlots || []).some(slot => (slot.components || []).some(child => containsNode(child, id)))
+}
+function moveDesignerNode(sourceId, targetId, position) {
+  const sourceLocation = findNodeLocation(tree.value, sourceId)
+  const targetLocation = findNodeLocation(tree.value, targetId)
+  if (!sourceLocation || !targetLocation || containsNode(sourceLocation.node, targetId)) return false
+  if (position === 'inner' || position === 'inside') {
+    if (!canHaveChildren(targetLocation.node)) return false
+  }
+
+  const sourceNode = sourceLocation.node
+  sourceLocation.collection.splice(sourceLocation.index, 1)
+
+  const currentTarget = findNodeLocation(tree.value, targetId)
+  if (!currentTarget) {
+    sourceLocation.collection.splice(sourceLocation.index, 0, sourceNode)
+    return false
+  }
+
+  if (position === 'inner' || position === 'inside') {
+    currentTarget.node.children = currentTarget.node.children || []
+    currentTarget.node.children.push(sourceNode)
+  } else {
+    const insertIndex = position === 'before' ? currentTarget.index : currentTarget.index + 1
+    currentTarget.collection.splice(insertIndex, 0, sourceNode)
+  }
+  return true
+}
+function swapDesignerNodes(sourceId, targetId) {
+  const sourceLocation = findNodeLocation(tree.value, sourceId)
+  const targetLocation = findNodeLocation(tree.value, targetId)
+  if (!sourceLocation || !targetLocation) return false
+  if (containsNode(sourceLocation.node, targetId) || containsNode(targetLocation.node, sourceId)) return false
+
+  const sourceNode = sourceLocation.node
+  const targetNode = targetLocation.node
+  sourceLocation.collection[sourceLocation.index] = targetNode
+  targetLocation.collection[targetLocation.index] = sourceNode
+  return true
+}
+function findParentNode(nodes, childId) {
+  return findNodeLocation(nodes, childId)?.parentNode || null
 }
 
 async function onSelect(id) {
@@ -1594,7 +1608,8 @@ function onDragOver(e, id) {
   if ((!dragId.value && !paletteDragTag) || dragId.value === id) return
   dragOverId.value = id
   const r = e.currentTarget.getBoundingClientRect()
-  indStyle.value = { position: 'fixed', left: r.left + 'px', top: (r.top - 28) + 'px' }
+  const rootRect = document.querySelector('.designer-root')?.getBoundingClientRect() || { left: 0, top: 0 }
+  indStyle.value = { position: 'absolute', left: (r.left - rootRect.left) + 'px', top: (r.top - rootRect.top - 28) + 'px' }
 }
 
 function onDragLeave(id) {
@@ -1622,64 +1637,14 @@ function onDrop(e, targetId, explicitPos) {
   }
 
   const sourceId = dragId.value
-  console.log("DROP", sourceId, "->", targetId, explicitPos)
-  console.log("onDrop pos=", explicitPos)
   dragId.value = null
   dragOverId.value = null
   if (!sourceId || sourceId === targetId) return
-  
-  const sourceNode = findNode(tree.value, sourceId)
-  const targetNode = findNode(tree.value, targetId)
-  console.log("findNode result:", !!sourceNode, !!targetNode)
-  if (!sourceNode || !targetNode) return
-  
 
-  // Swap mode
-  if (pos === 'swap') {
-    const sp = findParentNode(tree.value, sourceId)
-    const tp = findParentNode(tree.value, targetId)
-    const srcArr = sp ? sp.children : tree.value
-    const tgtArr = tp ? tp.children : tree.value
-    const si = srcArr.findIndex(c => c.id === sourceId)
-    const ti = tgtArr.findIndex(c => c.id === targetId)
-    if (si !== -1 && ti !== -1) {
-      const tmp = srcArr[si]
-      srcArr[si] = tgtArr[ti]
-      tgtArr[ti] = tmp
-      if (sp) sp.children = srcArr.slice()
-      else tree.value = srcArr.slice()
-      if (tp && tp !== sp) tp.children = tgtArr.slice()
-    }
-    onTreeChange()
-    selectedId.value = null; selectedNode.value = null; drawerVisible.value = false
-    return
-  }
-
-  const sourceParent = findParentNode(tree.value, sourceId)
-  const targetParent = findParentNode(tree.value, targetId)
-  if (!sourceParent || !targetParent) return
-  
-  // Remove from source parent
-  const srcArr = (sourceParent.children || []).filter(c => c.id !== sourceId)
-  if (srcArr.length !== sourceParent.children.length) sourceParent.children = srcArr
-  
-  if (pos === 'inside') {
-    // Insert as child of target
-    targetNode.children = targetNode.children || []
-    targetNode.children.push(sourceNode)
-  } else {
-    // Insert before or after target in target's parent
-    const tgtArr = targetParent.children || []
-    let idx = tgtArr.findIndex(c => c.id === targetId)
-    if (idx >= 0) {
-      if (pos === 'after') idx++
-      tgtArr.splice(idx, 0, sourceNode)
-    } else {
-      tgtArr.push(sourceNode)
-    }
-    targetParent.children = [...tgtArr]
-  }
-  
+  const changed = pos === 'swap'
+    ? swapDesignerNodes(sourceId, targetId)
+    : moveDesignerNode(sourceId, targetId, pos)
+  if (!changed) return
   onTreeChange()
   selectedId.value = null
   selectedNode.value = null
@@ -1696,6 +1661,11 @@ function onKeyDown(e) {
   }
 }
 document.addEventListener('keydown', onKeyDown)
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeyDown)
+  if (refreshFrame !== null) cancelAnimationFrame(refreshFrame)
+})
 
 onMounted(async () => {
   try {

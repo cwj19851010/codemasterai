@@ -156,6 +156,70 @@ public class CodeGeneratorService
         return normalized is "int" or "long" or "decimal" or "double" or "float" or "short" or "byte";
     }
 
+    private static string? BuildRangeAttribute(EntityField field)
+    {
+        var minimum = NormalizeRangeBoundary(field.MinValue);
+        var maximum = NormalizeRangeBoundary(field.MaxValue);
+        if (minimum == null && maximum == null)
+            return null;
+
+        var dataType = GetGenerationDataType(field).TrimEnd('?');
+        if (!TryGetNumericRangeBounds(dataType, out var typeMinimum, out var typeMaximum))
+            return null;
+
+        minimum ??= "0";
+        maximum ??= typeMaximum;
+        minimum = ResolveNumericLimit(minimum, dataType, typeMinimum, typeMaximum);
+        maximum = ResolveNumericLimit(maximum, dataType, typeMinimum, typeMaximum);
+
+        return $"[Range(typeof({dataType}), \"{EscapeAttributeString(minimum)}\", \"{EscapeAttributeString(maximum)}\")]";
+    }
+
+    private static string? NormalizeRangeBoundary(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string ResolveNumericLimit(
+        string value,
+        string dataType,
+        string typeMinimum,
+        string typeMaximum)
+    {
+        if (value.Equals($"{dataType}.MinValue", StringComparison.OrdinalIgnoreCase))
+            return typeMinimum;
+        if (value.Equals($"{dataType}.MaxValue", StringComparison.OrdinalIgnoreCase))
+            return typeMaximum;
+
+        return value.Replace("_", string.Empty, StringComparison.Ordinal);
+    }
+
+    private static bool TryGetNumericRangeBounds(
+        string dataType,
+        out string minimum,
+        out string maximum)
+    {
+        (minimum, maximum) = dataType switch
+        {
+            "byte" => ("0", "255"),
+            "short" => ("-32768", "32767"),
+            "int" => ("-2147483648", "2147483647"),
+            "long" => ("-9223372036854775808", "9223372036854775807"),
+            "float" => ("-3.4028234663852886E+38", "3.4028234663852886E+38"),
+            "double" => ("-1.7976931348623157E+308", "1.7976931348623157E+308"),
+            "decimal" => ("-79228162514264337593543950335", "79228162514264337593543950335"),
+            _ => (string.Empty, string.Empty)
+        };
+
+        return minimum.Length > 0;
+    }
+
+    private static string EscapeAttributeString(string value)
+    {
+        return value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+    }
+
     private static string BuildSugarColumnArguments(EntityField field)
     {
         if (field.IsIgnore)
@@ -242,6 +306,7 @@ public class CodeGeneratorService
             ["aggregate_separator"] = f.AggregateSeparator,
             ["min_value"] = string.IsNullOrEmpty(f.MinValue) ? null : f.MinValue,
             ["max_value"] = string.IsNullOrEmpty(f.MaxValue) ? null : f.MaxValue,
+            ["range_attribute"] = BuildRangeAttribute(f),
             ["regex_pattern"] = regexPattern,
             ["has_regex_pattern"] = regexPattern != null,
             ["regex_pattern_literal"] = ToCSharpStringLiteral(regexPattern),

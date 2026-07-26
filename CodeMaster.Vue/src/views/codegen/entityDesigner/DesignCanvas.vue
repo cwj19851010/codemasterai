@@ -228,19 +228,53 @@ function resolveTag(tag) {
   if (tag==='text'||tag==='template') return 'span'
   return tag
 }
+
+const DESIGN_TEXT_PROPS = new Set([
+  'label', 'title', 'placeholder', 'prop', 'name', 'content', 'text',
+  'description', 'empty-text', 'loading-text', 'no-data-text',
+  'no-match-text', 'alt'
+])
+
+function parseDesignLiteral(value) {
+  if (value === null || value === undefined) return { matched: true, value }
+  if (typeof value !== 'string') return { matched: true, value }
+
+  const text = value.trim()
+  if (text === 'true') return { matched: true, value: true }
+  if (text === 'false') return { matched: true, value: false }
+  if (text === 'null') return { matched: true, value: null }
+  if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(text)) return { matched: true, value: Number(text) }
+  if ((text.startsWith('[') && text.endsWith(']')) || (text.startsWith('{') && text.endsWith('}'))) {
+    try { return { matched: true, value: JSON.parse(text) } } catch {}
+  }
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return { matched: true, value: text.slice(1, -1) }
+  }
+  return { matched: false, value }
+}
+
+function isDesignTextProp(key) {
+  return DESIGN_TEXT_PROPS.has(String(key || '').replace(/[A-Z]/g, m => `-${m.toLowerCase()}`))
+}
+
 function buildProps(node) {
   const r={}
   if (!node.props) return r
   for (const p of node.props) {
     if (!p.key||p.key.startsWith('@')) continue
-    if (p.isBind&&p.value&&p.value!=='true'&&p.value!=='false'&&!/^\d+$/.test(p.value)) {
-      // 只保留简单变量绑定（如 model/rules），跳过表达式（如 $t(...)+... ）
-      if (/^[a-z]\w*$/.test(p.value)) {
-        if (p.key==='model'||p.key==='rules') { r[p.key]={}; continue }
-        if (p.key==='data'&&node.tag==='el-table') { /* 下方已特殊处理 el-table data */ }
-        else continue
+    if (p.isBind) {
+      if (p.key==='model'||p.key==='rules') { r[p.key]={}; continue }
+      if (p.key==='data'&&node.tag==='el-table') continue
+
+      const literal = parseDesignLiteral(p.value)
+      if (literal.matched) {
+        r[p.key] = literal.value
+        continue
       }
-      // 复杂表达式（含空格、运算符、函数调用等）→ 预览模式下跳过
+
+      // 设计器没有运行时 setup 上下文。文本属性显示原绑定表达式；
+      // 非文本属性不伪造字符串值，让 Element Plus 使用组件默认值。
+      if (isDesignTextProp(p.key)) r[p.key] = String(p.value ?? '')
       continue
     }
     let v=p.value

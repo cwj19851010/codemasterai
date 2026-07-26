@@ -15,9 +15,7 @@ public class {{ entity.name }}Dto : IBaseEntity
     /// </summary>
 {{~ if field.is_required ~}}    [Required(ErrorMessage = "请输入{{ field.description }}")]
 {{~ end ~}}
-{{~ if field.min_value && field.max_value ~}}    [Range({{ field.min_value }}, {{ field.max_value }})]
-{{~ else if !field.min_value && field.max_value ~}}    [Range(0, {{ field.max_value }})]
-{{~ else if field.min_value && !field.max_value ~}}    [Range({{ field.min_value }}, int.MaxValue)]
+{{~ if field.range_attribute ~}}    {{ field.range_attribute }}
 {{~ end ~}}
 {{~ if field.is_email ~}}    [EmailAddress(ErrorMessage = "请输入正确邮箱")]
 {{~ end ~}}
@@ -61,9 +59,7 @@ public class Create{{ entity.name }}Dto : IBaseEntity
     /// </summary>
 {{~ if field.is_required ~}}    [Required(ErrorMessage = "请输入{{ field.description }}")]
 {{~ end ~}}
-{{~ if field.min_value && field.max_value ~}}    [Range({{ field.min_value }}, {{ field.max_value }})]
-{{~ else if !field.min_value && field.max_value ~}}    [Range(0, {{ field.max_value }})]
-{{~ else if field.min_value && !field.max_value ~}}    [Range({{ field.min_value }}, int.MaxValue)]
+{{~ if field.range_attribute ~}}    {{ field.range_attribute }}
 {{~ end ~}}
 {{~ if field.is_email ~}}    [EmailAddress(ErrorMessage = "请输入正确邮箱")]
 {{~ end ~}}
@@ -114,9 +110,7 @@ public class Update{{ entity.name }}Dto : IBaseEntity, IHasRowStatus
     /// </summary>
 {{~ if field.is_required ~}}    [Required(ErrorMessage = "请输入{{ field.description }}")]
 {{~ end ~}}
-{{~ if field.min_value && field.max_value ~}}    [Range({{ field.min_value }}, {{ field.max_value }})]
-{{~ else if !field.min_value && field.max_value ~}}    [Range(0, {{ field.max_value }})]
-{{~ else if field.min_value && !field.max_value ~}}    [Range({{ field.min_value }}, int.MaxValue)]
+{{~ if field.range_attribute ~}}    {{ field.range_attribute }}
 {{~ end ~}}
 {{~ if field.is_email ~}}    [EmailAddress(ErrorMessage = "请输入正确邮箱")]
 {{~ end ~}}

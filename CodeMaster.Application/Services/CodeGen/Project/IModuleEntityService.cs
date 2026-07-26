@@ -79,7 +79,7 @@ public interface IModuleEntityService : ICrudApplicationService<ModuleEntity, Mo
     /// <summary>
     /// 保存页面 ScriptSection JSON（设计器 Script 标签页回写）
     /// </summary>
-    Task<bool> SavePageScriptAsync(long id, string pageType, string scriptJson);
+    Task<bool> SavePageScriptAsync(long id, string pageType, string scriptJson, string? scriptKey = null);
 
     /// <summary>
     /// 获取所有字段级 ScriptSection（key=gen_id → ScriptSection JSON）

@@ -1672,11 +1672,13 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         return await File.ReadAllTextAsync(scriptPath);
     }
 
-    public async Task<bool> SavePageScriptAsync(long id, string pageType, string scriptJson)
+    public async Task<bool> SavePageScriptAsync(long id, string pageType, string scriptJson, [FromQuery] string? scriptKey = null)
     {
         var entity = await _db.Queryable<ModuleEntity>().Where(e => e.Id == id).FirstAsync();
         if (entity == null) throw new Exception($"实体不存在: {id}");
-        var scriptPath = await ResolveScriptFilePath(entity, pageType);
+        var scriptPath = await ResolveScriptFilePath(entity, pageType, scriptKey);
+        if (!string.IsNullOrWhiteSpace(scriptKey) && !File.Exists(scriptPath))
+            throw new Exception($"子表页面 Script 文件不存在: {scriptPath}");
         await File.WriteAllTextAsync(scriptPath, scriptJson);
         return true;
     }
@@ -1816,12 +1818,20 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         }
     }
 
-    private async Task<string> ResolveScriptFilePath(ModuleEntity entity, string pageType)
+    private async Task<string> ResolveScriptFilePath(ModuleEntity entity, string pageType, string? scriptKey = null)
     {
         var vuePath = await ResolveVueFilePath(entity, pageType);
         var dir = Path.GetDirectoryName(vuePath)!;
         var entityLower = char.ToLowerInvariant(entity.Name[0]) + entity.Name[1..];
-        return Path.Combine(dir, $"{entityLower}.{pageType}.script.json");
+        var filePrefix = entityLower;
+        if (!string.IsNullOrWhiteSpace(scriptKey))
+        {
+            filePrefix = scriptKey.Trim();
+            if (!Regex.IsMatch(filePrefix, @"^[A-Za-z_][A-Za-z0-9_]*$"))
+                throw new ArgumentException($"无效的 Script key: {scriptKey}", nameof(scriptKey));
+        }
+
+        return Path.Combine(dir, $"{filePrefix}.{pageType}.script.json");
     }
 
     /// <summary>合并新旧组件树的节点顺序（保留用户拖拽位置）</summary>
@@ -2556,7 +2566,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         var project = await _db.Queryable<Project>().Where(p => p.Id == module.ProjectId).FirstAsync();
         if (project == null) throw new Exception($"项目不存在: {module.ProjectId}");
 
-        var projectPath = project.ProjectPath;
+        var projectPath = ResolveProjectRootPath(project);
         if (string.IsNullOrWhiteSpace(projectPath))
             projectPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
 
