@@ -248,12 +248,14 @@ export function getPageScript(id, pageType) {
  * 保存页面 ScriptSection JSON（设计器 Script 标签页回写）
  */
 export function savePageScript(id, pageType, scriptJson, scriptKey = '') {
+  const data = new URLSearchParams()
+  data.set('scriptJson', scriptJson)
   return executeCodegenAction('savePageScript', { entityId: id, id, pageType, scriptJson, scriptKey }, () =>
     request({
       url: `/codegen/moduleentity/savepagescript/${id}`,
       method: 'post',
       params: { pageType, scriptKey: scriptKey || undefined },
-      data: scriptJson
+      data
     })
   )
 }

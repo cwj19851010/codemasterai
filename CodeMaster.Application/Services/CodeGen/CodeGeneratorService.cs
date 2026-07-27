@@ -82,6 +82,16 @@ public class CodeGeneratorService
                 throw new Exception($"字段 {field.Name} 使用 cascader 控件，但关联源 {field.RelatedEntityName} 不是树形结构（IsTree 必须为 true）");
             }
         }
+
+        foreach (var field in fields.Where(RemoteSelectDefinition.IsRemote))
+        {
+            if (string.IsNullOrWhiteSpace(field.RelatedEntityName))
+                throw new Exception($"Remote select field '{field.Name}' must select a related entity.");
+            var displayFields = RemoteSelectDefinition.ParseDisplayFields(field.RelatedEntityDisplayFields);
+            if (displayFields.Count == 0)
+                throw new Exception($"Remote select field '{field.Name}' must configure at least one display field.");
+            _ = RemoteSelectDefinition.Parse(field);
+        }
     }
 
     /// <summary>
@@ -263,6 +273,8 @@ public class CodeGeneratorService
             .Select(g => g.First())
             .ToList();
 
+        var remoteSelectFields = BuildRemoteSelectFields(entity, fields, projectName, moduleName);
+
         var fieldList = fields.Select(f =>
         {
             var regexPattern = NormalizeRegexPattern(f.RegexPattern);
@@ -316,8 +328,8 @@ public class CodeGeneratorService
             ["max_length"] = f.MaxLength,
             ["precision"] = f.Precision,
             ["scale"] = f.Scale,
-            ["show_condition"] = f.ShowCondition,
-            ["is_sortable"] = f.IsSortable,
+                ["show_condition"] = f.ShowCondition,
+                ["is_sortable"] = f.IsSortable,
             };
         }).ToList();
 
@@ -720,12 +732,101 @@ public class CodeGeneratorService
                 ["computed_dependency_map"] = computedDependencyMap,
                 ["field_change_triggers"] = fieldChangeTriggers,
                 ["related_imports"] = relatedImports,
+                ["remote_select_fields"] = remoteSelectFields,
+                ["has_remote_select"] = remoteSelectFields.Count > 0,
+                ["remote_db_variable"] = !entity.IsReadOnly &&
+                    (entity.IsTree || relations.Count > 0 || ownedOneRelationList.Count > 0)
+                    ? "_db"
+                    : "_remoteDb",
                 ["permission_prefix"] = permissionPrefix,
                 ["split_mode"] = UseSplitScript,
             }
         });
 
         return scriptObj;
+    }
+
+    private List<Dictionary<string, object?>> BuildRemoteSelectFields(
+        ModuleEntity entity,
+        List<EntityField> fields,
+        string projectName,
+        string moduleName)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        foreach (var field in fields.Where(RemoteSelectDefinition.IsRemote))
+        {
+            if (string.IsNullOrWhiteSpace(field.RelatedEntityName))
+                throw new InvalidOperationException($"Remote select field '{field.Name}' must select a related entity.");
+
+            if (SystemReferenceEntityCatalog.TryGet(field.RelatedEntityName, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Remote select field '{field.Name}' references built-in entity '{field.RelatedEntityName}'. " +
+                    "Generated batch label endpoints currently require a project entity; use a project entity or a dictionary.");
+            }
+
+            var source = _db.Queryable<ModuleEntity>()
+                .Where(item => item.ProjectId == entity.ProjectId && item.Name == field.RelatedEntityName)
+                .First();
+            if (source == null)
+                throw new InvalidOperationException($"Related entity '{field.RelatedEntityName}' does not exist.");
+            var sourceModule = _db.Queryable<ProjectModule>()
+                .Where(item => item.Id == source.ModuleId)
+                .First();
+            var sourceFields = _db.Queryable<EntityField>()
+                .Where(item => item.ModuleEntityId == source.Id)
+                .ToList();
+
+            var definition = RemoteSelectDefinition.Parse(field);
+            var currentFieldNames = fields
+                .Select(item => item.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (definition.HasParent && !currentFieldNames.Contains(definition.ParentField))
+                throw new InvalidOperationException($"Remote select field '{field.Name}' references missing local parent field '{definition.ParentField}'.");
+            var valueField = string.IsNullOrWhiteSpace(field.RelatedEntityIdField) ? "Id" : field.RelatedEntityIdField.Trim();
+            var displayFields = RemoteSelectDefinition.ParseDisplayFields(field.RelatedEntityDisplayFields);
+            var labelField = displayFields.FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(labelField))
+                throw new InvalidOperationException($"Remote select field '{field.Name}' must configure a display field.");
+            var valueMeta = sourceFields.FirstOrDefault(item => string.Equals(item.Name, valueField, StringComparison.OrdinalIgnoreCase));
+            if (valueMeta == null && string.Equals(valueField, "Id", StringComparison.OrdinalIgnoreCase) && source.HasPrimaryKey)
+                valueMeta = new EntityField { Name = "Id", DataType = "long", IsPrimaryKey = true };
+            var labelMeta = sourceFields.FirstOrDefault(item => string.Equals(item.Name, labelField, StringComparison.OrdinalIgnoreCase));
+            if (valueMeta == null || labelMeta == null)
+                throw new InvalidOperationException($"Remote select field '{field.Name}' references missing source fields on '{source.Name}'.");
+            var parentMeta = definition.HasParent
+                ? sourceFields.FirstOrDefault(item => string.Equals(item.Name, definition.ParentValueField, StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (definition.HasParent && parentMeta == null)
+                throw new InvalidOperationException($"Remote select field '{field.Name}' references missing source parent value field '{definition.ParentValueField}'.");
+
+            var sourceValueType = CSharpDataTypeNormalizer.Normalize(GetGenerationDataType(valueMeta)).TrimEnd('?');
+            var sourceParentType = parentMeta == null
+                ? "string"
+                : CSharpDataTypeNormalizer.Normalize(GetGenerationDataType(parentMeta)).TrimEnd('?');
+            result.Add(new Dictionary<string, object?>
+            {
+                ["name"] = field.Name,
+                ["name_lower"] = ToCamelCase(field.Name),
+                ["source_entity_name"] = source.Name,
+                ["source_module_name"] = sourceModule?.ModuleName ?? moduleName,
+                ["source_namespace"] = $"{projectName}.Domain.Entities.{sourceModule?.ModuleName ?? moduleName}.{source.Name}",
+                ["source_value_field"] = valueMeta.Name,
+                ["source_label_field"] = labelMeta.Name,
+                ["source_value_type"] = sourceValueType,
+                ["source_parent_field"] = definition.ParentValueField,
+                ["source_parent_type"] = sourceParentType,
+                ["has_parent"] = definition.HasParent,
+                ["options_method_name"] = $"Get{field.Name}OptionsAsync",
+                ["labels_method_name"] = $"Get{field.Name}LabelsAsync",
+                ["options_api_name"] = $"get{field.Name}Options",
+                ["labels_api_name"] = $"get{field.Name}Labels",
+                ["options_route"] = $"get{field.Name.ToLowerInvariant()}options",
+                ["labels_route"] = $"get{field.Name.ToLowerInvariant()}labels",
+            });
+        }
+
+        return result;
     }
 
     #endregion

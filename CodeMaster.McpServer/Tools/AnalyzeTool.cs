@@ -44,6 +44,7 @@ public class AnalyzeTool
                 "Use long foreign keys named {EntityName}Id.",
                 "For select-table fields, set formControlType=select-table, relatedEntityName, relatedEntityIdField=Id, and relatedDisplayFields.",
                 "For dictionary fields, use formControlType=select and enumValues or a dictionary configuration.",
+                "For an ordinary remote/cascading scalar select, use formControlType=select, selectDataSource=api, relatedEntityName, relatedEntityIdField, relatedEntityDisplayFields as a JSON array, and selectOptions JSON such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}. parentField is the current form field; parentValueField is the related source filter field. The generator batches list label resolution and only watches parent fields on add/edit forms.",
                 "For computed fields, use fieldCategory=Computed with a numeric type and an arithmetic formula such as [Price]*[Quantity].",
                 "For child statistics, create the child and one-to-many relation first, then use fieldCategory=Aggregate with Sum, Avg, or Concat and the child entity id/field.",
                 "For one-to-many pages, create child entity first, then add relations on the parent entity.",

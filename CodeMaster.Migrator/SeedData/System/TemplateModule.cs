@@ -63,7 +63,7 @@ public class TemplateModule : ISeedModule
                 PageType = p.Type,
                 Name = p.Name,
                 HtmlContent = p.Html,
-                ScriptSections = p.Script,
+                ScriptSections = NormalizePageScript(p.Script, p.Type),
                 IsSystem = true,
                 Sort = p.Sort,
                 CreateTime = now,
@@ -106,6 +106,25 @@ public class TemplateModule : ISeedModule
         }
         await dbContext.SaveChangesAsync();
         Console.WriteLine($"  ✓ 导入 {ctrls.Length} 个控件模板");
+    }
+
+    private static string NormalizePageScript(string script, string pageType)
+    {
+        if (pageType == "index")
+        {
+            script = script.Replace("ref, reactive, onMounted, onActivated", "ref, reactive, onMounted, onActivated, watch", StringComparison.Ordinal);
+            script = script.Replace("tableData.value = res.items;\",\"  pagination.total", "tableData.value = res.items;[gen.onlineSelectListSupport]\",\"  pagination.total", StringComparison.Ordinal);
+        }
+        else if (pageType is "add" or "edit")
+        {
+            script = script.Replace("ref, reactive, onMounted", "ref, reactive, onMounted, watch", StringComparison.Ordinal);
+        }
+        else if (pageType == "detail")
+        {
+            script = script.Replace("Object.assign(detail, res);", "Object.assign(detail, res);[gen.onlineSelectDetailSupport]", StringComparison.Ordinal);
+        }
+
+        return script;
     }
 
     public Dictionary<string, Dictionary<string, string>> GetTranslations()

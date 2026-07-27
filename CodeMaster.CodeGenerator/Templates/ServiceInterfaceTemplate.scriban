@@ -21,4 +21,9 @@ public interface I{{ entity.name }}Service : ITreeApplicationService<{{ entity.n
 public interface I{{ entity.name }}Service : ICrudApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, IApplicationService
 {{~ end ~}}
 {
+{{~ for field in entity.remote_select_fields ~}}
+    Task<List<Dictionary<string, object?>>> {{ field.options_method_name }}(string? parentValue = null);
+    Task<Dictionary<string, string>> {{ field.labels_method_name }}(List<string> values);
+
+{{~ end ~}}
 }

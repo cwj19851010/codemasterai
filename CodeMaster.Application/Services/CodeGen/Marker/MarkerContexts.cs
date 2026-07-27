@@ -22,6 +22,12 @@ public class GenContext
 
     /// <summary>子表 Dialog HTML 拼接结果</summary>
     public string RelationDialogs { get; set; } = string.Empty;
+
+    /// <summary>列表请求完成后批量解析联机 select 标签的代码。</summary>
+    public string OnlineSelectListSupport { get; set; } = string.Empty;
+
+    /// <summary>详情请求完成后批量解析联机 select 标签的代码。</summary>
+    public string OnlineSelectDetailSupport { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -105,6 +111,16 @@ public class FieldContext
     public string EntityField { get; set; } = string.Empty;
     public List<SelectTableMappingContext> ResultMappings { get; set; } = new();
     public string MappingHandlerName { get; set; } = string.Empty;
+
+    public bool IsRemoteSelect { get; set; }
+    public string RemoteApiPath { get; set; } = string.Empty;
+    public string RemoteApiName { get; set; } = string.Empty;
+    public string RemoteOptionsMethod { get; set; } = string.Empty;
+    public string RemoteLabelsMethod { get; set; } = string.Empty;
+    public string RemoteOptionsRefName { get; set; } = string.Empty;
+    public string RemoteLabelMapRefName { get; set; } = string.Empty;
+    public string RemoteParentField { get; set; } = string.Empty;
+    public string RemoteParentValueField { get; set; } = string.Empty;
 }
 
 public class SelectTableMappingContext

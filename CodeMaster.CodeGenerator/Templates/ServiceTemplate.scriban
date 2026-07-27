@@ -20,12 +20,18 @@ public class {{ entity.name }}Service : ReadOnlyApplicationService<{{ entity.nam
 public class {{ entity.name }}Service : QueryApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
 {{~ end ~}}
 {
+{{~ if entity.has_remote_select ~}}
+    private readonly ISqlSugarClient _remoteDb;
+{{~ end ~}}
 {{~ if entity.is_tree ~}}
     public {{ entity.name }}Service(IReadOnlyRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, db, excelService, cacheService)
 {{~ else ~}}
-    public {{ entity.name }}Service(IReadOnlyRepository<{{ entity.name }}> repository, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IReadOnlyRepository<{{ entity.name }}> repository{{ if entity.has_remote_select }}, ISqlSugarClient db{{ end }}, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ end ~}}
     {
+{{~ if entity.has_remote_select ~}}
+        _remoteDb = db;
+{{~ end ~}}
     }
 
     protected override async Task<ISugarQueryable<{{ entity.name }}>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
@@ -73,8 +79,14 @@ public class {{ entity.name }}Service : QueryApplicationService<{{ entity.name }
 {{~ else if entity.is_tree ~}}
 public class {{ entity.name }}Service : TreeApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, I{{ entity.name }}Service
 {
+{{~ if entity.has_remote_select ~}}
+    private readonly ISqlSugarClient _remoteDb;
+{{~ end ~}}
     public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, db, cacheService)
     {
+{{~ if entity.has_remote_select ~}}
+        _remoteDb = db;
+{{~ end ~}}
     }
 
     protected override async Task<ISugarQueryable<{{ entity.name }}>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
@@ -122,8 +134,16 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
         _db = db;
     }
 {{~ else ~}}
+{{~ if entity.has_remote_select ~}}
+    private readonly ISqlSugarClient _remoteDb;
+    public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+{{~ else ~}}
     public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+{{~ end ~}}
     {
+{{~ if entity.has_remote_select ~}}
+        _remoteDb = db;
+{{~ end ~}}
     }
 {{~ end ~}}
 
@@ -398,5 +418,52 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
     }
 
 {{~ end ~}}
+{{~ end ~}}
+{{~ for field in entity.remote_select_fields ~}}
+    /// <summary>
+    /// Gets the options for the remote select field {{ field.name }}. The optional
+    /// parent value is used for cascading selects.
+    /// </summary>
+    public async Task<List<Dictionary<string, object?>>> {{ field.options_method_name }}(string? parentValue = null)
+    {
+        var query = {{ entity.remote_db_variable }}.Queryable<{{ field.source_namespace }}>();
+{{~ if field.has_parent ~}}
+        if (!string.IsNullOrWhiteSpace(parentValue))
+        {
+            var typedParentValue = ({{ field.source_parent_type }})Convert.ChangeType(parentValue, typeof({{ field.source_parent_type }}));
+            query = query.Where(item => item.{{ field.source_parent_field }} == typedParentValue);
+        }
+{{~ end ~}}
+        var rows = await query.ToListAsync();
+        return rows.Select(item => new Dictionary<string, object?>
+        {
+            ["value"] = item.{{ field.source_value_field }},
+            ["label"] = Convert.ToString(item.{{ field.source_label_field }}) ?? string.Empty
+        }).ToList();
+    }
+
+    /// <summary>Batch-resolves labels for values already present in a list or detail response.</summary>
+    public async Task<Dictionary<string, string>> {{ field.labels_method_name }}(List<string> values)
+    {
+        if (values == null || values.Count == 0)
+            return new Dictionary<string, string>();
+
+        var typedValues = values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => ({{ field.source_value_type }})Convert.ChangeType(value, typeof({{ field.source_value_type }})))
+            .Distinct()
+            .ToList();
+        if (typedValues.Count == 0)
+            return new Dictionary<string, string>();
+
+        var rows = await {{ entity.remote_db_variable }}.Queryable<{{ field.source_namespace }}>()
+            .Where(item => typedValues.Contains(item.{{ field.source_value_field }}))
+            .ToListAsync();
+        return rows
+            .GroupBy(item => item.{{ field.source_value_field }})
+            .ToDictionary(group => Convert.ToString(group.Key) ?? string.Empty,
+                group => Convert.ToString(group.First().{{ field.source_label_field }}) ?? string.Empty);
+    }
+
 {{~ end ~}}
 }

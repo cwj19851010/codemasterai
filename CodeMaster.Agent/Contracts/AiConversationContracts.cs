@@ -163,15 +163,20 @@ public sealed class CreateEntityFieldProposal
     public bool ShowInAddForm { get; set; } = true;
     public bool ShowInEditForm { get; set; } = true;
     public bool ShowInSearch { get; set; }
-    [Description("UI control: input, textarea, number, select, select-table, date, datetime, switch, checkbox, radio-group, checkbox-group, file, image, editor, cascader, or table-column.")]
+    [Description("UI control: input, textarea, number, select, select-table, date, datetime, switch, checkbox, radio-group, checkbox-group, file, image, editor, cascader, or table-column. Use ordinary select for scalar code values; use select-table only when the picker must display a related row/table.")]
     public string FormControlType { get; set; } = "input";
     public int? ListWidth { get; set; }
     public int OrderNum { get; set; }
+    [Description("For ordinary select: enum, dict, or api. api means a project/built-in related entity and enables generated batch label resolution plus form option loading.")]
     public string? SelectDataSource { get; set; }
+    [Description("For api select, JSON config such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field. For dict/static select, keep the existing dictionary code or option JSON.")]
     public string? SelectOptions { get; set; }
     public bool IsMultiple { get; set; }
+    [Description("Source entity for api select. Do not use select-table for a simple scalar code lookup.")]
     public string? RelatedEntityName { get; set; }
+    [Description("Value/code field on the api source entity. Defaults to Id.")]
     public string? RelatedEntityIdField { get; set; }
+    [Description("JSON array of label fields on the api source entity, for example [\"Name\"].")]
     public string? RelatedEntityDisplayFields { get; set; }
     public string? ResultMappings { get; set; }
     [Description("Normal, Computed, or Aggregate. Computed and Aggregate fields are generated as read-only calculated form values.")]
@@ -304,16 +309,21 @@ public sealed class UpdateEntityFieldProposal
     public bool? ShowInAddForm { get; set; }
     public bool? ShowInEditForm { get; set; }
     public bool? ShowInSearch { get; set; }
-    [Description("UI control type. Supported values match CreateEntityFieldProposal.FormControlType.")]
+    [Description("UI control type. Supported values match CreateEntityFieldProposal.FormControlType. Keep ordinary scalar lookups as select; select-table is for table/row pickers.")]
     public string? FormControlType { get; set; }
     public int? ListWidth { get; set; }
     public bool ClearListWidth { get; set; }
     public int? OrderNum { get; set; }
+    [Description("For select, use enum, dict, or api. api enables generated batch label resolution and option loading.")]
     public string? SelectDataSource { get; set; }
+    [Description("For api select, JSON such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field; otherwise preserve dictionary/static option config.")]
     public string? SelectOptions { get; set; }
     public bool? IsMultiple { get; set; }
+    [Description("Related source entity for api select.")]
     public string? RelatedEntityName { get; set; }
+    [Description("Value/code field on the api source entity; defaults to Id.")]
     public string? RelatedEntityIdField { get; set; }
+    [Description("JSON array of display fields on the api source entity.")]
     public string? RelatedEntityDisplayFields { get; set; }
     public string? ResultMappings { get; set; }
     [Description("Normal, Computed, or Aggregate.")]

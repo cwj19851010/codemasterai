@@ -560,6 +560,139 @@ public class CodeGeneratorServiceTests
         Assert.Equal("select", detailControl);
     }
 
+    [Fact]
+    public async Task BuildTemplateContext_ShouldDescribeRemoteSelectBatchEndpoints()
+    {
+        var (db, dbFile) = CreateMetadataDb();
+        try
+        {
+            db.Insertable(new ProjectModule
+            {
+                Id = 2,
+                ProjectId = 1,
+                ModuleName = "Catalog",
+                ModuleDescription = "Catalog",
+                Icon = "folder",
+                RoutePath = "/catalog",
+                LastSyncTime = DateTime.UtcNow,
+                Remark = string.Empty,
+                CreateBy = "test",
+                UpdateUserId = 0
+            }).ExecuteCommand();
+            db.Insertable(new ModuleEntity
+            {
+                Id = 2,
+                ProjectId = 1,
+                ModuleId = 2,
+                Name = "Category",
+                Description = "Category",
+                HasPrimaryKey = true,
+                TableName = "catalog_category",
+                CreateBy = "test",
+                UpdateUserId = 0
+            }).ExecuteCommand();
+            db.Insertable(new[]
+            {
+                SystemField(201, 2, "Id", "long", isPrimaryKey: true),
+                new EntityField
+                {
+                    Id = 202,
+                    ModuleEntityId = 2,
+                    Name = "Name",
+                    Description = "Name",
+                    DataType = "string",
+                    IsRequired = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                },
+                new EntityField
+                {
+                    Id = 203,
+                    ModuleEntityId = 2,
+                    Name = "ParentCode",
+                    Description = "Parent code",
+                    DataType = "string",
+                    IsNullable = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+
+            var entity = MockEntityData.GetFullFeatureEntity();
+            entity.CreateBy = "test";
+            entity.UpdateUserId = 0;
+            var fields = new List<EntityField>
+            {
+                new EntityField
+                {
+                    Id = 300,
+                    ModuleEntityId = entity.Id,
+                    Name = "ProvinceCode",
+                    Description = "Province",
+                    DataType = "string",
+                    FormControlType = "input",
+                    CreateBy = "test",
+                    UpdateUserId = 0,
+                    OrderNum = 1
+                },
+                new EntityField
+                {
+                    Id = 301,
+                    ModuleEntityId = entity.Id,
+                    Name = "CategoryId",
+                    Description = "Category",
+                    DataType = "long",
+                    FormControlType = "select",
+                    SelectDataSource = "api",
+                    SelectOptions = "{\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}",
+                    RelatedEntityName = "Category",
+                    RelatedEntityIdField = "Id",
+                    RelatedEntityDisplayFields = "[\"Name\"]",
+                    ShowInList = true,
+                    ShowInDetail = true,
+                    ShowInAddForm = true,
+                    ShowInEditForm = true,
+                    OrderNum = 2,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                }
+            };
+
+            db.Insertable(entity).ExecuteCommand();
+            db.Insertable(fields).ExecuteCommand();
+
+            var context = new CodeGeneratorService(db).BuildTemplateContext(
+                entity,
+                fields,
+                new List<OneToManyRelation>(),
+                "Demo",
+                "Catalog");
+            var entityContext = (IDictionary<string, object?>)context["entity"];
+            var remoteFields = Assert.IsType<List<Dictionary<string, object?>>>(entityContext["remote_select_fields"]);
+            var remote = Assert.Single(remoteFields);
+
+            Assert.Equal("Category", remote["source_entity_name"]);
+            Assert.Equal("Id", remote["source_value_field"]);
+            Assert.Equal("Name", remote["source_label_field"]);
+            Assert.Equal("ParentCode", remote["source_parent_field"]);
+            Assert.Equal("GetCategoryIdOptionsAsync", remote["options_method_name"]);
+            Assert.Equal("GetCategoryIdLabelsAsync", remote["labels_method_name"]);
+            Assert.Equal("_remoteDb", entityContext["remote_db_variable"]);
+
+            var serviceCode = await new CodeGeneratorService(db)
+                .GenerateServiceImplementationAsync(entity.Id, "Demo", "Catalog");
+            Assert.Contains("GetCategoryIdOptionsAsync", serviceCode);
+            Assert.Contains("GetCategoryIdLabelsAsync", serviceCode);
+            Assert.Contains("typedValues.Contains(item.Id)", serviceCode);
+            Assert.Contains("item.ParentCode == typedParentValue", serviceCode);
+        }
+        finally
+        {
+            db.Dispose();
+            TryDelete(dbFile);
+        }
+    }
+
     private static EntityField SystemField(
         long id,
         long entityId,

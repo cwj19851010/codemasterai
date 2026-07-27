@@ -358,6 +358,7 @@
                 <el-select v-model="fieldForm.selectDataSource" style="width: 100%">
                   <el-option label="枚举" value="enum" />
                   <el-option label="字典" value="dict" />
+                  <el-option v-if="fieldForm.formControlType === 'select'" label="联机数据" value="api" />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -366,6 +367,7 @@
                 <el-select v-if="fieldForm.selectDataSource === 'dict'" v-model="fieldForm.selectOptions" placeholder="选择字典类型" style="width: 100%">
                   <el-option v-for="item in dictTypeList" :key="item.dictType" :label="`${item.dictName} (${item.dictType})`" :value="item.dictType" />
                 </el-select>
+                <el-input v-else-if="fieldForm.selectDataSource === 'api'" v-model="fieldForm.selectOptions" type="textarea" :rows="2" placeholder='联机配置 JSON，例如 {"loadMode":"batch","parentField":"ProvinceCode","parentValueField":"ParentCode"}' />
                 <el-input v-else v-model="fieldForm.selectOptions" placeholder='JSON 如 [{"value":1,"label":"男"}]' />
               </el-form-item>
             </el-col>
@@ -416,13 +418,18 @@
           </el-row>
         </template>
 
-        <!-- 关联表配置：select-table / cascader -->
-        <template v-if="['select-table', 'cascader'].includes(fieldForm.formControlType)">
+        <!-- 关联表配置：select-table / cascader / 普通联机 select -->
+        <template v-if="['select-table', 'cascader'].includes(fieldForm.formControlType) || (fieldForm.formControlType === 'select' && fieldForm.selectDataSource === 'api')">
           <el-row :gutter="20">
             <el-col :span="8">
               <el-form-item label="关联表">
                 <el-select v-model="fieldForm.relatedEntityName" style="width: 100%" @change="handleRelatedEntityChange">
-                  <el-option v-for="e in referenceEntities" :key="e.isBuiltin ? e.name : e.id" :label="getReferenceEntityLabel(e)" :value="e.name" />
+                  <el-option
+                    v-for="e in ((fieldForm.formControlType === 'select' && fieldForm.selectDataSource === 'api') ? remoteReferenceEntities : referenceEntities)"
+                    :key="e.isBuiltin ? e.name : e.id"
+                    :label="getReferenceEntityLabel(e)"
+                    :value="e.name"
+                  />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -436,6 +443,22 @@
             <el-col :span="8">
               <el-form-item label="显示字段">
                 <el-select v-model="displayFieldsArray" multiple placeholder="选择字段" clearable style="width: 100%">
+                  <el-option v-for="f in relatedEntityFields" :key="f.name" :label="`${f.name}（${f.description}）`" :value="f.name" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row v-if="fieldForm.formControlType === 'select' && fieldForm.selectDataSource === 'api' && fieldForm.relatedEntityName">
+            <el-col :span="12">
+              <el-form-item label="联动父控件字段">
+                <el-select v-model="remoteParentField" clearable placeholder="留空表示一次加载全部" style="width: 100%">
+                  <el-option v-for="f in remoteParentFieldOptions" :key="f.name" :label="`${f.name}（${f.description}）`" :value="f.name" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+                <el-form-item label="远程父值字段">
+                <el-select v-model="remoteParentValueField" clearable placeholder="默认 Id" style="width: 100%">
                   <el-option v-for="f in relatedEntityFields" :key="f.name" :label="`${f.name}（${f.description}）`" :value="f.name" />
                 </el-select>
               </el-form-item>
@@ -647,6 +670,7 @@ const moduleList = ref([])
 const dictTypeList = ref([])
 const allEntities = ref([])
 const referenceEntities = ref([])
+const remoteReferenceEntities = computed(() => referenceEntities.value.filter(entity => !entity.isBuiltin))
 const childFieldOptions = ref([])
 const entityRelationTargetFieldOptions = ref([])
 const resultMappingRows = ref([])
@@ -732,6 +756,9 @@ const displayFields = computed(() => {
 const masterFieldOptions = computed(() => displayFields.value)
 const mappingTargetFieldOptions = computed(() =>
   displayFields.value.filter(field => !field._deleted && field.fieldCategory !== 'Computed')
+)
+const remoteParentFieldOptions = computed(() =>
+  mappingTargetFieldOptions.value.filter(field => field.name !== fieldForm.name)
 )
 
 // ===== 一对多关系变更追踪 =====
@@ -1372,7 +1399,8 @@ function handleEditField(row, index) {
   Object.assign(fieldForm, row)
   resultMappingRows.value = parseResultMappings(fieldForm.resultMappings)
   // 关联表：加载关联实体字段列表（保留已有配置）
-  if (['select-table', 'cascader'].includes(fieldForm.formControlType) && fieldForm.relatedEntityName) {
+  if ((['select-table', 'cascader'].includes(fieldForm.formControlType) ||
+      (fieldForm.formControlType === 'select' && fieldForm.selectDataSource === 'api')) && fieldForm.relatedEntityName) {
     handleRelatedEntityChange(fieldForm.relatedEntityName, true)
   }
   fieldDialogVisible.value = true
@@ -1508,6 +1536,32 @@ const displayFieldsArray = computed({
   },
   set: (val) => { fieldForm.relatedEntityDisplayFields = JSON.stringify(val) }
 })
+
+function readRemoteSelectConfig() {
+  try {
+    const value = JSON.parse(fieldForm.selectOptions || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch { return {} }
+}
+
+function setRemoteSelectConfig(key, value) {
+  const config = readRemoteSelectConfig()
+  if (value) config[key] = value
+  else delete config[key]
+  config.loadMode ||= 'batch'
+  fieldForm.selectOptions = JSON.stringify(config)
+}
+
+const remoteParentField = computed({
+  get: () => readRemoteSelectConfig().parentField || '',
+  set: value => setRemoteSelectConfig('parentField', value)
+})
+
+const remoteParentValueField = computed({
+  get: () => readRemoteSelectConfig().parentValueField || '',
+  set: value => setRemoteSelectConfig('parentValueField', value)
+})
+
 async function handleRelatedEntityChange(name, keepExisting = false) {
   if (!keepExisting) {
     fieldForm.relatedEntityIdField = null
@@ -1526,13 +1580,19 @@ async function handleRelatedEntityChange(name, keepExisting = false) {
       fieldForm.relatedEntityIdField = entity.valueField || 'Id'
       fieldForm.relatedEntityDisplayFields = JSON.stringify(entity.displayFields || [])
       fieldForm.selectDataSource = 'api'
-      fieldForm.selectOptions = entity.selectOptions || null
+      fieldForm.selectOptions = fieldForm.formControlType === 'select'
+        ? JSON.stringify({ loadMode: 'batch' })
+        : (entity.selectOptions || null)
     }
     return
   }
   try {
     const detail = await getById(entity.id)
     relatedEntityFields.value = (detail.fields || []).filter(f => !f.isSystemField || f.isPrimaryKey)
+    if (!keepExisting && fieldForm.formControlType === 'select') {
+      fieldForm.selectDataSource = 'api'
+      fieldForm.selectOptions = JSON.stringify({ loadMode: 'batch' })
+    }
   } catch (e) { console.error('加载关联实体字段失败:', e) }
 }
 

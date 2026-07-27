@@ -1,10 +1,28 @@
 using System.Reflection;
 using CodeMaster.Application.Services.CodeGen;
+using Microsoft.AspNetCore.Mvc;
 
 namespace CodeMaster.CodeGenerator.Tests.Services;
 
 public class ModuleEntityServiceTemplateContentTests
 {
+    [Fact]
+    public void SavePageScriptAsync_BindsScriptJsonFromForm()
+    {
+        var method = typeof(ModuleEntityService).GetMethod(nameof(ModuleEntityService.SavePageScriptAsync));
+
+        Assert.NotNull(method);
+
+        var parameters = method!.GetParameters();
+        var pageType = Assert.Single(parameters, parameter => parameter.Name == "pageType");
+        var scriptJson = Assert.Single(parameters, parameter => parameter.Name == "scriptJson");
+        var scriptKey = Assert.Single(parameters, parameter => parameter.Name == "scriptKey");
+
+        Assert.NotNull(pageType.GetCustomAttribute<FromQueryAttribute>());
+        Assert.NotNull(scriptJson.GetCustomAttribute<FromFormAttribute>());
+        Assert.NotNull(scriptKey.GetCustomAttribute<FromQueryAttribute>());
+    }
+
     [Fact]
     public void ReplaceTemplateContent_PreservesScriptAfterNestedSlotTemplate()
     {

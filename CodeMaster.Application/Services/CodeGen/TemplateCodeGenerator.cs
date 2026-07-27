@@ -288,6 +288,11 @@ public class TemplateCodeGenerator
             }
         }
 
+        var remoteFields = fields.Where(RemoteSelectDefinition.IsRemote).ToList();
+        genCtx.OnlineSelectListSupport = string.Join("\n", remoteFields.Select(field =>
+            $"await load{ToJsFunctionSuffix(field.Name)}Labels(tableData.value);"));
+        genCtx.OnlineSelectDetailSupport = string.Join("\n", remoteFields.Select(field =>
+            $"await load{ToJsFunctionSuffix(field.Name)}Labels([detail]);"));
         genCtx.RelationCards = string.Join("\n", cardHtmlList);
         genCtx.RelationDialogs = string.Join("\n", dialogHtmlList);
 
@@ -473,6 +478,25 @@ public class TemplateCodeGenerator
             MappingHandlerName = $"handle{ToJsFunctionSuffix(formPrefix.Replace('.', '_'))}{field.Name}Selection",
         };
 
+        if (RemoteSelectDefinition.IsRemote(field))
+        {
+            var remoteDefinition = RemoteSelectDefinition.Parse(field);
+            var fieldModule = await _db.Queryable<ProjectModule>()
+                .Where(item => item.Id == entity.ModuleId)
+                .FirstAsync();
+            var apiModule = ToCamelCase(fieldModule?.ModuleName ?? genCtx.ModuleName);
+            var apiEntity = ToCamelCase(entity.Name);
+            fctx.IsRemoteSelect = true;
+            fctx.RemoteApiPath = $"@/api/{apiModule}/{apiEntity}";
+            fctx.RemoteApiName = $"{apiEntity}Api";
+            fctx.RemoteOptionsMethod = $"get{ToJsFunctionSuffix(field.Name)}Options";
+            fctx.RemoteLabelsMethod = $"get{ToJsFunctionSuffix(field.Name)}Labels";
+            fctx.RemoteOptionsRefName = $"{fctx.NameLower}Options";
+            fctx.RemoteLabelMapRefName = $"{fctx.NameLower}LabelMap";
+            fctx.RemoteParentField = remoteDefinition.ParentField;
+            fctx.RemoteParentValueField = remoteDefinition.ParentValueField;
+        }
+
         // 琛ュ厖 select-table / cascader 鍏宠仈瀹炰綋淇℃伅
         if (!string.IsNullOrEmpty(field.RelatedEntityName) &&
             (field.FormControlType == "select-table" || field.FormControlType == "cascader"))
@@ -578,6 +602,8 @@ public class TemplateCodeGenerator
         {
             var slotBody = field.FormControlType switch
             {
+                "select" when RemoteSelectDefinition.IsRemote(field) =>
+                    $"  <template #default=\"scope\">\n    {{{{ getRemoteSelectLabel({fctx.RowPrefix}.{fctx.NameLower}, {fctx.RemoteLabelMapRefName}) }}}}\n  </template>\n</el-table-column>",
                 "select" or "radio" or "radio-group" or "checkbox-group"
                     when !string.IsNullOrWhiteSpace(field.SelectOptions) =>
                     $"  <template #default=\"scope\">\n    {{{{ getDictLabel({fctx.RowPrefix}.{fctx.NameLower}, {fctx.NameLower}Options) }}}}\n  </template>\n</el-table-column>",
@@ -590,10 +616,19 @@ public class TemplateCodeGenerator
             if (slotBody != null)
                 html = html.Replace("/>", ">\n" + slotBody);
         }
+        else if (pageSection == "detail" && RemoteSelectDefinition.IsRemote(field))
+        {
+            html = Regex.Replace(
+                html,
+                @"\{\{\s*getDictLabel\([^\}]+\)\s*\}\}",
+                $"{{{{ getRemoteSelectLabel({fctx.DetailPrefix}.{fctx.NameLower}, {fctx.RemoteLabelMapRefName}) }}}}",
+                RegexOptions.Singleline);
+        }
 
         // Replace [field.xxx] markers inside the field script.
         var script = ReplaceFieldMarkersInScript(template.ScriptSections, fctx);
         ConfigureChoiceOptionsScript(script, field, fctx);
+        AddRemoteSelectSupportScript(script, field, fctx, pageSection);
         AddSelectTableResultMappingScript(script, fctx, pageSection);
         if (pageSection == "list")
             await MergeListSupportScriptAsync(script, field, fctx);
@@ -744,6 +779,9 @@ public class TemplateCodeGenerator
         if (string.Equals(field.SelectDataSource, "dict", StringComparison.OrdinalIgnoreCase))
             return;
 
+        if (RemoteSelectDefinition.IsRemote(field))
+            return;
+
         var optionsName = context.NameLower + "Options";
         var optionsRef = section.Refs.FirstOrDefault(item => item.Name == optionsName);
         if (optionsRef == null)
@@ -770,6 +808,102 @@ public class TemplateCodeGenerator
 
     private static bool IsChoiceControl(string? controlType) =>
         controlType is "select" or "radio" or "radio-group" or "checkbox-group";
+
+    private static void AddRemoteSelectSupportScript(
+        ScriptSection section,
+        EntityField field,
+        FieldContext context,
+        string pageSection)
+    {
+        if (!RemoteSelectDefinition.IsRemote(field) || !context.IsRemoteSelect)
+            return;
+
+        section.Imports.RemoveAll(item => string.Equals(item.Path, "@/api/system/dict", StringComparison.Ordinal));
+        section.Hooks.RemoveAll(hook => hook.Body.Any(line => line.Contains("getDataListByType", StringComparison.Ordinal)));
+        AddMarkerImport(section, new ImportItem
+        {
+            Path = context.RemoteApiPath,
+            Default = $"* as {context.RemoteApiName}"
+        });
+
+        if (pageSection is "list" or "detail")
+        {
+            AddMarkerRef(section, new RefItem { Name = context.RemoteLabelMapRefName, InitialValue = "{}" });
+            AddOrReplaceMarkerFunction(section, new FunctionBlock
+            {
+                Name = $"load{ToJsFunctionSuffix(field.Name)}Labels",
+                Parameters = "rows",
+                IsAsync = true,
+                Body =
+                {
+                    "if (!Array.isArray(rows) || rows.length === 0) return",
+                    "const values = []",
+                    $"const append = (value) => {{ if (Array.isArray(value)) {{ value.forEach(append); return; }} if (value === undefined || value === null || value === '') return; if (typeof value === 'string' && value.includes(',')) {{ value.split(',').map(v => v.trim()).filter(Boolean).forEach(append); return; }} values.push(String(value)); }}",
+                    $"rows.forEach(row => append(row?.{context.NameLower}))",
+                    "const uniqueValues = [...new Set(values)]",
+                    "if (uniqueValues.length === 0) return",
+                    $"const result = await {context.RemoteApiName}.{context.RemoteLabelsMethod}(uniqueValues)",
+                    $"Object.assign({context.RemoteLabelMapRefName}.value, result || {{}})"
+                }
+            });
+            AddOrReplaceMarkerFunction(section, new FunctionBlock
+            {
+                Name = "getRemoteSelectLabel",
+                Parameters = "value, map",
+                Body =
+                {
+                    "if (value === undefined || value === null || value === '') return '-'",
+                    "const resolve = (item) => map?.[String(item)] ?? item",
+                    "if (Array.isArray(value)) return value.map(resolve).filter(Boolean).join(', ')",
+                    "if (typeof value === 'string' && value.includes(',')) return value.split(',').map(v => v.trim()).filter(Boolean).map(resolve).join(', ')",
+                    "return resolve(value)"
+                }
+            });
+            return;
+        }
+
+        AddMarkerRef(section, new RefItem { Name = context.RemoteOptionsRefName, InitialValue = "[]" });
+        AddOrReplaceMarkerFunction(section, new FunctionBlock
+        {
+            Name = $"load{ToJsFunctionSuffix(field.Name)}Options",
+            Parameters = "parentValue",
+            IsAsync = true,
+            Body =
+            {
+                $"const result = await {context.RemoteApiName}.{context.RemoteOptionsMethod}(parentValue)",
+                $"{context.RemoteOptionsRefName}.value = Array.isArray(result) ? result : (result?.items || [])"
+            }
+        });
+
+        var parentValue = string.IsNullOrWhiteSpace(context.RemoteParentField)
+            ? "undefined"
+            : $"{context.FormPrefix}.{ToCamelCase(context.RemoteParentField)}";
+        AddOrAppendMarkerHook(section, "onMounted",
+            $"load{ToJsFunctionSuffix(field.Name)}Options({parentValue})");
+
+        if (!string.IsNullOrWhiteSpace(context.RemoteParentField))
+        {
+            var source = $"{context.FormPrefix}.{ToCamelCase(context.RemoteParentField)}";
+            var body = new List<string>
+            {
+                "if (newVal === undefined || newVal === null || newVal === '') {",
+                $"  {context.RemoteOptionsRefName}.value = [];",
+                $"  {context.FormPrefix}.{context.NameLower} = null;",
+                "  return;",
+                "}",
+                $"await load{ToJsFunctionSuffix(field.Name)}Options(newVal);"
+            };
+            if (!section.Watches.Any(item => item.Source == source))
+            {
+                section.Watches.Add(new WatchBlock
+                {
+                    Source = source,
+                    Body = body,
+                    Immediate = true
+                });
+            }
+        }
+    }
 
     private static string BuildStaticChoiceOptionsLiteral(string? rawOptions)
     {
@@ -1211,6 +1345,15 @@ public class TemplateCodeGenerator
                    .Replace("[field.relatedDisplayFieldsArg]", fctx.RelatedDisplayFieldsArg ?? "")
                    .Replace("[field.relatedDisplayLabelExpr]", fctx.RelatedDisplayLabelExpr ?? "")
                    .Replace("[field.relatedModuleNameLower]", fctx.RelatedModuleNameLower ?? "")
+                   .Replace("[field.isRemoteSelect]", fctx.IsRemoteSelect.ToString().ToLowerInvariant())
+                   .Replace("[field.remoteApiPath]", fctx.RemoteApiPath ?? "")
+                   .Replace("[field.remoteApiName]", fctx.RemoteApiName ?? "")
+                   .Replace("[field.remoteOptionsMethod]", fctx.RemoteOptionsMethod ?? "")
+                   .Replace("[field.remoteLabelsMethod]", fctx.RemoteLabelsMethod ?? "")
+                   .Replace("[field.remoteOptionsRefName]", fctx.RemoteOptionsRefName ?? "")
+                   .Replace("[field.remoteLabelMapRefName]", fctx.RemoteLabelMapRefName ?? "")
+                   .Replace("[field.remoteParentField]", fctx.RemoteParentField ?? "")
+                   .Replace("[field.remoteParentValueField]", fctx.RemoteParentValueField ?? "")
                    .Replace("[field.multipleSuffix]", fctx.MultipleSuffix ?? "")
                    .Replace("[field.multipleAttr]", fctx.MultipleAttr ?? "")
                    .Replace("[field.dictDataUrl]", fctx.DictDataUrl ?? "")

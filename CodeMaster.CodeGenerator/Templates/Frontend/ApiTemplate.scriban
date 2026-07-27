@@ -5,6 +5,26 @@ import request from '@/utils/request'
 import { getList as get{{ related.entity_name }}List } from '@/api/{{ related.module_name_lower }}/{{ related.entity_name_lower }}'
 {{~ end ~}}
 
+{{~ for field in entity.remote_select_fields ~}}
+// {{ field.name }} remote-select options
+export function {{ field.options_api_name }}(parentValue) {
+  return request({
+    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/{{ field.options_route }}',
+    method: 'get',
+    params: parentValue === undefined || parentValue === null || parentValue === '' ? {} : { parentValue }
+  })
+}
+
+// Batch-resolve {{ field.name }} labels for list/detail pages
+export function {{ field.labels_api_name }}(values) {
+  return request({
+    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/{{ field.labels_route }}',
+    method: 'post',
+    data: values
+  })
+}
+{{~ end ~}}
+
 // 获取分页列表
 export function getPagedList(params) {
   return request({

@@ -1672,7 +1672,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         return await File.ReadAllTextAsync(scriptPath);
     }
 
-    public async Task<bool> SavePageScriptAsync(long id, string pageType, string scriptJson, [FromQuery] string? scriptKey = null)
+    public async Task<bool> SavePageScriptAsync(
+        long id,
+        [FromQuery] string pageType,
+        [FromForm] string scriptJson,
+        [FromQuery] string? scriptKey = null)
     {
         var entity = await _db.Queryable<ModuleEntity>().Where(e => e.Id == id).FirstAsync();
         if (entity == null) throw new Exception($"实体不存在: {id}");
@@ -3438,7 +3442,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
             if (control is "select" or "radio" or "radio-group" or "checkbox-group")
             {
-                if (string.IsNullOrWhiteSpace(field.SelectOptions))
+                if (control == "select" && RemoteSelectDefinition.IsRemote(field))
+                {
+                    await ValidateRemoteSelectControlAsync(field, projectId);
+                }
+                else if (string.IsNullOrWhiteSpace(field.SelectOptions))
                     throw new InvalidOperationException($"Choice field '{field.Name}' requires dictionary or static option data.");
             }
 
@@ -3485,6 +3493,53 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         if (related.HasPrimaryKey) relatedFieldNames.Add("Id");
         if (!relatedFieldNames.Contains(valueField) || displayFields.Any(name => !relatedFieldNames.Contains(name)))
             throw new InvalidOperationException($"Field '{field.Name}' references a missing value or display field on '{related.Name}'.");
+    }
+
+    private async Task ValidateRemoteSelectControlAsync(EntityField field, long projectId)
+    {
+        if (string.IsNullOrWhiteSpace(field.RelatedEntityName))
+            throw new InvalidOperationException($"Remote select field '{field.Name}' must select a related entity.");
+
+        var definition = RemoteSelectDefinition.Parse(field);
+        var displayFields = RemoteSelectDefinition.ParseDisplayFields(field.RelatedEntityDisplayFields);
+        if (displayFields.Count == 0)
+            throw new InvalidOperationException($"Remote select field '{field.Name}' must configure at least one display field.");
+
+        var valueField = string.IsNullOrWhiteSpace(field.RelatedEntityIdField)
+            ? "Id"
+            : field.RelatedEntityIdField.Trim();
+        if (SystemReferenceEntityCatalog.TryGet(field.RelatedEntityName, out var builtin))
+        {
+            throw new InvalidOperationException(
+                $"Remote select field '{field.Name}' cannot use built-in entity '{builtin.Name}'. " +
+                "Choose a project entity; built-in entities should use the existing select-table/cascader integration.");
+        }
+
+        var related = await _db.Queryable<ModuleEntity>()
+            .Where(item => item.ProjectId == projectId && item.Name == field.RelatedEntityName)
+            .FirstAsync();
+        if (related == null)
+            throw new InvalidOperationException($"Related entity '{field.RelatedEntityName}' does not exist.");
+
+        var relatedFields = await _db.Queryable<EntityField>()
+            .Where(item => item.ModuleEntityId == related.Id)
+            .ToListAsync();
+        var namesByIgnoreCase = relatedFields.Select(item => item.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (related.HasPrimaryKey) namesByIgnoreCase.Add("Id");
+        if (!namesByIgnoreCase.Contains(valueField) || displayFields.Any(name => !namesByIgnoreCase.Contains(name)))
+            throw new InvalidOperationException($"Remote select field '{field.Name}' references a missing value or display field on '{related.Name}'.");
+        if (definition.HasParent)
+        {
+            var currentFieldNames = await _db.Queryable<EntityField>()
+                .Where(item => item.ModuleEntityId == field.ModuleEntityId)
+                .Select(item => item.Name)
+                .ToListAsync();
+            if (!currentFieldNames.Contains(definition.ParentField, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Remote select field '{field.Name}' references missing local parent field '{definition.ParentField}'.");
+            if (!namesByIgnoreCase.Contains(definition.ParentValueField))
+                throw new InvalidOperationException($"Remote select field '{field.Name}' references missing source parent value field '{definition.ParentValueField}' on '{related.Name}'.");
+        }
     }
 
     private static List<string> ParseRelatedDisplayFields(string? json)

@@ -51,6 +51,8 @@ public static class MarkerReplacer
                 "detailColumns" => ctx.ColumnHtml.GetValueOrDefault("detail", string.Empty),
                 "relationCards" => ctx.RelationCards,
                 "relationDialogs" => ctx.RelationDialogs,
+                "onlineSelectListSupport" => ctx.OnlineSelectListSupport,
+                "onlineSelectDetailSupport" => ctx.OnlineSelectDetailSupport,
                 _ => match.Value
             };
         });
@@ -195,6 +197,15 @@ public static class MarkerReplacer
                 "detailPrefix" => ctx.DetailPrefix,
                 "entityTable" => ctx.EntityTable,
                 "entityField" => ctx.EntityField,
+                "isRemoteSelect" => ctx.IsRemoteSelect.ToString().ToLowerInvariant(),
+                "remoteApiPath" => ctx.RemoteApiPath,
+                "remoteApiName" => ctx.RemoteApiName,
+                "remoteOptionsMethod" => ctx.RemoteOptionsMethod,
+                "remoteLabelsMethod" => ctx.RemoteLabelsMethod,
+                "remoteOptionsRefName" => ctx.RemoteOptionsRefName,
+                "remoteLabelMapRefName" => ctx.RemoteLabelMapRefName,
+                "remoteParentField" => ctx.RemoteParentField,
+                "remoteParentValueField" => ctx.RemoteParentValueField,
                 _ => match.Value
             };
         });
