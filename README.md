@@ -156,7 +156,7 @@ CodeMaster MCP Server 面向自然语言代码生成工作流，例如：
 通过实际生成项目发现并修复的模板、初始化、迁移、启动和 MCP 问题，记录在 [FabricQms 集成改动交接说明](FABRICQMS_INTEGRATION_HANDOFF.md)。继续修改这些流程前请先阅读该文档，避免重新引入模板携带历史迁移、生成项目连接错误数据库等问题。
 
 ## 桌面客户端
-
+ :point_right: 特别注意，如果非本地部署，要使用远程服务器，请通过桌面客户端打开远程部署的vue前端地址，客户端有调用本地数据库和调用本地大模型的能力，并且所有的代码生成都是在本地电脑上的
 CodeMaster 的 Tauri 客户端用于连接服务端前端，同时通过 LocalAgent 调用本地能力。典型场景：
 
 - 在客户端中打开部署在服务器上的 CodeMaster 前端
@@ -167,8 +167,8 @@ CodeMaster 的 Tauri 客户端用于连接服务端前端，同时通过 LocalAg
 客户端安装包由 GitHub Actions 跨平台构建。推送 `v1.0.1` 形式的 Git Tag 后，工作流会自动生成 Windows x64、macOS Intel、macOS Apple Silicon、Linux x64 和 Linux ARM64 安装包，并上传到对应的 GitHub Release。也可以在仓库的 `Actions` 页面选择 `Release CodeMaster Client` 手动输入版本号运行。
 
 ```bash
-git tag v1.0.1
-git push github v1.0.1
+git tag v1.0.5
+git push github v1.0.5
 ```
 
 客户端不内置项目模板 ZIP。安装后可在项目列表点击“下载模板”，由 LocalAgent 将服务器上的最新模板保存到本地模板目录。
