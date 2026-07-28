@@ -43,13 +43,6 @@
           <el-input-number v-model="form.orderNum" :min="0" />
         </el-form-item>
 
-        <el-form-item label="状态" prop="status">
-          <el-radio-group v-model="form.status">
-            <el-radio :label="1">启用</el-radio>
-            <el-radio :label="0">禁用</el-radio>
-          </el-radio-group>
-        </el-form-item>
-
         <el-form-item>
           <el-button type="primary" @click="handleSubmit" :loading="submitLoading">保存</el-button>
           <el-button @click="handleBack">取消</el-button>
@@ -80,8 +73,7 @@ const form = reactive({
   moduleName: '',
   moduleDescription: '',
   icon: '',
-  orderNum: 0,
-  status: 1
+  orderNum: 0
 })
 
 const rules = {

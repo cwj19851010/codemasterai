@@ -92,7 +92,7 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
         var module = await Repository.GetByIdAsync(moduleId);
         if (module == null)
             throw new Exception("模块不存在");
-        var moduleNameLower = module.ModuleName.ToLower();
+        var modulePath = CodeGenNaming.ToPathSegment(module.ModuleName);
         var moduleTitleKey = ToCamelCase(module.ModuleName);
         // 2. 获取项目信息
         var project = await _projectRepository.GetByIdAsync(module.ProjectId);
@@ -110,11 +110,19 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
             ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(dbType)
         });
 
-        var path = moduleNameLower;
+        var path = modulePath;
         // 4. 检查菜单是否已存在
         var existingMenu = await targetDb.Queryable<SysMenu>()
-            .Where(m => m.Path == path)
+            .Where(m => m.Path == path && m.MenuType == "M" && m.ParentId == null)
             .FirstAsync();
+        if (existingMenu == null)
+        {
+            var candidates = await targetDb.Queryable<SysMenu>()
+                .Where(m => m.MenuType == "M" && m.ParentId == null)
+                .ToListAsync();
+            existingMenu = candidates.FirstOrDefault(m =>
+                string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase));
+        }
 
         if (existingMenu != null)
         {
@@ -123,6 +131,9 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
             existingMenu.TitleKey = moduleTitleKey;
             existingMenu.Icon = string.IsNullOrWhiteSpace(existingMenu.Icon) ? "Fold" : existingMenu.Icon;
             existingMenu.OrderNum = existingMenu.OrderNum;
+            existingMenu.Path = modulePath;
+            existingMenu.IsDeleted = false;
+            existingMenu.DeleteTime = null;
             existingMenu.UpdateTime = DateTime.UtcNow;
             existingMenu.Component = "Layout";
 
@@ -138,7 +149,7 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
                 TitleKey = moduleTitleKey,
                 ParentId = null,
                 OrderNum = module.OrderNum==0?99:module.OrderNum,
-                Path = moduleNameLower,
+                Path = modulePath,
                 Component = "Layout",
                 MenuType = "M",
                 Visible = true,

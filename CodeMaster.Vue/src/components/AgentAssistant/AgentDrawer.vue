@@ -52,25 +52,18 @@
 
         <div class="context-field provider-field">
           <span class="context-label">模型</span>
-          <el-select
-            v-model="selectedProviderId"
-            placeholder="请选择模型"
-            style="width: 100%"
-            @change="handleProviderChange"
-          >
-            <el-option
-              v-for="provider in enabledProviders"
-              :key="provider.id"
-              :label="`${provider.name} · ${provider.modelName}`"
-              :value="provider.id"
-              :disabled="provider.executionMode === 'Local' && !clientMode"
-            >
-              <div class="provider-option">
-                <span>{{ provider.name }}</span>
-                <small>{{ provider.modelName }}</small>
-              </div>
-            </el-option>
-          </el-select>
+          <div v-if="selectedProvider" class="selected-provider">
+            <div>
+              <strong>{{ selectedProvider.name }}</strong>
+              <small>{{ selectedProvider.modelName }}</small>
+            </div>
+            <el-tag size="small" :type="clientMode ? 'warning' : 'info'">
+              {{ clientMode ? '客户端' : '服务端' }}
+            </el-tag>
+          </div>
+          <el-button v-else type="primary" plain style="width: 100%" @click="providerDialogVisible = true">
+            请先配置模型
+          </el-button>
         </div>
 
         <div v-if="selectedProjectId" class="conversation-field">
@@ -275,6 +268,7 @@ const providerDialogVisible = ref(false)
 const approvalLoadingId = ref('')
 const messagePanelRef = ref()
 const clientMode = isCodeMasterClient()
+const executionMode = clientMode ? 'Local' : 'Server'
 const enabledProviders = computed(() => providers.value.filter(item =>
   item.isEnabled && (item.executionMode !== 'Local' || clientMode)
 ))
@@ -298,7 +292,7 @@ const loadInitialData = async () => {
 }
 
 const loadProviders = async () => {
-  providers.value = await getProviders()
+  providers.value = await getProviders(executionMode)
   const selectedExists = enabledProviders.value.some(item => item.id === selectedProviderId.value)
   if (!selectedExists) {
     const preferred = enabledProviders.value.find(item => item.isDefault) || enabledProviders.value[0]
@@ -311,7 +305,7 @@ const handleProjectChange = async () => {
   messages.value = []
   toolExecutions.value = []
   conversations.value = selectedProjectId.value
-    ? await getConversations(selectedProjectId.value)
+    ? await getConversations(selectedProjectId.value, executionMode)
     : []
 
   if (conversations.value.length > 0) {
@@ -410,7 +404,7 @@ const handleSend = async () => {
       const otherExecutions = toolExecutions.value.filter(item => item.status !== 'PendingApproval')
       toolExecutions.value = [...otherExecutions, ...result.pendingApprovals]
     }
-    conversations.value = await getConversations(selectedProjectId.value)
+    conversations.value = await getConversations(selectedProjectId.value, executionMode)
     retryRequestId.value = ''
     retryContent.value = ''
     await scrollToBottom()
@@ -431,6 +425,7 @@ const handleSend = async () => {
     retryRequestId.value = requestId
     retryContent.value = content
     draft.value = content
+    ElMessage.error(error?.message || 'AI 请求失败，请检查客户端模型配置和本地 Agent 状态')
   } finally {
     sending.value = false
   }
@@ -641,7 +636,7 @@ const archiveCurrentConversation = async () => {
   activeConversationId.value = ''
   messages.value = []
   toolExecutions.value = []
-  conversations.value = await getConversations(selectedProjectId.value)
+  conversations.value = await getConversations(selectedProjectId.value, executionMode)
   if (conversations.value.length > 0) {
     activeConversationId.value = conversations.value[0].id
     await loadConversation()
@@ -775,6 +770,29 @@ const formatTime = value => {
   margin-bottom: 6px;
   color: var(--app-text-muted, #64748b);
   font-size: 12px;
+}
+
+.selected-provider {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  border: 1px solid var(--app-border, #dbe4ef);
+  border-radius: 4px;
+  background: var(--app-bg, #f8fafc);
+}
+
+.selected-provider strong,
+.selected-provider small {
+  display: block;
+}
+
+.selected-provider small {
+  margin-top: 2px;
+  color: var(--app-text-muted, #64748b);
+  font-size: 11px;
 }
 
 .conversation-field {

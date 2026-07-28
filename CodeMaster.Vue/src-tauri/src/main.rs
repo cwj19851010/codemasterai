@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, ChildStdin, Command, Stdio},
@@ -8,6 +10,81 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, State};
+
+const DEFAULT_SERVER_BASE_URL: &str = "http://124.221.136.83:8000";
+const CLIENT_CONFIG_FILE_NAME: &str = "client-config.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientConfigFile {
+    server_base_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientConfigResult {
+    config: ClientConfigFile,
+    file_path: String,
+}
+
+#[tauri::command]
+fn load_client_config() -> Result<ClientConfigResult, String> {
+    let path = resolve_client_config_path()?;
+    let config = if path.exists() {
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("Failed to read client config: {error}"))?;
+        serde_json::from_str::<ClientConfigFile>(&content)
+            .map_err(|error| format!("Invalid client config JSON: {error}"))?
+    } else {
+        let config = ClientConfigFile {
+            server_base_url: DEFAULT_SERVER_BASE_URL.to_string(),
+        };
+        if let Err(error) = write_client_config(&path, &config) {
+            eprintln!("Failed to create client config beside executable: {error}");
+        }
+        config
+    };
+
+    Ok(ClientConfigResult {
+        config,
+        file_path: path.to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
+fn save_client_config(config: ClientConfigFile) -> Result<ClientConfigResult, String> {
+    let server_base_url = config.server_base_url.trim().trim_end_matches('/');
+    if !(server_base_url.starts_with("http://") || server_base_url.starts_with("https://")) {
+        return Err("Server address must start with http:// or https://".to_string());
+    }
+
+    let normalized = ClientConfigFile {
+        server_base_url: server_base_url.to_string(),
+    };
+    let path = resolve_client_config_path()?;
+    write_client_config(&path, &normalized)?;
+
+    Ok(ClientConfigResult {
+        config: normalized,
+        file_path: path.to_string_lossy().into_owned(),
+    })
+}
+
+fn resolve_client_config_path() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Failed to resolve client executable path: {error}"))?;
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| "Client executable directory is unavailable".to_string())?;
+    Ok(executable_dir.join(CLIENT_CONFIG_FILE_NAME))
+}
+
+fn write_client_config(path: &PathBuf, config: &ClientConfigFile) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("Failed to serialize client config: {error}"))?;
+    fs::write(path, format!("{content}\n"))
+        .map_err(|error| format!("Failed to write client config: {error}"))
+}
 
 #[derive(Default)]
 struct SidecarState {
@@ -36,7 +113,9 @@ fn execute_sidecar_request(
     mut request: Value,
 ) -> Result<Value, String> {
     let id = ensure_request_id(&mut request);
-    let mut guard = state.lock().map_err(|_| "Sidecar state lock failed".to_string())?;
+    let mut guard = state
+        .lock()
+        .map_err(|_| "Sidecar state lock failed".to_string())?;
     guard.ensure_started(app)?;
 
     let stdin = guard
@@ -80,7 +159,11 @@ fn execute_sidecar_request(
 impl SidecarState {
     fn ensure_started(&mut self, app: &AppHandle) -> Result<(), String> {
         if let Some(child) = self.child.as_mut() {
-            if child.try_wait().map_err(|error| error.to_string())?.is_none() {
+            if child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
                 return Ok(());
             }
         }
@@ -200,7 +283,11 @@ fn target_triple() -> &'static str {
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(Mutex::new(SidecarState::default())))
-        .invoke_handler(tauri::generate_handler![codegen_execution])
+        .invoke_handler(tauri::generate_handler![
+            codegen_execution,
+            load_client_config,
+            save_client_config
+        ])
         .run(tauri::generate_context!())
         .expect("error while running CodeMaster desktop client");
 }

@@ -325,6 +325,192 @@ public class CodeMasterProjectChangeSetRulesTests
     }
 
     [Fact]
+    public void Validate_RejectsCascaderWithoutRelatedEntityBeforeApproval()
+    {
+        var blueprint = CreateBlueprint();
+        blueprint.Controls.Add(new AiControlCatalogDto { ControlType = "cascader" });
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create all-controls demo",
+            Entities =
+            {
+                new CreateEntityProposal
+                {
+                    ModuleId = 10,
+                    Name = "ControlDemo",
+                    Description = "Control demo",
+                    HasPrimaryKey = true,
+                    Fields =
+                    {
+                        new CreateEntityFieldProposal
+                        {
+                            Name = "RegionPath",
+                            Description = "Region path",
+                            DataType = "string",
+                            FormControlType = "cascader"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error =>
+            error.Contains("ControlDemo.RegionPath", StringComparison.Ordinal) &&
+            error.Contains("related entity", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_AllowsCascaderUsingBuiltInTreeEntity()
+    {
+        var blueprint = CreateBlueprint();
+        blueprint.Controls.Add(new AiControlCatalogDto { ControlType = "cascader" });
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create valid cascader demo",
+            Entities =
+            {
+                new CreateEntityProposal
+                {
+                    ModuleId = 10,
+                    Name = "ControlDemo",
+                    Description = "Control demo",
+                    HasPrimaryKey = true,
+                    Fields =
+                    {
+                        new CreateEntityFieldProposal
+                        {
+                            Name = "DeptPath",
+                            Description = "Department path",
+                            DataType = "long",
+                            FormControlType = "cascader",
+                            RelatedEntityName = "SysDept",
+                            RelatedEntityIdField = "Id",
+                            RelatedEntityDisplayFields = "[\"Name\"]"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+    }
+
+    [Fact]
+    public void Validate_RejectsCascaderUsingNonTreeEntity()
+    {
+        var blueprint = CreateBlueprint();
+        blueprint.Controls.Add(new AiControlCatalogDto { ControlType = "cascader" });
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create invalid cascader demo",
+            Entities =
+            {
+                new CreateEntityProposal
+                {
+                    ModuleId = 10,
+                    Name = "ControlDemo",
+                    Description = "Control demo",
+                    HasPrimaryKey = true,
+                    Fields =
+                    {
+                        new CreateEntityFieldProposal
+                        {
+                            Name = "RegionPath",
+                            Description = "Region path",
+                            DataType = "long",
+                            FormControlType = "cascader",
+                            RelatedEntityName = "SysUser",
+                            RelatedEntityIdField = "Id",
+                            RelatedEntityDisplayFields = "[\"NickName\"]"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("tree entity", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_RejectsSelectTableWithoutDisplayFields()
+    {
+        var blueprint = CreateBlueprint();
+        blueprint.Controls.Add(new AiControlCatalogDto { ControlType = "select-table" });
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create invalid select-table demo",
+            Entities =
+            {
+                new CreateEntityProposal
+                {
+                    ModuleId = 10,
+                    Name = "ControlDemo",
+                    Description = "Control demo",
+                    HasPrimaryKey = true,
+                    Fields =
+                    {
+                        new CreateEntityFieldProposal
+                        {
+                            Name = "OwnerId",
+                            Description = "Owner",
+                            DataType = "long",
+                            FormControlType = "select-table",
+                            RelatedEntityName = "SysUser",
+                            RelatedEntityIdField = "Id"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("display field", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_RejectsUpdatedCascaderWithoutRelatedEntity()
+    {
+        var blueprint = CreateBlueprint();
+        blueprint.Controls.Add(new AiControlCatalogDto { ControlType = "cascader" });
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Change customer name to cascader",
+            EntityUpdates =
+            {
+                new UpdateEntityProposal
+                {
+                    EntityId = 20,
+                    UpdatedFields =
+                    {
+                        new UpdateEntityFieldProposal
+                        {
+                            FieldId = 21,
+                            FormControlType = "cascader"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error =>
+            error.Contains("Customer.Name", StringComparison.Ordinal) &&
+            error.Contains("related entity", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Validate_RejectsDuplicateExistingNames()
     {
         var blueprint = CreateBlueprint();

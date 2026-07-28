@@ -3,7 +3,7 @@ import { getToken } from '@/utils/auth'
 import { isTauriRuntime } from '@/utils/tauriBridge'
 
 const CLIENT_CONFIG_KEY = 'codeMasterClientConfig'
-const CLIENT_CONFIG_VERSION = 2
+const CLIENT_CONFIG_VERSION = 3
 export const DEFAULT_CODEMASTER_SERVER_BASE_URL =
   import.meta.env.VITE_CODEMASTER_SERVER_BASE_URL || 'http://124.221.136.83:8000'
 
@@ -57,11 +57,22 @@ export function getCodeMasterClientConfig() {
   }
 }
 
-export function saveCodeMasterClientConfig(config) {
-  localStorage.setItem(CLIENT_CONFIG_KEY, JSON.stringify({
+export async function saveCodeMasterClientConfig(config) {
+  const normalizedConfig = {
     ...(config || {}),
     configVersion: CLIENT_CONFIG_VERSION
-  }))
+  }
+  localStorage.setItem(CLIENT_CONFIG_KEY, JSON.stringify(normalizedConfig))
+
+  if (isTauriRuntime() && window.CodeMasterClientConfig?.save) {
+    return window.CodeMasterClientConfig.save(normalizedConfig)
+  }
+
+  return normalizedConfig
+}
+
+export function getCodeMasterClientConfigFilePath() {
+  return window.__CODEMASTER_CLIENT_CONFIG_FILE__ || ''
 }
 
 function isLegacyLocalServerBaseUrl(value) {

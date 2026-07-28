@@ -790,7 +790,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             return true;
 
         var projectName = project.ProjectName;
-        var entityNameLower = entity.Name.ToLowerInvariant();
+        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
         var backendAutoPath = Path.Combine(
             projectPath,
             $"{projectName}.Domain",
@@ -807,16 +807,16 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         var apiPath = Path.Combine(
             frontendSourcePath,
             "api",
-            module.ModuleName.ToLowerInvariant(),
-            $"{entityNameLower}.js");
+            CodeGenNaming.ToPathSegment(module.ModuleName),
+            $"{entityPath}.js");
         if (!File.Exists(apiPath))
             return true;
 
         return !entity.IsChildTable && !File.Exists(Path.Combine(
             frontendSourcePath,
             "views",
-            module.ModuleName.ToLowerInvariant(),
-            entityNameLower,
+            CodeGenNaming.ToPathSegment(module.ModuleName),
+            entityPath,
             "index.vue"));
     }
 
@@ -909,18 +909,18 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         // 生成前端 API 文件（子表也需要）
         if (entity.GenerateFrontend)
         {
-            var entityNameLower = entity.Name.ToLower();
+            var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
             var vuePath = Path.Combine(projectPath, $"{projectName}.Vue", "src");
-            var apiPath = Path.Combine(vuePath, "api", module.ModuleName.ToLower());
+            var apiPath = Path.Combine(vuePath, "api", CodeGenNaming.ToPathSegment(module.ModuleName));
 
             Directory.CreateDirectory(apiPath);
             var apiCode = await generator.GenerateFrontendApiAsync(id, projectName, module.ModuleName);
-            await File.WriteAllTextAsync(Path.Combine(apiPath, $"{entityNameLower}.js"), apiCode);
+            await File.WriteAllTextAsync(Path.Combine(apiPath, $"{entityPath}.js"), apiCode);
 
             // 子表不生成前端页面
             if (!entity.IsChildTable)
             {
-                var viewPath = Path.Combine(vuePath, "views", module.ModuleName.ToLower(), entityNameLower);
+                var viewPath = Path.Combine(vuePath, "views", CodeGenNaming.ToPathSegment(module.ModuleName), entityPath);
                 Directory.CreateDirectory(viewPath);
 
                 // split mode: 逐页配对（auto.js→PendingSplitExports→.vue→auto.js文件写入）
@@ -1164,18 +1164,15 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     private async Task SyncMenuAndPermissionsAsync(ModuleEntity entity, ProjectModule module, SqlSugarClient targetDb)
     {
         var moduleName = module.ModuleName;
-        var permPrefix = $"{moduleName.ToLower()}:{entity.Name.ToLower()}";
-        var entityNameLower = ToCamelCase(entity.Name);
+        var modulePath = CodeGenNaming.ToPathSegment(moduleName);
+        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
+        var permPrefix = $"{modulePath}:{entityPath}";
         var entityTitleKey = ToCamelCase(entity.Name);
-        var moduleNameLower = moduleName.ToLower();
         var moduleTitleKey = ToCamelCase(moduleName);
-        var route = entity.FrontendRoute ?? $"/{moduleNameLower}/{entityNameLower}";
 
         // 1. 查找或创建目录菜单（模块级别）
 
-        var dirMenu = await targetDb.Queryable<SysMenu>()
-            .Where(m => m.Path == moduleNameLower && m.MenuType == "M" && m.ParentId == null)
-            .FirstAsync();
+        var dirMenu = await FindDirectoryMenuAsync(targetDb, modulePath);
 
         if (dirMenu == null)
         {
@@ -1186,7 +1183,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 TitleKey = moduleTitleKey,
                 ParentId = null,
                 OrderNum = 0,
-                Path = moduleNameLower,
+                Path = modulePath,
                 MenuType = "M",
                 Visible = true,
                 Status = 0,
@@ -1202,16 +1199,16 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             dirMenu.TitleKey = moduleTitleKey;
             dirMenu.OrderNum = module.OrderNum;
             dirMenu.Icon = string.IsNullOrWhiteSpace(dirMenu.Icon) ? "system" : dirMenu.Icon;
+            dirMenu.Path = modulePath;
+            dirMenu.IsDeleted = false;
+            dirMenu.DeleteTime = null;
             dirMenu.UpdateTime = DateTime.UtcNow;
             await targetDb.Updateable(dirMenu).ExecuteCommandAsync();
         }
 
         // 2. 查找或创建页面菜单（列表页）
         var pagePerms = $"{permPrefix}:list";
-        var pagePath = entity.Name?.ToLower();
-        var pageMenu = await targetDb.Queryable<SysMenu>()
-            .Where(m => m.Path == pagePath && m.MenuType == "C" && m.ParentId == dirMenu.Id)
-            .FirstAsync();
+        var pageMenu = await FindRouteMenuAsync(targetDb, dirMenu.Id, pagePerms, entityPath);
 
         if (pageMenu == null)
         {
@@ -1222,8 +1219,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 TitleKey = entityTitleKey,
                 ParentId = dirMenu.Id,
                 OrderNum = entity.OrderNum,
-                Path = entityNameLower,
-                Component = $"{moduleNameLower}/{entityNameLower}/index",
+                Path = entityPath,
+                Component = $"{modulePath}/{entityPath}/index",
                 MenuType = "C",
                 Visible = true,
                 Status = 0,
@@ -1241,9 +1238,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             pageMenu.TitleKey = entityTitleKey;
             pageMenu.Icon = entity.MenuIcon ?? "list";
             pageMenu.UpdateTime = DateTime.UtcNow;
-            pageMenu.Path = entityNameLower;
-            pageMenu.Component = $"{moduleNameLower}/{entityNameLower}/index";
+            pageMenu.Path = entityPath;
+            pageMenu.Component = $"{modulePath}/{entityPath}/index";
             pageMenu.Perms = pagePerms;
+            pageMenu.IsDeleted = false;
+            pageMenu.DeleteTime = null;
             await targetDb.Updateable(pageMenu).ExecuteCommandAsync();
         }
 
@@ -1298,9 +1297,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         {
             // 新增页面菜单（隐藏，列表菜单的子菜单）
             var addPerms = $"{permPrefix}:create";
-            var addMenu = await targetDb.Queryable<SysMenu>()
-                .Where(m => m.Perms == addPerms && m.MenuType == "C" && m.ParentId == pageMenu.Id)
-                .FirstAsync();
+            var addMenu = await FindRouteMenuAsync(targetDb, pageMenu.Id, addPerms, "add");
 
             if (addMenu == null)
             {
@@ -1312,7 +1309,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                     ParentId = pageMenu.Id,
                     OrderNum = 1,
                     Path = "add",
-                    Component = $"{moduleNameLower}/{entityNameLower}/add",
+                    Component = $"{modulePath}/{entityPath}/add",
                     MenuType = "C",
                     Visible = false,
                     Status = 0,
@@ -1323,12 +1320,22 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 };
                 await InsertMenuAsync(targetDb, addMenu);
             }
+            else
+            {
+                addMenu.MenuName = $"新增{entity.Description}";
+                addMenu.Path = "add";
+                addMenu.Component = $"{modulePath}/{entityPath}/add";
+                addMenu.Perms = addPerms;
+                addMenu.Visible = false;
+                addMenu.IsDeleted = false;
+                addMenu.DeleteTime = null;
+                addMenu.UpdateTime = DateTime.UtcNow;
+                await targetDb.Updateable(addMenu).ExecuteCommandAsync();
+            }
 
             // 编辑页面菜单（隐藏，列表菜单的子菜单）
             var editPerms = $"{permPrefix}:update";
-            var editMenu = await targetDb.Queryable<SysMenu>()
-                .Where(m => m.Perms == editPerms && m.MenuType == "C" && m.ParentId == pageMenu.Id)
-                .FirstAsync();
+            var editMenu = await FindRouteMenuAsync(targetDb, pageMenu.Id, editPerms, "edit");
 
             if (editMenu == null)
             {
@@ -1340,7 +1347,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                     ParentId = pageMenu.Id,
                     OrderNum = 2,
                     Path = "edit",
-                    Component = $"{moduleNameLower}/{entityNameLower}/edit",
+                    Component = $"{modulePath}/{entityPath}/edit",
                     MenuType = "C",
                     Visible = false,
                     Status = 0,
@@ -1350,6 +1357,18 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                     IsDeleted = false
                 };
                 await InsertMenuAsync(targetDb, editMenu);
+            }
+            else
+            {
+                editMenu.MenuName = $"编辑{entity.Description}";
+                editMenu.Path = "edit";
+                editMenu.Component = $"{modulePath}/{entityPath}/edit";
+                editMenu.Perms = editPerms;
+                editMenu.Visible = false;
+                editMenu.IsDeleted = false;
+                editMenu.DeleteTime = null;
+                editMenu.UpdateTime = DateTime.UtcNow;
+                await targetDb.Updateable(editMenu).ExecuteCommandAsync();
             }
         }
 
@@ -1367,32 +1386,42 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
         if (entity.HasPrimaryKey)
         {
-        var detailPerms = $"{permPrefix}:detail";
-        var detailMenu = await targetDb.Queryable<SysMenu>()
-            .Where(m => m.Perms == detailPerms && m.MenuType == "C" && m.ParentId == pageMenu.Id)
-            .FirstAsync();
+            var detailPerms = $"{permPrefix}:detail";
+            var detailMenu = await FindRouteMenuAsync(targetDb, pageMenu.Id, detailPerms, "detail");
 
-        if (detailMenu == null)
-        {
-            detailMenu = new SysMenu
+            if (detailMenu == null)
             {
-                Id = GenerateSnowflakeId(),
-                MenuName = $"{entity.Description}详情",
-                TitleKey = null,
-                ParentId = pageMenu.Id,
-                OrderNum = 1,
-                Path = "detail",
-                Component = $"{moduleNameLower}/{entityNameLower}/detail",
-                MenuType = "C",
-                Visible = false,
-                Status = 0,
-                IsCache = false,
-                Perms = detailPerms,
-                CreateTime = DateTime.UtcNow,
-                IsDeleted = false
-            };
-            await InsertMenuAsync(targetDb, detailMenu);
-        }
+                detailMenu = new SysMenu
+                {
+                    Id = GenerateSnowflakeId(),
+                    MenuName = $"{entity.Description}详情",
+                    TitleKey = null,
+                    ParentId = pageMenu.Id,
+                    OrderNum = 1,
+                    Path = "detail",
+                    Component = $"{modulePath}/{entityPath}/detail",
+                    MenuType = "C",
+                    Visible = false,
+                    Status = 0,
+                    IsCache = false,
+                    Perms = detailPerms,
+                    CreateTime = DateTime.UtcNow,
+                    IsDeleted = false
+                };
+                await InsertMenuAsync(targetDb, detailMenu);
+            }
+            else
+            {
+                detailMenu.MenuName = $"{entity.Description}详情";
+                detailMenu.Path = "detail";
+                detailMenu.Component = $"{modulePath}/{entityPath}/detail";
+                detailMenu.Perms = detailPerms;
+                detailMenu.Visible = false;
+                detailMenu.IsDeleted = false;
+                detailMenu.DeleteTime = null;
+                detailMenu.UpdateTime = DateTime.UtcNow;
+                await targetDb.Updateable(detailMenu).ExecuteCommandAsync();
+            }
         }
         else
         {
@@ -1451,12 +1480,95 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .OrderBy(f => f.OrderNum)
             .ToListAsync();
 
+        var translations = new Dictionary<string, (string ZhCn, string EnUs)>(StringComparer.OrdinalIgnoreCase);
         foreach (var field in fields)
         {
             var key = ToCamelCase(field.Name);
-            await UpsertLangTextAsync(targetDb, key, "zh-CN", field.Description ?? field.Name);
-            await UpsertLangTextAsync(targetDb, key, "en-US", field.Name);
+            translations[key] = (field.Description ?? field.Name, field.Name);
+
+            foreach (var relatedTranslation in await ResolveRelatedDisplayTranslationsAsync(entity, field))
+            {
+                translations.TryAdd(
+                    relatedTranslation.LangKey,
+                    (relatedTranslation.ZhCn, relatedTranslation.EnUs));
+            }
         }
+
+        foreach (var (langKey, values) in translations)
+        {
+            await UpsertLangTextAsync(targetDb, langKey, "zh-CN", values.ZhCn);
+            await UpsertLangTextAsync(targetDb, langKey, "en-US", values.EnUs);
+        }
+    }
+
+    private async Task<List<(string LangKey, string ZhCn, string EnUs)>> ResolveRelatedDisplayTranslationsAsync(
+        ModuleEntity ownerEntity,
+        EntityField ownerField)
+    {
+        var result = new List<(string LangKey, string ZhCn, string EnUs)>();
+        if (string.IsNullOrWhiteSpace(ownerField.RelatedEntityName))
+            return result;
+
+        var displayFields = RemoteSelectDefinition.ParseDisplayFields(ownerField.RelatedEntityDisplayFields)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (SystemReferenceEntityCatalog.TryGet(ownerField.RelatedEntityName, out var systemReference))
+        {
+            if (displayFields.Count == 0)
+                displayFields.AddRange(systemReference.DisplayFields);
+
+            foreach (var displayFieldName in displayFields)
+            {
+                var definition = systemReference.Fields.FirstOrDefault(field =>
+                    string.Equals(field.Name, displayFieldName, StringComparison.OrdinalIgnoreCase));
+                if (definition == null) continue;
+
+                result.Add((
+                    ToCamelCase(definition.Name),
+                    definition.Description,
+                    definition.Name));
+            }
+
+            return result;
+        }
+
+        var relatedEntity = await _db.Queryable<ModuleEntity>()
+            .Where(entity => entity.ProjectId == ownerEntity.ProjectId &&
+                             entity.Name == ownerField.RelatedEntityName &&
+                             !entity.IsDeleted)
+            .FirstAsync();
+        if (relatedEntity == null)
+            return result;
+
+        var relatedFields = await _db.Queryable<EntityField>()
+            .Where(field => field.ModuleEntityId == relatedEntity.Id && !field.IsDeleted)
+            .OrderBy(field => field.OrderNum)
+            .ToListAsync();
+
+        if (displayFields.Count == 0)
+        {
+            var fallback = relatedFields.FirstOrDefault(field =>
+                !field.IsPrimaryKey &&
+                string.Equals(field.DataType, "string", StringComparison.OrdinalIgnoreCase));
+            if (fallback != null)
+                displayFields.Add(fallback.Name);
+        }
+
+        foreach (var displayFieldName in displayFields)
+        {
+            var relatedField = relatedFields.FirstOrDefault(field =>
+                string.Equals(field.Name, displayFieldName, StringComparison.OrdinalIgnoreCase));
+            if (relatedField == null) continue;
+
+            result.Add((
+                ToCamelCase(relatedField.Name),
+                relatedField.Description ?? relatedField.Name,
+                relatedField.Name));
+        }
+
+        return result;
     }
 
     private async Task UpsertLangTextAsync(SqlSugarClient targetDb, string langKey, string langCode, string langValue)
@@ -2046,10 +2158,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     private static List<Component>? MergeComponentList(
         List<Component>? newNodes,
         List<Component>? oldNodes,
-        IncrementalChangeSet changes)
+        IncrementalChangeSet changes,
+        bool preferNewShell = false)
     {
         if (newNodes == null || newNodes.Count == 0)
-            return PreserveCustomOldNodes(oldNodes);
+            return preferNewShell ? null : PreserveCustomOldNodes(oldNodes);
 
         if (oldNodes == null || oldNodes.Count == 0)
             return CloneComponentList(newNodes);
@@ -2063,7 +2176,9 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             var genId = GetOwnGenId(newNode);
             var oldIndex = !string.IsNullOrWhiteSpace(genId)
                 ? FindOldIndexByGenId(oldNodes, usedOldIndexes, genId!)
-                : FindOldStructuralIndex(oldNodes, usedOldIndexes, newNode, i);
+                : FindOldSemanticIndex(oldNodes, usedOldIndexes, newNode);
+            if (oldIndex < 0 && string.IsNullOrWhiteSpace(genId))
+                oldIndex = FindOldStructuralIndex(oldNodes, usedOldIndexes, newNode, i);
 
             if (oldIndex < 0)
             {
@@ -2074,22 +2189,38 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             usedOldIndexes.Add(oldIndex);
             var oldNode = oldNodes[oldIndex];
 
-            if (!string.IsNullOrWhiteSpace(genId) &&
+            var generatedNodeChanged = !string.IsNullOrWhiteSpace(genId) &&
+                                       IsKnownGeneratedGenId(genId!) &&
+                                       changes.IsChangedGeneratedId(genId!);
+            if (!preferNewShell &&
+                !string.IsNullOrWhiteSpace(genId) &&
                 IsKnownGeneratedGenId(genId!) &&
                 !IsGeneratedContainerGenId(genId!) &&
-                !changes.IsChangedGeneratedId(genId!))
+                !generatedNodeChanged)
             {
                 merged.Add(CloneComponent(oldNode));
                 continue;
             }
 
-            var preferOldShell = string.IsNullOrWhiteSpace(genId) && !oldNode.IsDeleted;
+            var preferOldShell = !preferNewShell &&
+                                 string.IsNullOrWhiteSpace(genId) &&
+                                 !oldNode.IsDeleted &&
+                                 string.Equals(newNode.Tag, oldNode.Tag, StringComparison.OrdinalIgnoreCase);
             var mergedNode = preferOldShell ? CloneComponent(oldNode) : CloneComponent(newNode);
             if (!preferOldShell)
                 PreserveScriptSectionIfNeeded(mergedNode, oldNode);
 
-            mergedNode.Children = MergeComponentList(newNode.Children, oldNode.Children, changes);
-            mergedNode.UseSlots = MergeComponentSlots(newNode.UseSlots, oldNode.UseSlots, changes);
+            var preferNewDescendants = preferNewShell || generatedNodeChanged;
+            mergedNode.Children = MergeComponentList(
+                newNode.Children,
+                oldNode.Children,
+                changes,
+                preferNewDescendants);
+            mergedNode.UseSlots = MergeComponentSlots(
+                newNode.UseSlots,
+                oldNode.UseSlots,
+                changes,
+                preferNewDescendants);
             merged.Add(mergedNode);
         }
 
@@ -2097,6 +2228,15 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         {
             if (usedOldIndexes.Contains(i)) continue;
             var oldNode = oldNodes[i];
+            var semanticIdentity = GetSemanticIdentity(oldNode);
+            if (!string.IsNullOrWhiteSpace(semanticIdentity) &&
+                newNodes.Any(node => string.Equals(
+                    GetSemanticIdentity(node),
+                    semanticIdentity,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
             if (ShouldPreserveCustomOldNode(oldNode))
                 merged.Add(CloneComponent(oldNode));
         }
@@ -2107,10 +2247,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     private static List<ComponentSlot>? MergeComponentSlots(
         List<ComponentSlot>? newSlots,
         List<ComponentSlot>? oldSlots,
-        IncrementalChangeSet changes)
+        IncrementalChangeSet changes,
+        bool preferNewShell)
     {
         if (newSlots == null || newSlots.Count == 0)
-            return PreserveCustomOldSlots(oldSlots);
+            return preferNewShell ? null : PreserveCustomOldSlots(oldSlots);
 
         if (oldSlots == null || oldSlots.Count == 0)
             return CloneSlotList(newSlots);
@@ -2130,7 +2271,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             usedOldIndexes.Add(oldIndex);
             var oldSlot = oldSlots[oldIndex];
             var mergedSlot = CloneSlot(newSlot);
-            mergedSlot.Components = MergeComponentList(newSlot.Components, oldSlot.Components, changes);
+            mergedSlot.Components = MergeComponentList(
+                newSlot.Components,
+                oldSlot.Components,
+                changes,
+                preferNewShell);
             merged.Add(mergedSlot);
         }
 
@@ -2155,6 +2300,41 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         }
 
         return -1;
+    }
+
+    private static int FindOldSemanticIndex(
+        List<Component> oldNodes,
+        HashSet<int> usedOldIndexes,
+        Component newNode)
+    {
+        var identity = GetSemanticIdentity(newNode);
+        if (string.IsNullOrWhiteSpace(identity)) return -1;
+
+        for (var i = 0; i < oldNodes.Count; i++)
+        {
+            if (usedOldIndexes.Contains(i)) continue;
+            if (!string.Equals(GetSemanticIdentity(oldNodes[i]), identity, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (string.Equals(newNode.Tag, oldNodes[i].Tag, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        for (var i = 0; i < oldNodes.Count; i++)
+        {
+            if (usedOldIndexes.Contains(i)) continue;
+            if (string.Equals(GetSemanticIdentity(oldNodes[i]), identity, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string? GetSemanticIdentity(Component component)
+    {
+        var model = component.Instructions?.FirstOrDefault(instruction =>
+            string.Equals(instruction.Name, "v-model", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(instruction.Value));
+        return model == null ? null : $"v-model:{model.Value!.Trim()}";
     }
 
     private static int FindOldStructuralIndex(
@@ -2574,9 +2754,9 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         if (string.IsNullOrWhiteSpace(projectPath))
             projectPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
 
-        var entityNameLower = entity.Name.ToLower();
-        var moduleNameLower = module.ModuleName.ToLower();
-        var viewPath = Path.Combine(projectPath, $"{project.ProjectName}.Vue", "src", "views", moduleNameLower, entityNameLower);
+        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
+        var modulePath = CodeGenNaming.ToPathSegment(module.ModuleName);
+        var viewPath = Path.Combine(projectPath, $"{project.ProjectName}.Vue", "src", "views", modulePath, entityPath);
 
         return pageType switch
         {
@@ -3139,6 +3319,48 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         menu.CreateBy ??= "CodeMaster";
         menu.UpdateUserId ??= 0;
         await targetDb.Insertable(menu).ExecuteCommandAsync();
+    }
+
+    private static async Task<SysMenu?> FindRouteMenuAsync(
+        SqlSugarClient targetDb,
+        long parentId,
+        string permission,
+        string path)
+    {
+        var byPermission = await targetDb.Queryable<SysMenu>()
+            .Where(menu => menu.ParentId == parentId &&
+                           menu.MenuType == "C" &&
+                           menu.Perms == permission)
+            .FirstAsync();
+        if (byPermission != null)
+            return byPermission;
+
+        var candidates = await targetDb.Queryable<SysMenu>()
+            .Where(menu => menu.ParentId == parentId && menu.MenuType == "C")
+            .ToListAsync();
+
+        return candidates.FirstOrDefault(menu =>
+            string.Equals(menu.Path, path, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task<SysMenu?> FindDirectoryMenuAsync(
+        SqlSugarClient targetDb,
+        string path)
+    {
+        var byPath = await targetDb.Queryable<SysMenu>()
+            .Where(menu => menu.ParentId == null &&
+                           menu.MenuType == "M" &&
+                           menu.Path == path)
+            .FirstAsync();
+        if (byPath != null)
+            return byPath;
+
+        var candidates = await targetDb.Queryable<SysMenu>()
+            .Where(menu => menu.ParentId == null && menu.MenuType == "M")
+            .ToListAsync();
+
+        return candidates.FirstOrDefault(menu =>
+            string.Equals(menu.Path, path, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

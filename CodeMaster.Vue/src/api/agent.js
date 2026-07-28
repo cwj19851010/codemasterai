@@ -1,7 +1,7 @@
 import request from '@/utils/request'
 
-export function getProviders() {
-  return request({ url: '/agent/providers', method: 'get' })
+export function getProviders(executionMode) {
+  return request({ url: '/agent/providers', method: 'get', params: executionMode ? { executionMode } : {} })
 }
 
 export function createProvider(data) {
@@ -20,8 +20,12 @@ export function testProvider(id) {
   return request({ url: `/agent/providers/${id}/test`, method: 'post', timeout: 120000 })
 }
 
-export function getConversations(projectId) {
-  return request({ url: '/agent/conversations', method: 'get', params: { projectId } })
+export function getConversations(projectId, executionMode) {
+  return request({
+    url: '/agent/conversations',
+    method: 'get',
+    params: { projectId, ...(executionMode ? { executionMode } : {}) }
+  })
 }
 
 export function createConversation(data) {

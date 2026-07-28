@@ -211,6 +211,10 @@
         <el-form-item label="服务器地址">
           <el-input v-model="clientConfigForm.serverBaseUrl" placeholder="https://codemaster.example.com" clearable />
         </el-form-item>
+        <el-form-item v-if="clientConfigFilePath" label="配置文件">
+          <el-input :model-value="clientConfigFilePath" readonly />
+          <div class="client-config-tip">直接修改此 JSON 文件后，重启客户端即可生效。</div>
+        </el-form-item>
         <el-form-item label="本地项目目录">
           <el-input v-model="clientConfigForm.targetPath" clearable />
         </el-form-item>
@@ -280,6 +284,7 @@ import { getClientInitializeData } from '@/api/codegen/project'
 import {
   DEFAULT_CODEMASTER_SERVER_BASE_URL,
   getCodeMasterClientConfig,
+  getCodeMasterClientConfigFilePath,
   saveCodeMasterClientConfig,
   shouldUseLocalCodegenExecution
 } from '@/utils/codegenExecution'
@@ -313,6 +318,7 @@ const clientConfigForm = ref({
   databaseType: '',
   connectionString: ''
 })
+const clientConfigFilePath = computed(() => getCodeMasterClientConfigFilePath())
 const queryParams = ref({
   pageNum: 1,
   pageSize: 10,
@@ -383,10 +389,14 @@ const openClientConfig = () => {
   clientConfigVisible.value = true
 }
 
-const saveClientConfig = () => {
-  saveCodeMasterClientConfig(clientConfigForm.value)
-  clientConfigVisible.value = false
-  ElMessage.success('保存成功')
+const saveClientConfig = async () => {
+  try {
+    await saveCodeMasterClientConfig(clientConfigForm.value)
+    clientConfigVisible.value = false
+    ElMessage.success('保存成功，重启客户端后配置文件也会生效')
+  } catch (error) {
+    ElMessage.error(`保存失败：${error.message || error}`)
+  }
 }
 
 const handleInitialize = async (row) => {
@@ -829,5 +839,12 @@ refreshOnReactivated(getList)
   margin-left: 12px;
   margin-right: 12px;
   vertical-align: middle;
+}
+
+.client-config-tip {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

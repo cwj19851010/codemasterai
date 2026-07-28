@@ -9,7 +9,7 @@ namespace CodeMaster.Agent.Services;
 
 public interface IAiProviderService
 {
-    Task<List<AiProviderDto>> GetListAsync();
+    Task<List<AiProviderDto>> GetListAsync(string? executionMode = null);
     Task<AiProviderDto> CreateAsync(SaveAiProviderRequest input);
     Task<AiProviderDto> UpdateAsync(long id, SaveAiProviderRequest input);
     Task<bool> DeleteAsync(long id);
@@ -41,11 +41,21 @@ internal sealed class AiProviderService : IAiProviderService
         _providerFactory = providerFactory;
     }
 
-    public async Task<List<AiProviderDto>> GetListAsync()
+    public async Task<List<AiProviderDto>> GetListAsync(string? executionMode = null)
     {
         var userId = _currentUser.UserId;
-        var items = await _repository.GetQueryable()
-            .Where(x => x.UserId == userId)
+        var query = _repository.GetQueryable()
+            .Where(x => x.UserId == userId);
+
+        if (!string.IsNullOrWhiteSpace(executionMode))
+        {
+            if (executionMode is not (AiExecutionModes.Server or AiExecutionModes.Local))
+                throw new ArgumentException("Unsupported AI execution mode.");
+
+            query = query.Where(x => x.ExecutionMode == executionMode);
+        }
+
+        var items = await query
             .OrderByDescending(x => x.IsDefault)
             .OrderByDescending(x => x.CreateTime)
             .ToListAsync();
@@ -63,7 +73,9 @@ internal sealed class AiProviderService : IAiProviderService
             ProviderType = input.ProviderType,
             ExecutionMode = input.ExecutionMode,
             BaseUrl = NormalizeBaseUrl(input.ProviderType, input.BaseUrl),
-            ApiKeyCipherText = string.IsNullOrWhiteSpace(input.ApiKey) ? null : _secretProtector.Protect(input.ApiKey.Trim()),
+            ApiKeyCipherText = ShouldPersistServerSecret(input)
+                ? _secretProtector.Protect(input.ApiKey!.Trim())
+                : null,
             ModelName = input.ModelName.Trim(),
             ExtraHeadersJson = NormalizeOptional(input.ExtraHeadersJson),
             IsDefault = input.IsDefault,
@@ -98,7 +110,12 @@ internal sealed class AiProviderService : IAiProviderService
         entity.UpdateBy = _currentUser.UserName;
         entity.UpdateTime = DateTime.UtcNow;
 
-        if (input.ClearApiKey)
+        if (input.ExecutionMode == AiExecutionModes.Local)
+        {
+            // Local credentials belong exclusively to the desktop/sidecar store.
+            entity.ApiKeyCipherText = null;
+        }
+        else if (input.ClearApiKey)
         {
             entity.ApiKeyCipherText = null;
         }
@@ -124,10 +141,26 @@ internal sealed class AiProviderService : IAiProviderService
             .CountAsync();
         if (activeConversationCount > 0)
         {
-            throw new InvalidOperationException("This provider is used by active conversations. Archive those conversations or disable the provider first.");
+            var activeConversations = await _conversationRepository.GetQueryable()
+                .Where(x => x.UserId == _currentUser.UserId && x.ProviderId == id && x.Status == "Active")
+                .ToListAsync();
+
+            foreach (var conversation in activeConversations)
+            {
+                conversation.Status = "Archived";
+                conversation.UpdateUserId = _currentUser.UserId;
+                conversation.UpdateBy = _currentUser.UserName;
+                conversation.UpdateTime = DateTime.UtcNow;
+                await _conversationRepository.UpdateAsync(conversation);
+            }
         }
 
-        return await _repository.DeleteAsync(id) > 0;
+        // AI provider credentials must not remain in a logically deleted row.
+        // Delete this owned provider physically; the repository default is a
+        // soft delete, which is not appropriate for secrets or shared accounts.
+        return await _db.Deleteable<SysAiProvider>()
+            .Where(x => x.Id == id && x.UserId == _currentUser.UserId)
+            .ExecuteCommandAsync() > 0;
     }
 
     public async Task<AiProviderTestResult> TestAsync(long id)
@@ -265,6 +298,9 @@ internal sealed class AiProviderService : IAiProviderService
     }
 
     private static string? NormalizeOptional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool ShouldPersistServerSecret(SaveAiProviderRequest input) =>
+        input.ExecutionMode == AiExecutionModes.Server && !string.IsNullOrWhiteSpace(input.ApiKey);
 
     private static AiProviderDto ToDto(SysAiProvider entity)
     {

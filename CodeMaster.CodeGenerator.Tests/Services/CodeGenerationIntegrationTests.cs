@@ -55,6 +55,52 @@ public class CodeGenerationIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task TemporalSearchFields_UseTheEntityDataTypeInQueryDto()
+    {
+        const long entityId = 9001;
+        _db.Insertable(new ModuleEntity
+        {
+            Id = entityId,
+            Name = "TemporalRecord",
+            Description = "Temporal record",
+            HasPrimaryKey = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new[]
+        {
+            new EntityField
+            {
+                Id = 9002, ModuleEntityId = entityId, Name = "Id", Description = "Id", DataType = "long",
+                IsPrimaryKey = true, IsRequired = true, CreateBy = "test", UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = 9003, ModuleEntityId = entityId, Name = "BusinessDate", Description = "Business date",
+                DataType = "DateOnly", IsNullable = true, FormControlType = "date", ShowInSearch = true,
+                CreateBy = "test", UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = 9004, ModuleEntityId = entityId, Name = "OccurredAt", Description = "Occurred at",
+                DataType = "DateTimeOffset", IsNullable = true, FormControlType = "datetime", ShowInSearch = true,
+                CreateBy = "test", UpdateUserId = 0
+            }
+        }).ExecuteCommand();
+
+        var generator = new CodeGeneratorService(_db);
+        var dtoCode = await generator.GenerateDtoAsync(entityId, "TestAutomationProject", "Testing");
+        var serviceCode = await generator.GenerateServiceImplementationAsync(entityId, "TestAutomationProject", "Testing");
+
+        Assert.Contains("public DateOnly? BusinessDateStart", dtoCode);
+        Assert.Contains("public DateOnly? BusinessDateEnd", dtoCode);
+        Assert.Contains("public DateTimeOffset? OccurredAtStart", dtoCode);
+        Assert.Contains("public DateTimeOffset? OccurredAtEnd", dtoCode);
+        Assert.Contains("e.BusinessDate >= input.BusinessDateStart.Value", serviceCode);
+        Assert.Contains("e.OccurredAt < input.OccurredAtEnd.Value.AddDays(1)", serviceCode);
+    }
+
+    [Fact]
     public async Task Test_GenerateCode_PartialClass_And_FileCompletion()
     {
         var testProject = new Project
@@ -252,6 +298,151 @@ public class CodeGenerationIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task IncrementalGeneration_ReplacesChangedControl_AndSyncsRelatedDisplayTranslations()
+    {
+        const long projectId = 4100;
+        const long moduleId = 4101;
+        const long entityId = 4102;
+        const long idFieldId = 4103;
+        const long userFieldId = 4104;
+        const string projectName = "IncrementalControlProject";
+
+        _db.Insertable(new Project
+        {
+            Id = projectId,
+            ProjectName = projectName,
+            ProjectPath = _tempProjectPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile};Mode=ReadWriteCreate;",
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new ProjectModule
+        {
+            Id = moduleId,
+            ProjectId = projectId,
+            ModuleName = "MasterData",
+            ModuleDescription = "Master data",
+            Icon = "folder",
+            RoutePath = "/masterdata",
+            LastSyncTime = DateTime.UtcNow,
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new ModuleEntity
+        {
+            Id = entityId,
+            ProjectId = projectId,
+            ModuleId = moduleId,
+            Name = "WorkshopWorker",
+            Description = "Workshop worker",
+            TableName = "workshop_worker",
+            HasPrimaryKey = true,
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new[]
+        {
+            new EntityField
+            {
+                Id = idFieldId,
+                ModuleEntityId = entityId,
+                Name = "Id",
+                Description = "ID",
+                DataType = "long",
+                IsPrimaryKey = true,
+                IsRequired = true,
+                CreateBy = "test",
+                UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = userFieldId,
+                ModuleEntityId = entityId,
+                Name = "SysUserId",
+                Description = "System user",
+                DataType = "long",
+                FormControlType = "number",
+                ShowInList = true,
+                ShowInSearch = true,
+                ShowInAddForm = true,
+                ShowInEditForm = true,
+                ShowInDetail = true,
+                CreateBy = "test",
+                UpdateUserId = 0
+            }
+        }).ExecuteCommand();
+
+        const string emptyScript = "{\"imports\":[],\"uses\":[],\"refs\":[],\"reactives\":[],\"functions\":[],\"hooks\":[],\"computed\":[],\"watches\":[]}";
+        _db.Insertable(new[]
+        {
+            new SysFieldControlTemplate { Id = 4200, ControlType = "number", PageSection = "add", HtmlContent = "<el-col><el-form-item :label=\"$t('[field.labelKey]')\" [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-input-number v-model=\"[field.formPrefix].[field.nameLower]\" /></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 1, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4201, ControlType = "number", PageSection = "edit", HtmlContent = "<el-col><el-form-item :label=\"$t('[field.labelKey]')\" [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-input-number v-model=\"[field.formPrefix].[field.nameLower]\" /></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 2, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4202, ControlType = "number", PageSection = "detail", HtmlContent = "<el-descriptions-item :label=\"$t('[field.labelKey]')\" data-gen-id=\"gen_field_[field.id]\">{{ [field.detailPrefix].[field.nameLower] }}</el-descriptions-item>", ScriptSections = emptyScript, Sort = 3, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4203, ControlType = "search-input", PageSection = "search", HtmlContent = "<el-form-item :label=\"$t('[field.labelKey]')\" data-gen-id=\"gen_field_[field.id]\"><el-input v-model=\"[field.formPrefix].[field.nameLower]\" /></el-form-item>", ScriptSections = emptyScript, Sort = 4, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4204, ControlType = "table-column", PageSection = "list", HtmlContent = "<el-table-column [field.prop] :label=\"$t('[field.labelKey]')\" data-gen-id=\"gen_col_[field.id]\" />", ScriptSections = emptyScript, Sort = 5, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4205, ControlType = "select-table", PageSection = "add", HtmlContent = "<el-col><el-form-item :label=\"$t('[field.labelKey]')\" [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-select v-model=\"[field.formPrefix].[field.nameLower]\"></el-select></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 6, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4206, ControlType = "select-table", PageSection = "edit", HtmlContent = "<el-col><el-form-item :label=\"$t('[field.labelKey]')\" [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-select v-model=\"[field.formPrefix].[field.nameLower]\"></el-select></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 7, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4207, ControlType = "select-table", PageSection = "search", HtmlContent = "<el-form-item :label=\"$t('[field.labelKey]')\" data-gen-id=\"gen_field_[field.id]\"><el-select v-model=\"[field.formPrefix].[field.nameLower]\"></el-select></el-form-item>", ScriptSections = emptyScript, Sort = 8, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4208, ControlType = "select-table", PageSection = "list", HtmlContent = "<el-table-column [v-for=\"displayField in field.displayFields\"] :label=\"$t('[displayField.labelKey]')\" data-gen-id=\"gen_col_[field.id]_[displayField.nameLower]\"><template #default=\"scope\">[displayField.listContent]</template></el-table-column>", ScriptSections = emptyScript, Sort = 9, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 4209, ControlType = "select-table", PageSection = "detail", HtmlContent = "<el-descriptions-item [v-for=\"displayField in field.displayFields\"] :label=\"$t('[displayField.labelKey]')\" data-gen-id=\"gen_field_[field.id]_[displayField.nameLower]\">[displayField.detailContent]</el-descriptions-item>", ScriptSections = emptyScript, Sort = 10, CreateBy = "test", UpdateUserId = 0 }
+        }).ExecuteCommand();
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+        Assert.True(await service.GenerateCodeAsync(entityId));
+
+        var generatedEntity = _db.Queryable<ModuleEntity>().Where(entity => entity.Id == entityId).First();
+        var userField = _db.Queryable<EntityField>().Where(field => field.Id == userFieldId).First();
+        userField.FormControlType = "select-table";
+        userField.RelatedEntityName = "SysUser";
+        userField.RelatedEntityIdField = "Id";
+        userField.RelatedEntityDisplayFields = "[\"UserName\"]";
+        userField.UpdateTime = generatedEntity.LastGeneratedTime!.Value.AddSeconds(1);
+        _db.Updateable(userField).UpdateColumns(field => new
+        {
+            field.FormControlType,
+            field.RelatedEntityName,
+            field.RelatedEntityIdField,
+            field.RelatedEntityDisplayFields,
+            field.UpdateTime
+        }).ExecuteCommand();
+
+        Assert.True(await service.GenerateIncrementalCodeAsync(entityId));
+
+        var viewPath = Path.Combine(
+            _tempProjectPath,
+            $"{projectName}.Vue",
+            "src",
+            "views",
+            "masterdata",
+            "workshopworker");
+        var editVue = await File.ReadAllTextAsync(Path.Combine(viewPath, "edit.vue"));
+        Assert.Contains("<el-select v-model=\"form.sysUserId\"", editVue);
+        Assert.DoesNotContain("<el-input-number", editVue);
+        Assert.Equal(1, editVue.Split("v-model=\"form.sysUserId\"", StringSplitOptions.None).Length - 1);
+
+        var targetDb = new SqlSugarClient(new ConnectionConfig
+        {
+            ConnectionString = $"Data Source={_sqliteFile};Mode=ReadWriteCreate;",
+            DbType = DbType.Sqlite,
+            IsAutoCloseConnection = true,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
+        });
+        targetDb.CodeFirst.InitTables(typeof(SysMenu), typeof(SysLangText));
+
+        Assert.True(await service.SyncLanguageToTargetAsync(entityId));
+        var userNameDefinition = SystemReferenceEntityCatalog.GetAll()
+            .Single(reference => reference.Name == "SysUser")
+            .Fields.Single(field => field.Name == "UserName");
+        Assert.True(targetDb.Queryable<SysLangText>().Any(text =>
+            text.LangKey == "userName" &&
+            text.LangCode == "zh-CN" &&
+            text.LangValue == userNameDefinition.Description));
+    }
+
+    [Fact]
     public async Task ProjectSynchronization_UpdatesAllMenusAndLanguages()
     {
         var project = new Project
@@ -327,6 +518,138 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.True(targetDb.Queryable<SysMenu>().Any(menu => menu.Component == "catalog/product/index"));
         Assert.True(targetDb.Queryable<SysLangText>().Any(text =>
             text.LangKey == "productName" && text.LangCode == "zh-CN" && text.LangValue == "Product name"));
+    }
+
+    [Fact]
+    public async Task MultiWordGeneration_SeparatesJavaScriptIdentifiersFromPathSegments()
+    {
+        const string canonicalIndexScript = "{\"imports\":[{\"path\":\"@/api/[gen.moduleNameAllLower]/[gen.entityNameAllLower]\",\"default\":\"* as [gen.entityNameLower]Api\"}],\"uses\":[],\"refs\":[{\"name\":\"router\",\"initialValue\":\"useRouter()\"}],\"reactives\":[],\"functions\":[{\"name\":\"handleAdd\",\"body\":[\"router.push('/[gen.moduleNameAllLower]/[gen.entityNameAllLower]/add');\"]}],\"hooks\":[],\"computed\":[],\"watches\":[]}";
+
+        _db.Updateable<SysPageTemplate>()
+            .SetColumns(template => template.ScriptSections == canonicalIndexScript)
+            .Where(template => template.PageType == "index")
+            .ExecuteCommand();
+
+        const long moduleId = 601;
+        const long entityId = 602;
+        _db.Insertable(new ProjectModule
+        {
+            Id = moduleId,
+            ProjectId = 1,
+            ModuleName = "MasterData",
+            ModuleDescription = "Master data",
+            Icon = "folder",
+            RoutePath = "/masterdata",
+            LastSyncTime = DateTime.UtcNow,
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+        _db.Insertable(new ModuleEntity
+        {
+            Id = entityId,
+            ProjectId = 1,
+            ModuleId = moduleId,
+            Name = "DeviceBinding",
+            Description = "Device binding",
+            TableName = "device_binding",
+            HasPrimaryKey = true,
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+
+        var result = await new TemplateCodeGenerator(_db)
+            .GeneratePageAsync(entityId, "index", "TestAutomationProject", "MasterData");
+
+        Assert.Contains("@/api/masterdata/devicebinding", result.MainScriptContent);
+        Assert.Contains("router.push('/masterdata/devicebinding/add')", result.MainScriptContent);
+        Assert.Contains("* as deviceBindingApi", result.MainScriptContent);
+        Assert.DoesNotContain("@/api/masterData/deviceBinding", result.MainScriptContent);
+        Assert.DoesNotContain("/masterData/deviceBinding/", result.MainScriptContent);
+    }
+
+    [Fact]
+    public async Task MultiWordMenuSynchronization_RepairsLegacyCamelCaseRoutesWithoutDuplicates()
+    {
+        var project = new Project
+        {
+            Id = 701,
+            ProjectName = "CaseSyncProject",
+            ProjectPath = _tempProjectPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile};Mode=ReadWriteCreate;",
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var module = new ProjectModule
+        {
+            Id = 702,
+            ProjectId = project.Id,
+            ModuleName = "MasterData",
+            ModuleDescription = "Master data",
+            Icon = "folder",
+            RoutePath = "/masterdata",
+            LastSyncTime = DateTime.UtcNow,
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var entity = new ModuleEntity
+        {
+            Id = 703,
+            ProjectId = project.Id,
+            ModuleId = module.Id,
+            Name = "DeviceBinding",
+            Description = "Device binding",
+            HasPrimaryKey = true,
+            IsReadOnly = false,
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+
+        _db.Insertable(project).ExecuteCommand();
+        _db.Insertable(module).ExecuteCommand();
+        _db.Insertable(entity).ExecuteCommand();
+
+        var targetDb = new SqlSugarClient(new ConnectionConfig
+        {
+            ConnectionString = project.ConnectionString,
+            DbType = DbType.Sqlite,
+            IsAutoCloseConnection = true,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
+        });
+        targetDb.CodeFirst.InitTables(typeof(SysMenu), typeof(SysLangText));
+
+        const long dirId = 710;
+        const long pageId = 711;
+        const long addId = 712;
+        const long editId = 713;
+        const long detailId = 714;
+        targetDb.Insertable(new[]
+        {
+            new SysMenu { Id = dirId, MenuName = "Master data", TitleKey = "", ParentId = null, Path = "masterData", Component = "", Query = "", Icon = "folder", MenuType = "M", Visible = true, Status = 0, Perms = "", CreateBy = "test", UpdateUserId = 0, IsDeleted = false },
+            new SysMenu { Id = pageId, MenuName = "Device binding", TitleKey = "", ParentId = dirId, Path = "deviceBinding", Component = "masterdata/deviceBinding/index", Query = "", Icon = "list", MenuType = "C", Visible = true, Status = 0, Perms = "masterdata:devicebinding:list", CreateBy = "test", UpdateUserId = 0, IsDeleted = false },
+            new SysMenu { Id = addId, MenuName = "Add device binding", TitleKey = "", ParentId = pageId, Path = "add", Component = "masterdata/deviceBinding/add", Query = "", Icon = "", MenuType = "C", Visible = false, Status = 0, Perms = "masterdata:devicebinding:create", CreateBy = "test", UpdateUserId = 0, IsDeleted = false },
+            new SysMenu { Id = editId, MenuName = "Edit device binding", TitleKey = "", ParentId = pageId, Path = "edit", Component = "masterdata/deviceBinding/edit", Query = "", Icon = "", MenuType = "C", Visible = false, Status = 0, Perms = "masterdata:devicebinding:update", CreateBy = "test", UpdateUserId = 0, IsDeleted = false },
+            new SysMenu { Id = detailId, MenuName = "Device binding detail", TitleKey = "", ParentId = pageId, Path = "detail", Component = "masterdata/deviceBinding/detail", Query = "", Icon = "", MenuType = "C", Visible = false, Status = 0, Perms = "masterdata:devicebinding:detail", CreateBy = "test", UpdateUserId = 0, IsDeleted = false }
+        }).ExecuteCommand();
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+        var input = new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id };
+        Assert.True(await service.SyncProjectMenusToTargetAsync(input));
+        Assert.True(await service.SyncProjectMenusToTargetAsync(new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+
+        var pageMenus = targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == dirId && menu.MenuType == "C" && menu.Perms == "masterdata:devicebinding:list").ToList();
+        Assert.Single(pageMenus);
+        Assert.Equal("devicebinding", pageMenus[0].Path);
+        Assert.Equal("masterdata/devicebinding/index", pageMenus[0].Component);
+        Assert.Single(targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == null && menu.MenuType == "M").ToList());
+
+        var childMenus = targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == pageId && menu.MenuType == "C").ToList();
+        Assert.Equal(3, childMenus.Count);
+        Assert.All(childMenus, menu => Assert.StartsWith("masterdata/devicebinding/", menu.Component));
     }
 
     [Fact]
@@ -586,7 +909,7 @@ public class CodeGenerationIntegrationTests : IDisposable
     [Fact]
     public async Task Test_SelectTable_DisplayFields_Render_By_Related_Field_Type()
     {
-        const string selectTableScript = "{\"imports\":[{\"path\":\"@/api/[field.relatedModuleNameLower]/[field.relatedEntityNameLower]\",\"destructured\":\"getList as get[field.relatedEntityName]List\"}],\"uses\":[],\"refs\":[{\"name\":\"[field.relatedEntityNameLower]Options\",\"initialValue\":\"[]\"}],\"reactives\":[],\"functions\":[],\"hooks\":[{\"name\":\"onMounted\",\"body\":[\"get[field.relatedEntityName]List().then(res => { [field.relatedEntityNameLower]Options.value = res.map(item => ({ value: item.[field.relatedEntityIdFieldLower], ...item })) })\"]}],\"computed\":[],\"watches\":[]}";
+        const string selectTableScript = "{\"imports\":[{\"path\":\"@/api/[field.relatedModuleNameAllLower]/[field.relatedEntityNameAllLower]\",\"destructured\":\"getList as get[field.relatedEntityName]List\"}],\"uses\":[],\"refs\":[{\"name\":\"[field.relatedEntityNameLower]Options\",\"initialValue\":\"[]\"}],\"reactives\":[],\"functions\":[],\"hooks\":[{\"name\":\"onMounted\",\"body\":[\"get[field.relatedEntityName]List().then(res => { [field.relatedEntityNameLower]Options.value = res.map(item => ({ value: item.[field.relatedEntityIdFieldLower], ...item })) })\"]}],\"computed\":[],\"watches\":[]}";
 
         _db.Insertable(new[]
         {
@@ -774,6 +1097,8 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.Contains("const productStatusOptions = ref([])", index.MainScriptContent);
         Assert.Contains("product_status", index.MainScriptContent);
         Assert.Contains("getDataListByType", index.MainScriptContent);
+        Assert.Contains("@/api/productmanagement/product", index.MainScriptContent);
+        Assert.DoesNotContain("@/api/productManagement/product", index.MainScriptContent);
     }
 
     [Fact]

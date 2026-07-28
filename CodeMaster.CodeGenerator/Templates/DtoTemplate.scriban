@@ -162,12 +162,12 @@ public class {{ entity.name }}QueryDto : PagedQueryDto
     /// <summary>
     /// {{ field.description }}开始
     /// </summary>
-    public DateTime? {{ field.name }}Start { get; set; }
+    public {{ field.data_type }}? {{ field.name }}Start { get; set; }
 
     /// <summary>
     /// {{ field.description }}结束
     /// </summary>
-    public DateTime? {{ field.name }}End { get; set; }
+    public {{ field.data_type }}? {{ field.name }}End { get; set; }
 
 {{~ else ~}}
     /// <summary>

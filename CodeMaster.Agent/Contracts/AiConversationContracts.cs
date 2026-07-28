@@ -163,7 +163,7 @@ public sealed class CreateEntityFieldProposal
     public bool ShowInAddForm { get; set; } = true;
     public bool ShowInEditForm { get; set; } = true;
     public bool ShowInSearch { get; set; }
-    [Description("UI control: input, textarea, number, select, select-table, date, datetime, switch, checkbox, radio-group, checkbox-group, file, image, editor, cascader, or table-column. Use ordinary select for scalar code values; use select-table only when the picker must display a related row/table.")]
+    [Description("UI control: input, textarea, number, select, select-table, date, datetime, switch, checkbox, radio-group, checkbox-group, file, image, editor, cascader, or table-column. Use ordinary select for scalar code values. select-table and cascader require RelatedEntityName, RelatedEntityIdField, and RelatedEntityDisplayFields; cascader must target a tree entity.")]
     public string FormControlType { get; set; } = "input";
     public int? ListWidth { get; set; }
     public int OrderNum { get; set; }
@@ -172,11 +172,11 @@ public sealed class CreateEntityFieldProposal
     [Description("For api select, JSON config such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field. For dict/static select, keep the existing dictionary code or option JSON.")]
     public string? SelectOptions { get; set; }
     public bool IsMultiple { get; set; }
-    [Description("Source entity for api select. Do not use select-table for a simple scalar code lookup.")]
+    [Description("Source entity for api select, select-table, or cascader. Do not use select-table for a simple scalar code lookup. For a self-contained control demo, select-table may use SysUser and cascader may use the tree entity SysDept.")]
     public string? RelatedEntityName { get; set; }
     [Description("Value/code field on the api source entity. Defaults to Id.")]
     public string? RelatedEntityIdField { get; set; }
-    [Description("JSON array of label fields on the api source entity, for example [\"Name\"].")]
+    [Description("JSON array of label fields on the related entity, for example [\"Name\"]. Required for api select, select-table, and cascader.")]
     public string? RelatedEntityDisplayFields { get; set; }
     public string? ResultMappings { get; set; }
     [Description("Normal, Computed, or Aggregate. Computed and Aggregate fields are generated as read-only calculated form values.")]
@@ -309,7 +309,7 @@ public sealed class UpdateEntityFieldProposal
     public bool? ShowInAddForm { get; set; }
     public bool? ShowInEditForm { get; set; }
     public bool? ShowInSearch { get; set; }
-    [Description("UI control type. Supported values match CreateEntityFieldProposal.FormControlType. Keep ordinary scalar lookups as select; select-table is for table/row pickers.")]
+    [Description("UI control type. Supported values match CreateEntityFieldProposal.FormControlType. Keep ordinary scalar lookups as select. select-table and cascader require a related entity, value field, and display fields; cascader must target a tree entity.")]
     public string? FormControlType { get; set; }
     public int? ListWidth { get; set; }
     public bool ClearListWidth { get; set; }
@@ -319,11 +319,11 @@ public sealed class UpdateEntityFieldProposal
     [Description("For api select, JSON such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field; otherwise preserve dictionary/static option config.")]
     public string? SelectOptions { get; set; }
     public bool? IsMultiple { get; set; }
-    [Description("Related source entity for api select.")]
+    [Description("Related source entity for api select, select-table, or cascader. For a self-contained control demo, use SysUser for select-table and the tree entity SysDept for cascader.")]
     public string? RelatedEntityName { get; set; }
     [Description("Value/code field on the api source entity; defaults to Id.")]
     public string? RelatedEntityIdField { get; set; }
-    [Description("JSON array of display fields on the api source entity.")]
+    [Description("JSON array of related display fields. Required for api select, select-table, and cascader.")]
     public string? RelatedEntityDisplayFields { get; set; }
     public string? ResultMappings { get; set; }
     [Description("Normal, Computed, or Aggregate.")]

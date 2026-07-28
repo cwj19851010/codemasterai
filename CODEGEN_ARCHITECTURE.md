@@ -89,12 +89,19 @@ TemplateCodeGenerator.GeneratePageAsync()
 | `[field.xxx]` | 字段上下文 | `[field.name]` `[field.nameLower]` |
 | `[relation.xxx]` | 子表上下文 | `[relation.entityName]` `[relation.tableColumns]` |
 
+路径和 JavaScript 标识符必须使用不同的命名标记：
+
+- `entityNameLower` / `moduleNameLower`：小驼峰，供变量、API 别名和函数名使用（例如 `deviceBinding`）。
+- `entityNameAllLower` / `moduleNameAllLower`：全小写，供 Vue 文件目录、API 导入路径、路由和菜单路径使用（例如 `devicebinding`）。
+- 关联字段对应使用 `relatedEntityNameAllLower` / `relatedModuleNameAllLower`。历史数据库模板需要通过一次性迁移脚本转换，运行时不保留旧标记兼容逻辑。
+
 ### 4.2 FieldContext 完整属性
 
 ```
 Name, NameLower, Description, DataType, IsNullable, IsPrimaryKey,
 IsRequired, IsSortable, FormControlType, SelectDataSource, SelectOptions,
-RelatedEntityName, RelatedEntityNameLower, RelatedEntityIdField,
+RelatedEntityName, RelatedEntityNameLower, RelatedEntityNameAllLower,
+RelatedModuleNameLower, RelatedModuleNameAllLower, RelatedEntityIdField,
 RelatedDisplayFields, DictDataUrl, FormPrefix, EntityTable, EntityField
 ```
 

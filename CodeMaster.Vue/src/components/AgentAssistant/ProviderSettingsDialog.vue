@@ -59,10 +59,9 @@
           </el-select>
         </el-form-item>
         <el-form-item label="运行位置" prop="executionMode">
-          <el-radio-group v-model="form.executionMode">
-            <el-radio-button label="Server">服务端</el-radio-button>
-            <el-radio-button label="Local" :disabled="!clientMode">本机客户端</el-radio-button>
-          </el-radio-group>
+          <el-tag :type="clientMode ? 'warning' : 'info'">
+            {{ clientMode ? '客户端' : '服务端' }}
+          </el-tag>
         </el-form-item>
         <el-form-item label="模型 API 地址" prop="baseUrl">
           <el-input v-model="form.baseUrl" placeholder="https://api.example.com/v1" />
@@ -158,6 +157,7 @@ const providerTypeLabel = type => type === 'Anthropic' ? 'Anthropic Claude' : 'O
 
 const resetForm = value => {
   Object.assign(form, createDefaultForm(), value || {})
+  form.executionMode = clientMode ? 'Local' : 'Server'
   form.apiKey = ''
   form.clearApiKey = false
 }

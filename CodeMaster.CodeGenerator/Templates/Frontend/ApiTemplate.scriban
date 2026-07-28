@@ -2,14 +2,14 @@ import request from '@/utils/request'
 
 {{~ for related in entity.related_imports ~}}
 // 引入{{ related.entity_name }}的不分页列表 API
-import { getList as get{{ related.entity_name }}List } from '@/api/{{ related.module_name_lower }}/{{ related.entity_name_lower }}'
+import { getList as get{{ related.entity_name }}List } from '@/api/{{ related.module_name_all_lower }}/{{ related.entity_name_all_lower }}'
 {{~ end ~}}
 
 {{~ for field in entity.remote_select_fields ~}}
 // {{ field.name }} remote-select options
 export function {{ field.options_api_name }}(parentValue) {
   return request({
-    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/{{ field.options_route }}',
+    url: '/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/{{ field.options_route }}',
     method: 'get',
     params: parentValue === undefined || parentValue === null || parentValue === '' ? {} : { parentValue }
   })
@@ -18,7 +18,7 @@ export function {{ field.options_api_name }}(parentValue) {
 // Batch-resolve {{ field.name }} labels for list/detail pages
 export function {{ field.labels_api_name }}(values) {
   return request({
-    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/{{ field.labels_route }}',
+    url: '/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/{{ field.labels_route }}',
     method: 'post',
     data: values
   })
@@ -28,7 +28,7 @@ export function {{ field.labels_api_name }}(values) {
 // 获取分页列表
 export function getPagedList(params) {
   return request({
-    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/getpagedlist',
+    url: '/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/getpagedlist',
     method: 'get',
     params
   })
@@ -37,7 +37,7 @@ export function getPagedList(params) {
 // 获取不分页列表（关联表引用）
 export function getList(params) {
   return request({
-    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/getlist',
+    url: '/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/getlist',
     method: 'get',
     params
   })
@@ -47,7 +47,7 @@ export function getList(params) {
 // 获取详情
 export function getById(id) {
   return request({
-    url: `/{{ entity.module_name_lower }}/{{ entity.name_lower }}/getbyid/${id}`,
+    url: `/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/getbyid/${id}`,
     method: 'get'
   })
 }
@@ -57,7 +57,7 @@ export function getById(id) {
 // 创建
 export function create(data) {
   return request({
-    url: '/{{ entity.module_name_lower }}/{{ entity.name_lower }}/create',
+    url: '/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/create',
     method: 'post',
     data
   })
@@ -66,7 +66,7 @@ export function create(data) {
 // 更新
 export function update(id, data) {
   return request({
-    url: `/{{ entity.module_name_lower }}/{{ entity.name_lower }}/update/${id}`,
+    url: `/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/update/${id}`,
     method: 'put',
     data
   })
@@ -75,7 +75,7 @@ export function update(id, data) {
 // 删除
 export function deleteById(id) {
   return request({
-    url: `/{{ entity.module_name_lower }}/{{ entity.name_lower }}/delete/${id}`,
+    url: `/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/delete/${id}`,
     method: 'delete'
   })
 }

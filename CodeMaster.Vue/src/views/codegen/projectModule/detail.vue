@@ -27,11 +27,6 @@
         <el-descriptions-item label="排序">
           {{ detail.orderNum }}
         </el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="detail.status ? 'success' : 'danger'">
-            {{ detail.status ? '启用' : '禁用' }}
-          </el-tag>
-        </el-descriptions-item>
         <el-descriptions-item label="创建时间">
           {{ detail.createTime }}
         </el-descriptions-item>
@@ -60,7 +55,6 @@ const detail = ref({
   moduleDescription: '',
   icon: '',
   orderNum: 0,
-  status: 1,
   createTime: '',
   updateTime: ''
 })

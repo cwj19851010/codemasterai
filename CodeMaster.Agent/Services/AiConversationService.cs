@@ -14,7 +14,7 @@ namespace CodeMaster.Agent.Services;
 
 public interface IAiConversationService
 {
-    Task<List<AiConversationDto>> GetListAsync(long projectId);
+    Task<List<AiConversationDto>> GetListAsync(long projectId, string? executionMode = null);
     Task<AiConversationDto> CreateAsync(CreateAiConversationRequest input);
     Task<bool> ArchiveAsync(long conversationId);
     Task<List<AiMessageDto>> GetMessagesAsync(long conversationId);
@@ -65,11 +65,33 @@ internal sealed class AiConversationService : IAiConversationService
         _authorizationService = authorizationService;
     }
 
-    public async Task<List<AiConversationDto>> GetListAsync(long projectId)
+    public async Task<List<AiConversationDto>> GetListAsync(long projectId, string? executionMode = null)
     {
         _ = await GetProjectAsync(projectId);
-        var conversations = await _conversationRepository.GetQueryable()
+        if (!string.IsNullOrWhiteSpace(executionMode) &&
+            executionMode is not (AiExecutionModes.Server or AiExecutionModes.Local))
+        {
+            throw new ArgumentException("Unsupported AI execution mode.");
+        }
+
+        var query = _conversationRepository.GetQueryable()
             .Where(x => x.UserId == _currentUser.UserId && x.ProjectId == projectId && x.Status == "Active")
+            ;
+
+        if (!string.IsNullOrWhiteSpace(executionMode))
+        {
+            var providerIds = await _providerRepository.GetQueryable()
+                .Where(x => x.UserId == _currentUser.UserId && x.ExecutionMode == executionMode)
+                .Select(x => x.Id)
+                .ToListAsync();
+
+            if (providerIds.Count == 0)
+                return new List<AiConversationDto>();
+
+            query = query.Where(x => providerIds.Contains(x.ProviderId));
+        }
+
+        var conversations = await query
             .OrderByDescending(x => x.LastMessageAt)
             .OrderByDescending(x => x.CreateTime)
             .ToListAsync();
@@ -732,6 +754,7 @@ internal sealed class AiConversationService : IAiConversationService
         Use an empty string only when intentionally clearing an optional text setting. Omit properties that should keep their current value.
         Every field must deliberately configure its data type, nullability, validation, page visibility, search behavior, control type, ordering, and control-specific data source properties.
         For a normal scalar code lookup that comes from another entity, use FormControlType=select and SelectDataSource=api. Set RelatedEntityName to the source entity, RelatedEntityIdField to its code/value field, RelatedEntityDisplayFields to a JSON array such as [\"Name\"], and SelectOptions to JSON such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field to watch and parentValueField is the related source filter field. Do not model this as select-table.
+        select-table and cascader are never standalone controls: always set RelatedEntityName, RelatedEntityIdField, and RelatedEntityDisplayFields. A cascader target must be a tree entity. For a self-contained all-controls test or demo that must create only the requested business entities, use RelatedEntityName=SysUser, RelatedEntityIdField=Id, RelatedEntityDisplayFields=[\"NickName\",\"UserName\"] for select-table, and use RelatedEntityName=SysDept, RelatedEntityIdField=Id, RelatedEntityDisplayFields=[\"Name\"] for cascader. Never emit an unbound cascader field such as RegionPath.
         api select generation is intentionally batched: list pages collect distinct values from the returned rows and call one generated labels endpoint; detail pages resolve the one value the same way; add/edit pages load options once and add a watch only when parentField is configured. A generated backend service exposes the corresponding options and labels methods, so do not invent per-row requests or arbitrary frontend source edits.
         UI design is a structured CodeMaster capability, not arbitrary source editing:
         - For requests to beautify, reorganize, group, resize, move, or visually transform an entity page, call get_ui_page_blueprint for the exact entity and page type, then submit propose_ui_page_enhancement with TargetKind=EntityPage.

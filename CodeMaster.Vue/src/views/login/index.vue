@@ -212,7 +212,7 @@ const handleLogin = () => {
       loading.value = true
       try {
         if (isClientLogin && defaultServerBaseUrl) {
-          saveCodeMasterClientConfig({
+          await saveCodeMasterClientConfig({
             ...getCodeMasterClientConfig(),
             serverBaseUrl: defaultServerBaseUrl
           })
@@ -234,12 +234,16 @@ const handleLogin = () => {
   })
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (isClientLogin && defaultServerBaseUrl) {
-    saveCodeMasterClientConfig({
-      ...getCodeMasterClientConfig(),
-      serverBaseUrl: defaultServerBaseUrl
-    })
+    try {
+      await saveCodeMasterClientConfig({
+        ...getCodeMasterClientConfig(),
+        serverBaseUrl: defaultServerBaseUrl
+      })
+    } catch (error) {
+      console.error('Failed to persist CodeMaster client config:', error)
+    }
   }
   completeExternalLogin()
 })

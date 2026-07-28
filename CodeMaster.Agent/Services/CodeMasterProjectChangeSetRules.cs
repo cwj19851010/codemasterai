@@ -1,6 +1,7 @@
 using CodeMaster.Agent.Contracts;
 using CodeMaster.Application.Services.CodeGen;
 using CodeMaster.Domain.Entities.CodeGen;
+using System.Text.Json;
 
 namespace CodeMaster.Agent.Services;
 
@@ -219,7 +220,7 @@ public static class CodeMasterProjectChangeSetRules
 
         AddDuplicateErrors(entity.Fields.Select(x => x.Name), $"field in entity '{entity.Name}'", result.Errors);
         foreach (var field in entity.Fields)
-            ValidateNewField(entity.Name, field, controls, result);
+            ValidateNewField(entity.Name, field, controls, existingEntitiesByName, proposedEntities, result);
         ValidateCreatedPrimaryKey(entity, result);
 
         AddDuplicateErrors(entity.Relations.Select(x => x.RelationName), $"relation in entity '{entity.Name}'", result.Errors);
@@ -296,11 +297,18 @@ public static class CodeMasterProjectChangeSetRules
 
             if (deletedFieldIds.Contains(field.FieldId))
                 result.Errors.Add($"Field '{current.Name}.{currentField.Name}' cannot be updated and deleted in the same change set.");
-            ValidateUpdatedField(current.Name, currentField, field, controls, result);
+            ValidateUpdatedField(
+                current.Name,
+                currentField,
+                field,
+                controls,
+                existingEntitiesByName,
+                proposedEntities,
+                result);
         }
 
         foreach (var field in update.NewFields)
-            ValidateNewField(current.Name, field, controls, result);
+            ValidateNewField(current.Name, field, controls, existingEntitiesByName, proposedEntities, result);
 
         var finalFieldNames = current.Fields
             .Where(x => !deletedFieldIds.Contains(x.Id))
@@ -371,6 +379,8 @@ public static class CodeMasterProjectChangeSetRules
         string entityName,
         CreateEntityFieldProposal field,
         IReadOnlySet<string> controls,
+        IReadOnlyDictionary<string, AiEntityBlueprintDto> existingEntitiesByName,
+        IReadOnlyDictionary<string, CreateEntityProposal> proposedEntities,
         ProjectChangeSetValidationResult result)
     {
         if (string.IsNullOrWhiteSpace(field.Name) || string.IsNullOrWhiteSpace(field.Description) || string.IsNullOrWhiteSpace(field.DataType))
@@ -380,6 +390,17 @@ public static class CodeMasterProjectChangeSetRules
         }
 
         ValidateControl(entityName, field.Name, field.FormControlType, controls, result);
+        ValidateRelatedControl(
+            entityName,
+            field.Name,
+            field.FormControlType,
+            field.SelectDataSource,
+            field.RelatedEntityName,
+            field.RelatedEntityIdField,
+            field.RelatedEntityDisplayFields,
+            existingEntitiesByName,
+            proposedEntities,
+            result);
         ValidatePrecision(entityName, field.Name, field.Precision, field.Scale, result);
         ValidateCalculatedField(
             entityName,
@@ -398,6 +419,8 @@ public static class CodeMasterProjectChangeSetRules
         AiFieldBlueprintDto current,
         UpdateEntityFieldProposal field,
         IReadOnlySet<string> controls,
+        IReadOnlyDictionary<string, AiEntityBlueprintDto> existingEntitiesByName,
+        IReadOnlyDictionary<string, CreateEntityProposal> proposedEntities,
         ProjectChangeSetValidationResult result)
     {
         var name = string.IsNullOrWhiteSpace(field.Name) ? current.Name : field.Name.Trim();
@@ -413,6 +436,17 @@ public static class CodeMasterProjectChangeSetRules
             result.Errors.Add($"Field '{entityName}.{current.Name}' cannot have an empty field category.");
         var control = field.FormControlType ?? current.FormControlType;
         ValidateControl(entityName, name, control, controls, result);
+        ValidateRelatedControl(
+            entityName,
+            name,
+            control,
+            field.SelectDataSource ?? current.SelectDataSource,
+            field.RelatedEntityName ?? current.RelatedEntityName,
+            field.RelatedEntityIdField ?? current.RelatedEntityIdField,
+            field.RelatedEntityDisplayFields ?? current.RelatedEntityDisplayFields,
+            existingEntitiesByName,
+            proposedEntities,
+            result);
         var precision = field.ClearPrecision ? null : field.Precision ?? current.Precision;
         var scale = field.ClearScale ? null : field.Scale ?? current.Scale;
         ValidatePrecision(entityName, name, precision, scale, result);
@@ -439,6 +473,113 @@ public static class CodeMasterProjectChangeSetRules
             result.Errors.Add($"Field '{entityName}.{fieldName}' requires a form control type.");
         else if (controls.Count > 0 && !controls.Contains(control))
             result.Errors.Add($"Field '{entityName}.{fieldName}' uses unknown control '{control}'. Read the control catalog from get_project_structure first.");
+    }
+
+    private static void ValidateRelatedControl(
+        string entityName,
+        string fieldName,
+        string? control,
+        string? selectDataSource,
+        string? relatedEntityName,
+        string? relatedEntityIdField,
+        string? relatedEntityDisplayFields,
+        IReadOnlyDictionary<string, AiEntityBlueprintDto> existingEntitiesByName,
+        IReadOnlyDictionary<string, CreateEntityProposal> proposedEntities,
+        ProjectChangeSetValidationResult result)
+    {
+        var normalizedControl = (control ?? string.Empty).Trim().ToLowerInvariant();
+        var isRemoteSelect = normalizedControl == "select"
+            && string.Equals(selectDataSource?.Trim(), "api", StringComparison.OrdinalIgnoreCase);
+        if (!isRemoteSelect && normalizedControl is not ("select-table" or "cascader"))
+            return;
+
+        var fieldLabel = $"Field '{entityName}.{fieldName}'";
+        if (string.IsNullOrWhiteSpace(relatedEntityName))
+        {
+            result.Errors.Add($"{fieldLabel} uses {normalizedControl} and must select a related entity.");
+            return;
+        }
+
+        var displayFields = ParseDisplayFields(relatedEntityDisplayFields);
+        if (displayFields.Count == 0)
+            result.Errors.Add($"{fieldLabel} uses {normalizedControl} and must configure at least one related display field.");
+
+        var relatedName = relatedEntityName.Trim();
+        var valueField = string.IsNullOrWhiteSpace(relatedEntityIdField)
+            ? "Id"
+            : relatedEntityIdField.Trim();
+        bool isTree;
+        HashSet<string> targetFields;
+
+        if (SystemReferenceEntityCatalog.TryGet(relatedName, out var builtIn))
+        {
+            if (isRemoteSelect)
+            {
+                result.Errors.Add(
+                    $"{fieldLabel} cannot use built-in entity '{builtIn.Name}' as an api select. Use select-table or cascader instead.");
+                return;
+            }
+
+            isTree = builtIn.IsTree;
+            targetFields = builtIn.Fields
+                .Select(item => item.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        else if (existingEntitiesByName.TryGetValue(relatedName, out var existing))
+        {
+            isTree = existing.IsTree;
+            targetFields = existing.Fields
+                .Select(item => item.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (existing.HasPrimaryKey)
+                targetFields.Add("Id");
+        }
+        else if (proposedEntities.TryGetValue(relatedName, out var proposed))
+        {
+            isTree = proposed.IsTree;
+            targetFields = proposed.Fields
+                .Select(item => item.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (proposed.HasPrimaryKey)
+                targetFields.Add("Id");
+        }
+        else
+        {
+            result.Errors.Add($"{fieldLabel} references related entity '{relatedName}', which does not exist in the project or change set.");
+            return;
+        }
+
+        if (normalizedControl == "cascader" && !isTree)
+            result.Errors.Add($"{fieldLabel} uses cascader and must reference a tree entity.");
+
+        var missingFields = displayFields
+            .Append(valueField)
+            .Where(name => !targetFields.Contains(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (missingFields.Count > 0)
+        {
+            result.Errors.Add(
+                $"{fieldLabel} references missing field(s) {string.Join(", ", missingFields)} on related entity '{relatedName}'.");
+        }
+    }
+
+    private static List<string> ParseDisplayFields(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return new List<string>();
+
+        try
+        {
+            return (JsonSerializer.Deserialize<List<string>>(value) ?? new List<string>())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item.Trim())
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        }
     }
 
     private static void ValidatePrecision(

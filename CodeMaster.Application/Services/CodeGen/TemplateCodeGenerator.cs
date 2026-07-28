@@ -53,12 +53,13 @@ public class TemplateCodeGenerator
         var genCtx = new GenContext
         {
             EntityName = entity.Name,
-            EntityNameLower = ToCamelCase(entity.Name),
-            EntityNameAllLower = entity.Name.ToLower(),
+            EntityNameLower = CodeGenNaming.ToJavaScriptIdentifier(entity.Name),
+            EntityNameAllLower = CodeGenNaming.ToPathSegment(entity.Name),
             EntityTitleKey = ToCamelCase(entity.Name),
             EntityDescription = entity.Description ?? entity.Name,
             ModuleName = moduleName,
-            ModuleNameLower = ToCamelCase(moduleName)
+            ModuleNameLower = CodeGenNaming.ToJavaScriptIdentifier(moduleName),
+            ModuleNameAllLower = CodeGenNaming.ToPathSegment(moduleName)
         };
 
         result.EntityName = entity.Name;
@@ -66,10 +67,13 @@ public class TemplateCodeGenerator
         // Marker maps for script post-processing
         result.GenMarkerMap = new Dictionary<string, string> {
             ["entityName"] = entity.Name,
-            ["entityNameLower"] = ToCamelCase(entity.Name),
-            ["entityNameAllLower"] = entity.Name.ToLower(),
+            ["entityNameLower"] = CodeGenNaming.ToJavaScriptIdentifier(entity.Name),
+            ["entityNameAllLower"] = CodeGenNaming.ToPathSegment(entity.Name),
             ["entityTitleKey"] = ToCamelCase(entity.Name),
             ["entityDescription"] = entity.Description ?? entity.Name,
+            ["moduleName"] = moduleName,
+            ["moduleNameLower"] = CodeGenNaming.ToJavaScriptIdentifier(moduleName),
+            ["moduleNameAllLower"] = CodeGenNaming.ToPathSegment(moduleName),
         };
 
         var globalSection = ScriptBuilder.ScriptSection.FromMarker(DeserializeScript(mainTemplate.ScriptSections));
@@ -452,6 +456,7 @@ public class TemplateCodeGenerator
             SelectOptionsLiteral = BuildStaticChoiceOptionsLiteral(field.SelectOptions),
             RelatedEntityName = field.RelatedEntityName ?? "",
             RelatedEntityNameLower = ToCamelCase(field.RelatedEntityName ?? ""),
+            RelatedEntityNameAllLower = CodeGenNaming.ToPathSegment(field.RelatedEntityName ?? ""),
             RelatedEntityIdField = relatedEntityIdField,
             RelatedEntityIdFieldLower = ToCamelCase(relatedEntityIdField),
             RelatedDisplayFields = field.RelatedEntityDisplayFields ?? "",
@@ -484,11 +489,12 @@ public class TemplateCodeGenerator
             var fieldModule = await _db.Queryable<ProjectModule>()
                 .Where(item => item.Id == entity.ModuleId)
                 .FirstAsync();
-            var apiModule = ToCamelCase(fieldModule?.ModuleName ?? genCtx.ModuleName);
-            var apiEntity = ToCamelCase(entity.Name);
+            var apiModule = CodeGenNaming.ToPathSegment(fieldModule?.ModuleName ?? genCtx.ModuleName);
+            var apiEntity = CodeGenNaming.ToPathSegment(entity.Name);
+            var apiVariable = CodeGenNaming.ToJavaScriptIdentifier(entity.Name);
             fctx.IsRemoteSelect = true;
             fctx.RemoteApiPath = $"@/api/{apiModule}/{apiEntity}";
-            fctx.RemoteApiName = $"{apiEntity}Api";
+            fctx.RemoteApiName = $"{apiVariable}Api";
             fctx.RemoteOptionsMethod = $"get{ToJsFunctionSuffix(field.Name)}Options";
             fctx.RemoteLabelsMethod = $"get{ToJsFunctionSuffix(field.Name)}Labels";
             fctx.RemoteOptionsRefName = $"{fctx.NameLower}Options";
@@ -510,6 +516,7 @@ public class TemplateCodeGenerator
                 {
                     fctx.RelatedEntityName = relatedEntity.Name;
                     fctx.RelatedEntityNameLower = ToCamelCase(relatedEntity.Name);
+                    fctx.RelatedEntityNameAllLower = CodeGenNaming.ToPathSegment(relatedEntity.Name);
                     fctx.RefName = fctx.RelatedEntityNameLower + "Options";
 
                     var relatedModule = await _db.Queryable<ProjectModule>()
@@ -518,6 +525,7 @@ public class TemplateCodeGenerator
                     if (relatedModule != null)
                     {
                         fctx.RelatedModuleNameLower = ToCamelCase(relatedModule.ModuleName);
+                        fctx.RelatedModuleNameAllLower = CodeGenNaming.ToPathSegment(relatedModule.ModuleName);
                     }
 
                     var displayFields = ParseDisplayFields(field.RelatedEntityDisplayFields);
@@ -550,7 +558,9 @@ public class TemplateCodeGenerator
                 {
                     fctx.RelatedEntityName = referenceEntity.Name;
                     fctx.RelatedEntityNameLower = ToCamelCase(referenceEntity.ApiEntityName);
+                    fctx.RelatedEntityNameAllLower = CodeGenNaming.ToPathSegment(referenceEntity.ApiEntityName);
                     fctx.RelatedModuleNameLower = referenceEntity.ApiModuleName;
+                    fctx.RelatedModuleNameAllLower = CodeGenNaming.ToPathSegment(referenceEntity.ApiModuleName);
                     fctx.RefName = fctx.RelatedEntityNameLower + "Options";
 
                     var displayFields = ParseDisplayFields(field.RelatedEntityDisplayFields);
@@ -1305,7 +1315,7 @@ public class TemplateCodeGenerator
             if (project == null || string.IsNullOrWhiteSpace(project.ProjectPath)) return null;
 
             var dir = Path.Combine(project.ProjectPath, $"{projectName}.Vue", "src", "views",
-                moduleName.ToLower(), entity.Name.ToLower());
+                CodeGenNaming.ToPathSegment(moduleName), CodeGenNaming.ToPathSegment(entity.Name));
             if (!Directory.Exists(dir)) return null;
 
             var result = new Dictionary<string, string>();
@@ -1338,6 +1348,7 @@ public class TemplateCodeGenerator
                    .Replace("[field.selectDataSource]", fctx.SelectDataSource ?? "")
                    .Replace("[field.relatedEntityName]", fctx.RelatedEntityName ?? "")
                    .Replace("[field.relatedEntityNameLower]", fctx.RelatedEntityNameLower ?? "")
+                   .Replace("[field.relatedEntityNameAllLower]", fctx.RelatedEntityNameAllLower ?? "")
                    .Replace("[field.relatedEntityIdField]", DefaultIfBlank(fctx.RelatedEntityIdField, "Id"))
                    .Replace("[field.relatedEntityIdFieldLower]", DefaultIfBlank(fctx.RelatedEntityIdFieldLower, "id"))
                    .Replace("[field.relatedDisplayFields]", fctx.RelatedDisplayFields ?? "")
@@ -1345,6 +1356,7 @@ public class TemplateCodeGenerator
                    .Replace("[field.relatedDisplayFieldsArg]", fctx.RelatedDisplayFieldsArg ?? "")
                    .Replace("[field.relatedDisplayLabelExpr]", fctx.RelatedDisplayLabelExpr ?? "")
                    .Replace("[field.relatedModuleNameLower]", fctx.RelatedModuleNameLower ?? "")
+                   .Replace("[field.relatedModuleNameAllLower]", fctx.RelatedModuleNameAllLower ?? "")
                    .Replace("[field.isRemoteSelect]", fctx.IsRemoteSelect.ToString().ToLowerInvariant())
                    .Replace("[field.remoteApiPath]", fctx.RemoteApiPath ?? "")
                    .Replace("[field.remoteApiName]", fctx.RemoteApiName ?? "")
@@ -1731,7 +1743,7 @@ public class TemplateCodeGenerator
         {
             ChildEntityName = childName,
             ChildEntityNameLower = childLower,
-            ChildEntityNameAllLower = childName.ToLower(),
+            ChildEntityNameAllLower = CodeGenNaming.ToPathSegment(childName),
             ChildEntityTitleKey = childLower,
             CollectionName = collectionName,
             FormName = childLower + "Form",

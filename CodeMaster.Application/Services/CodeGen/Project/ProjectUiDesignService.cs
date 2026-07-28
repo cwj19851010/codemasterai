@@ -57,8 +57,8 @@ public static class ProjectUiDesignService
             $"{project.ProjectName}.Vue",
             "src",
             "views",
-            module.ModuleName.ToLowerInvariant(),
-            entity.Name.ToLowerInvariant());
+            CodeGenNaming.ToPathSegment(module.ModuleName),
+            CodeGenNaming.ToPathSegment(entity.Name));
         var treePath = Path.Combine(viewRoot, $"{entityLower}.{pageType}.tree.json");
         var vuePath = Path.Combine(viewRoot, $"{pageType}.vue");
         var designPath = Path.Combine(viewRoot, $"{entityLower}.{pageType}.design.json");

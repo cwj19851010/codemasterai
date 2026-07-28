@@ -12,6 +12,7 @@ public class GenContext
     public string EntityDescription { get; set; } = string.Empty;
     public string ModuleName { get; set; } = string.Empty;
     public string ModuleNameLower { get; set; } = string.Empty;
+    public string ModuleNameAllLower { get; set; } = string.Empty;
     public string TableName { get; set; } = string.Empty;
 
     /// <summary>字段控件 HTML 拼接结果（按页面区域：addColumns / editColumns / searchColumns / listColumns / detailColumns）</summary>
@@ -76,7 +77,9 @@ public class FieldContext
     public string SelectOptionsLiteral { get; set; } = "[]";
     public string RelatedEntityName { get; set; } = string.Empty;
     public string RelatedEntityNameLower { get; set; } = string.Empty;
+    public string RelatedEntityNameAllLower { get; set; } = string.Empty;
     public string RelatedModuleNameLower { get; set; } = string.Empty;
+    public string RelatedModuleNameAllLower { get; set; } = string.Empty;
     public string RelatedEntityIdField { get; set; } = string.Empty;
     public string RelatedEntityIdFieldLower { get; set; } = string.Empty;
     public string RelatedDisplayFields { get; set; } = string.Empty;

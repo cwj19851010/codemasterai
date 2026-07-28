@@ -485,7 +485,7 @@ public class CodeGeneratorService
                 ["child_entity_id"] = r.ChildEntityId,
                 ["child_entity_name"] = r.ChildEntityName,
                 ["child_entity_name_lower"] = ToCamelCase(r.ChildEntityName),
-                ["child_entity_name_all_lower"] = r.ChildEntityName.ToLower(),
+                ["child_entity_name_all_lower"] = CodeGenNaming.ToPathSegment(r.ChildEntityName),
                 ["child_entity_description"] = childEntity?.Description ?? r.ChildEntityName,
                 ["child_foreign_key"] = r.ChildForeignKey,
                 ["child_fields"] = childFieldList,
@@ -544,7 +544,8 @@ public class CodeGeneratorService
                 ["target_entity_name_lower"] = ToCamelCase(targetEntity.Name),
                 ["target_entity_description"] = targetEntity.Description,
                 ["target_module_name"] = targetModuleName,
-                ["target_module_name_lower"] = targetModuleName.ToLowerInvariant(),
+                ["target_module_name_lower"] = ToCamelCase(targetModuleName),
+                ["target_module_name_all_lower"] = CodeGenNaming.ToPathSegment(targetModuleName),
                 ["is_required"] = relation.IsRequired,
                 ["delete_behavior"] = (int)relation.DeleteBehavior,
                 ["delete_when_null"] = relation.DeleteBehavior == EntityRelationDeleteBehavior.Delete,
@@ -586,7 +587,7 @@ public class CodeGeneratorService
                 foreach (var re in relatedEntities)
                 {
                     var mod = modules.FirstOrDefault(m => m.Id == re.ModuleId);
-                    entityNameToModule[re.Name] = mod?.ModuleName?.ToLower() ?? moduleName.ToLower();
+                    entityNameToModule[re.Name] = mod?.ModuleName ?? moduleName;
                 }
             }
         }
@@ -605,7 +606,13 @@ public class CodeGeneratorService
             ["entity_name_lower"] = SystemReferenceEntityCatalog.TryGet(name, out var referenceEntity)
                 ? referenceEntity.ApiEntityName
                 : ToCamelCase(name),
-            ["module_name_lower"] = entityNameToModule.TryGetValue(name, out var mn) ? mn : moduleName.ToLower(),
+            ["entity_name_all_lower"] = CodeGenNaming.ToPathSegment(
+                SystemReferenceEntityCatalog.TryGet(name, out var pathReferenceEntity)
+                    ? pathReferenceEntity.ApiEntityName
+                    : name),
+            ["module_name_lower"] = entityNameToModule.TryGetValue(name, out var mn) ? ToCamelCase(mn) : ToCamelCase(moduleName),
+            ["module_name_all_lower"] = CodeGenNaming.ToPathSegment(
+                entityNameToModule.TryGetValue(name, out var pathModule) ? pathModule : moduleName),
         }).ToList();
 
         var searchFields = fieldList.Where(f => (bool)(f["show_in_search"] ?? false)).ToList();
@@ -691,11 +698,13 @@ public class CodeGeneratorService
             ["entity"] = new Dictionary<string, object?>
             {
                 ["name"] = entity.Name,
-                ["name_lower"] = entity.Name.ToLower(),
+                ["name_lower"] = ToCamelCase(entity.Name),
+                ["name_all_lower"] = CodeGenNaming.ToPathSegment(entity.Name),
                 ["description"] = entity.Description,
                 ["project_name"] = projectName,
                 ["module_name"] = moduleName,
-                ["module_name_lower"] = moduleName.ToLower(),
+                ["module_name_lower"] = ToCamelCase(moduleName),
+                ["module_name_all_lower"] = CodeGenNaming.ToPathSegment(moduleName),
                 ["table_name"] = ResolveTableName(entity.Name, entity.TableName),
                 ["base_class_name"] = baseClassName,
                 ["has_primary_key"] = entity.HasPrimaryKey,

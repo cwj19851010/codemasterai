@@ -46,13 +46,6 @@
           </template>
         </el-table-column>
         <el-table-column label="排序" prop="orderNum" width="80" />
-        <el-table-column label="状态" prop="status" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.status ? 'success' : 'danger'">
-              {{ row.status ? '启用' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
         <el-table-column prop="createTime" :label="$t('create_time')" width="160">
             <template #default="{ row }">
                 {{ formatDateTime(row.createTime) }}

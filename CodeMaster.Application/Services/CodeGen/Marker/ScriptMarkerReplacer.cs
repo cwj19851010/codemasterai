@@ -20,6 +20,7 @@ public static class ScriptMarkerReplacer
                 "entityDescription" or "description" => ctx.EntityDescription,
                 "moduleName" => ctx.ModuleName,
                 "moduleNameLower" => ctx.ModuleNameLower,
+                "moduleNameAllLower" => ctx.ModuleNameAllLower,
                 "onlineSelectListSupport" => ctx.OnlineSelectListSupport,
                 "onlineSelectDetailSupport" => ctx.OnlineSelectDetailSupport,
                 _ => m.Value
@@ -55,6 +56,10 @@ public static class ScriptMarkerReplacer
                 "nameLower" => ctx.NameLower,
                 "description" => ctx.Description,
                 "dataType" => ctx.DataType,
+                "relatedEntityNameLower" => ctx.RelatedEntityNameLower,
+                "relatedEntityNameAllLower" => ctx.RelatedEntityNameAllLower,
+                "relatedModuleNameLower" => ctx.RelatedModuleNameLower,
+                "relatedModuleNameAllLower" => ctx.RelatedModuleNameAllLower,
                 _ => m.Value
             };
         });

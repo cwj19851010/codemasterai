@@ -23,7 +23,8 @@ public sealed class AgentController : ControllerBase
     }
 
     [HttpGet("providers")]
-    public Task<IActionResult> GetProviders() => ExecuteAsync(async () => await _providerService.GetListAsync());
+    public Task<IActionResult> GetProviders([FromQuery] string? executionMode = null)
+        => ExecuteAsync(async () => await _providerService.GetListAsync(executionMode));
 
     [HttpPost("providers")]
     public Task<IActionResult> CreateProvider([FromBody] SaveAiProviderRequest input)
@@ -42,8 +43,10 @@ public sealed class AgentController : ControllerBase
         => ExecuteAsync(async () => await _providerService.TestAsync(id));
 
     [HttpGet("conversations")]
-    public Task<IActionResult> GetConversations([FromQuery] long projectId)
-        => ExecuteAsync(async () => await _conversationService.GetListAsync(projectId));
+    public Task<IActionResult> GetConversations(
+        [FromQuery] long projectId,
+        [FromQuery] string? executionMode = null)
+        => ExecuteAsync(async () => await _conversationService.GetListAsync(projectId, executionMode));
 
     [HttpPost("conversations")]
     public Task<IActionResult> CreateConversation([FromBody] CreateAiConversationRequest input)

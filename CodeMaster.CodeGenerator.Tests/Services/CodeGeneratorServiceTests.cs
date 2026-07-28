@@ -374,6 +374,9 @@ public class CodeGeneratorServiceTests
             var serviceInterfaceCode = await generator.GenerateServiceInterfaceAsync(entityId, "Demo", "Reports");
             var apiCode = await generator.GenerateFrontendApiAsync(entityId, "Demo", "Reports");
 
+            Assert.Contains("/reports/readonlyreport/getlist", apiCode);
+            Assert.DoesNotContain("/reports/readonlyReport/getlist", apiCode);
+
             Assert.Contains($"public class ReadonlyReportService : {expectedServiceBase}<", serviceCode);
             Assert.Contains(expectedServiceContract, serviceInterfaceCode);
             Assert.DoesNotContain("CreateReadonlyReportDto", dtoCode);
