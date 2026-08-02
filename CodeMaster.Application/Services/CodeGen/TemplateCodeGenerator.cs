@@ -40,6 +40,7 @@ public class TemplateCodeGenerator
         if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation"))
             relations = await _db.Queryable<OneToManyRelation>()
                 .Where(r => r.ModuleEntityId == entityId).OrderBy(r => r.OrderNum).ToListAsync();
+        relations = OneToManyRelationDeduplicator.Deduplicate(relations);
         var relationGraph = await new EntityRelationGraphBuilder(_db).BuildForProjectAsync(entity.ProjectId);
         var ownedOneRelations = relationGraph.GetOwnedOutgoing(entityId)
             .Where(edge => !edge.IsLegacy && edge.Cardinality == EntityRelationCardinality.OneToOne)
@@ -337,12 +338,11 @@ public class TemplateCodeGenerator
         runtimeSection.Merge(globalSection);
         if (tree != null)
         {
-            runtimeSection.Merge(CollectNodeScriptSections(tree));
+            runtimeSection.Merge(CollectNodeScriptSections(tree, result.ChildFieldScripts.Keys));
         }
         else
         {
             MergeScriptEntries(runtimeSection, result.FieldScripts);
-            MergeScriptEntries(runtimeSection, result.ChildFieldScripts);
         }
 
         result.MainScriptJson = JsonSerializer.Serialize(globalSection, new JsonSerializerOptions { WriteIndented = false });
@@ -1533,11 +1533,16 @@ public class TemplateCodeGenerator
     }
 
     private static ScriptBuilder.ScriptSection CollectNodeScriptSections(
-        List<CodeMaster.Infrastructure.VueParser.Model.Component> nodes)
+        List<CodeMaster.Infrastructure.VueParser.Model.Component> nodes,
+        IEnumerable<string>? excludedGenIds = null)
     {
         var section = new ScriptBuilder.ScriptSection();
+        var exclusions = excludedGenIds?.ToHashSet(StringComparer.Ordinal) ?? [];
         foreach (var node in EnumerateNodes(nodes))
         {
+            if (!string.IsNullOrWhiteSpace(node.GenId) && exclusions.Contains(node.GenId))
+                continue;
+
             var nodeSection = DeserializeNodeScriptSection(node.ScriptSection);
             if (!nodeSection.IsEmpty)
                 section.Merge(nodeSection);

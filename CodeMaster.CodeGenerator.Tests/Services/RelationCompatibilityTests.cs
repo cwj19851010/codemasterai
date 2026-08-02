@@ -78,6 +78,60 @@ public class RelationCompatibilityTests
     }
 
     [Fact]
+    public void BuildTemplateContext_DeduplicatesEquivalentLegacyOneToManyRows()
+    {
+        var (db, dbFile) = CodeGeneratorServiceTests.CreateMetadataDb();
+        try
+        {
+            db.CodeFirst.InitTables(typeof(OneToManyRelation));
+            var parent = CreateEntity(12, "Order", "orders");
+            var child = CreateEntity(13, "OrderItem", "order_items", isChildTable: true);
+            db.Insertable(new[] { parent, child }).ExecuteCommand();
+            db.Insertable(CreateField(204, child.Id, "OrderId")).ExecuteCommand();
+
+            var relations = new List<OneToManyRelation>
+            {
+                new()
+                {
+                    Id = 302,
+                    ModuleEntityId = parent.Id,
+                    MasterField = "Id",
+                    ChildEntityId = child.Id,
+                    ChildEntityName = child.Name,
+                    ChildForeignKey = "OrderId",
+                    OrderNum = 20
+                },
+                new()
+                {
+                    Id = 303,
+                    ModuleEntityId = parent.Id,
+                    MasterField = " id ",
+                    ChildEntityId = child.Id,
+                    ChildEntityName = child.Name,
+                    ChildForeignKey = "orderid",
+                    OrderNum = 10
+                }
+            };
+
+            var context = new CodeGeneratorService(db).BuildTemplateContext(
+                parent,
+                new List<EntityField>(),
+                relations,
+                "CompatibilityProject",
+                "Orders");
+
+            var entity = Assert.IsAssignableFrom<IDictionary<string, object?>>(context["entity"]);
+            var generated = Assert.IsType<List<Dictionary<string, object?>>>(entity["one_to_many_relations"]);
+            Assert.Single(generated);
+        }
+        finally
+        {
+            db.Dispose();
+            CodeGeneratorServiceTests.TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
     public void BuildTemplateContext_PreservesLegacySelectTableShape()
     {
         var (db, dbFile) = CodeGeneratorServiceTests.CreateMetadataDb();

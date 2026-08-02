@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Text.Json;
 using System.Threading.Tasks;
 using CodeMaster.Application.Services.CodeGen;
 using CodeMaster.Core.Repositories;
@@ -10,6 +11,7 @@ using CodeMaster.Core.Services;
 using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.Domain.Entities.System;
 using CodeMaster.Infrastructure.Persistence.SqlSugar;
+using CodeMaster.Infrastructure.VueParser.Model;
 using SqlSugar;
 using Xunit;
 using Yitter.IdGenerator;
@@ -176,6 +178,18 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.True(File.Exists(Path.Combine(frontendPath, "add.vue")), "Add page was not generated.");
         Assert.True(File.Exists(Path.Combine(frontendPath, "edit.vue")), "Edit page was not generated.");
         Assert.True(File.Exists(Path.Combine(frontendPath, "detail.vue")), "Detail page was not generated.");
+        foreach (var pageType in new[] { "index", "add", "edit", "detail" })
+        {
+            Assert.True(
+                File.Exists(Path.Combine(frontendPath, $"demoAutomatedUser.{pageType}.auto.js")),
+                $"{pageType} auto.js was not generated.");
+            Assert.True(
+                File.Exists(Path.Combine(frontendPath, $"demoAutomatedUser.{pageType}.script.json")),
+                $"{pageType} script.json was not generated.");
+            Assert.True(
+                File.Exists(Path.Combine(frontendPath, $"demoAutomatedUser.{pageType}.tree.json")),
+                $"{pageType} tree.json was not generated.");
+        }
 
         var modifiedUserContent = "public partial class DemoAutomatedUser { // user code }";
         await File.WriteAllTextAsync(userFilePath, modifiedUserContent);
@@ -887,6 +901,17 @@ public class CodeGenerationIntegrationTests : IDisposable
         var index = await generator.GeneratePageAsync(productEntity.Id, "index", "TestAutomationProject", "ProductManagement");
         var detail = await generator.GeneratePageAsync(productEntity.Id, "detail", "TestAutomationProject", "ProductManagement");
 
+        foreach (var page in new[] { add, edit, index, detail })
+        {
+            Assert.False(string.IsNullOrWhiteSpace(page.VueContent));
+            Assert.False(string.IsNullOrWhiteSpace(page.MainScriptContent));
+            Assert.False(string.IsNullOrWhiteSpace(page.MainScriptJson));
+            Assert.False(string.IsNullOrWhiteSpace(page.TreeJson));
+            Assert.NotEmpty(JsonSerializer.Deserialize<List<Component>>(page.TreeJson)!);
+        }
+        Assert.NotEmpty(add.FieldScripts);
+        Assert.NotEmpty(edit.FieldScripts);
+
         Assert.Contains("<el-col :xs=\"24\" :sm=\"24\"", add.VueContent);
         Assert.Contains("class=\"editor-form-item\"", add.VueContent);
         Assert.Contains("style=\"min-height:220px\"", add.VueContent);
@@ -1217,6 +1242,7 @@ public class CodeGenerationIntegrationTests : IDisposable
     {
         const string emptyScript = "{\"imports\":[],\"uses\":[],\"refs\":[],\"reactives\":[],\"functions\":[],\"hooks\":[],\"computed\":[],\"watches\":[]}";
         const string childDialogScript = "{\"imports\":[{\"path\":\"vue\",\"destructured\":\"reactive\"}],\"uses\":[],\"refs\":[],\"reactives\":[{\"name\":\"[relation.formName]\",\"fields\":{}}],\"functions\":[],\"hooks\":[],\"computed\":[],\"watches\":[]}";
+        const string editorScript = "{\"imports\":[{\"path\":\"vue\",\"destructured\":\"watch\"}],\"uses\":[],\"refs\":[],\"reactives\":[],\"functions\":[],\"hooks\":[],\"computed\":[],\"watches\":[{\"source\":\"[field.formPrefix].[field.nameLower]\",\"body\":[\"void [field.formPrefix].[field.nameLower];\"]}]}";
 
         _db.Insertable(new ProjectModule
         {
@@ -1322,20 +1348,49 @@ public class CodeGenerationIntegrationTests : IDisposable
                 OrderNum = 3,
                 CreateBy = "test",
                 UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = 75,
+                ModuleEntityId = orderItemEntity.Id,
+                Name = "Content",
+                Description = "Content",
+                DataType = "string",
+                FormControlType = "editor",
+                ShowInAddForm = true,
+                ShowInEditForm = true,
+                OrderNum = 4,
+                CreateBy = "test",
+                UpdateUserId = 0
             }
         }).ExecuteCommand();
 
-        _db.Insertable(new OneToManyRelation
+        _db.Insertable(new[]
         {
-            Id = 81,
-            ModuleEntityId = orderEntity.Id,
-            MasterField = "Id",
-            ChildEntityId = orderItemEntity.Id,
-            ChildEntityName = "OrderItem",
-            ChildForeignKey = "OrderId",
-            OrderNum = 1,
-            CreateBy = "test",
-            UpdateUserId = 0
+            new OneToManyRelation
+            {
+                Id = 81,
+                ModuleEntityId = orderEntity.Id,
+                MasterField = "Id",
+                ChildEntityId = orderItemEntity.Id,
+                ChildEntityName = "OrderItem",
+                ChildForeignKey = "OrderId",
+                OrderNum = 1,
+                CreateBy = "test",
+                UpdateUserId = 0
+            },
+            new OneToManyRelation
+            {
+                Id = 82,
+                ModuleEntityId = orderEntity.Id,
+                MasterField = " id ",
+                ChildEntityId = orderItemEntity.Id,
+                ChildEntityName = "OrderItem",
+                ChildForeignKey = "orderid",
+                OrderNum = 2,
+                CreateBy = "test",
+                UpdateUserId = 0
+            }
         }).ExecuteCommand();
 
         _db.Insertable(new[]
@@ -1359,6 +1414,17 @@ public class CodeGenerationIntegrationTests : IDisposable
                 HtmlContent = "<el-form-item [field.prop]><el-input-number v-model=\"[field.formPrefix].[field.nameLower]\" /></el-form-item>",
                 ScriptSections = emptyScript,
                 Sort = 2,
+                CreateBy = "test",
+                UpdateUserId = 0
+            },
+            new SysFieldControlTemplate
+            {
+                Id = 93,
+                ControlType = "editor",
+                PageSection = "add",
+                HtmlContent = "<el-form-item [field.prop] data-gen-id=\"gen_field_[field.id]\"><div id=\"[field.nameLower]Editor\"></div></el-form-item>",
+                ScriptSections = editorScript,
+                Sort = 3,
                 CreateBy = "test",
                 UpdateUserId = 0
             }
@@ -1402,12 +1468,14 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.Contains("const calcTotalPrice = () =>", add.MainScriptContent);
         Assert.Contains("form.totalPrice = normalizeCalcValue(rows.reduce((sum, item) => sum + toCalcNumber(item.lineTotal), 0))", add.MainScriptContent);
         Assert.Contains("watch(() => form.orderItems", add.MainScriptContent);
+        Assert.DoesNotContain("orderItemForm.content", add.MainScriptContent);
 
         var childScript = Assert.Single(add.ChildScripts.Values);
         Assert.Contains("const orderItemForm = reactive({  });", childScript.ScriptContent);
         Assert.Contains("const calcLineTotal = () =>", childScript.ScriptContent);
         Assert.Contains("orderItemForm.lineTotal = normalizeCalcValue(toCalcNumber(orderItemForm.price)*toCalcNumber(orderItemForm.quantity))", childScript.ScriptContent);
         Assert.Contains("watch(() => [orderItemForm.price, orderItemForm.quantity]", childScript.ScriptContent);
+        Assert.Contains("watch(() => orderItemForm.content", childScript.ScriptContent);
     }
 
     [Fact]

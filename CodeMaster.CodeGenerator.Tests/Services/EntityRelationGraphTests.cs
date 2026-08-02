@@ -74,6 +74,57 @@ public class EntityRelationGraphTests
     }
 
     [Fact]
+    public async Task BuildForProject_DeduplicatesEquivalentLegacyAndCurrentEdges()
+    {
+        var (db, dbFile) = CreateDb();
+        try
+        {
+            SeedEntity(db, 1, 1, "Order", "Id");
+            SeedEntity(db, 2, 1, "OrderItem", "OrderId");
+            db.Insertable(new OneToManyRelation
+            {
+                Id = 102,
+                ModuleEntityId = 1,
+                MasterField = "Id",
+                ChildEntityId = 2,
+                ChildEntityName = "OrderItem",
+                ChildForeignKey = "OrderId",
+                OrderNum = 20,
+                CreateBy = "test",
+                CreateTime = DateTime.UtcNow,
+                UpdateUserId = 0
+            }).ExecuteCommand();
+            db.Insertable(new EntityRelation
+            {
+                Id = 103,
+                SourceEntityId = 1,
+                TargetEntityId = 2,
+                RelationName = "Items",
+                SourceField = "id",
+                TargetField = "orderid",
+                Cardinality = EntityRelationCardinality.OneToMany,
+                Ownership = EntityRelationOwnership.Owned,
+                DeleteBehavior = EntityRelationDeleteBehavior.Delete,
+                OrderNum = 10,
+                CreateBy = "test",
+                CreateTime = DateTime.UtcNow,
+                UpdateUserId = 0
+            }).ExecuteCommand();
+
+            var graph = await new EntityRelationGraphBuilder(db).BuildForProjectAsync(1);
+
+            var edge = Assert.Single(graph.GetOwnedOutgoing(1));
+            Assert.False(edge.IsLegacy);
+            Assert.Equal(103, edge.Id);
+        }
+        finally
+        {
+            db.Dispose();
+            CodeGeneratorServiceTests.TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
     public async Task Validate_RejectsOwnedCycle()
     {
         var (db, dbFile) = CreateDb();

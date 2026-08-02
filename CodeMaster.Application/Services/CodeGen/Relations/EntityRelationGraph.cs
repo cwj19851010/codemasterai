@@ -24,10 +24,27 @@ public sealed class EntityRelationGraph
     public EntityRelationGraph(IEnumerable<EntityRelationEdge> edges)
     {
         _edges = edges
+            .GroupBy(BuildIdentity)
+            .Select(group => group
+                .OrderBy(edge => edge.IsLegacy)
+                .ThenBy(edge => edge.OrderNum)
+                .ThenBy(edge => edge.Id)
+                .First())
             .OrderBy(x => x.OrderNum)
             .ThenBy(x => x.Id)
             .ToList();
     }
+
+    private static string BuildIdentity(EntityRelationEdge edge) => string.Join('|',
+        edge.SourceEntityId,
+        edge.TargetEntityId,
+        Normalize(edge.SourceField),
+        Normalize(edge.TargetField),
+        edge.Cardinality,
+        edge.Ownership);
+
+    private static string Normalize(string? value) =>
+        (value ?? string.Empty).Trim().ToUpperInvariant();
 
     public IReadOnlyList<EntityRelationEdge> Edges => _edges;
 

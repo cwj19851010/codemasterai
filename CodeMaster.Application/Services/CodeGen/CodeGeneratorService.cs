@@ -1,4 +1,5 @@
 using CodeMaster.Domain.Entities.CodeGen;
+using CodeMaster.Application.Services.CodeGen.Relations;
 using Scriban;
 using Scriban.Runtime;
 using SqlSugar;
@@ -263,6 +264,7 @@ public class CodeGeneratorService
         List<EntityRelation>? entityRelations = null)
     {
         entityRelations ??= new List<EntityRelation>();
+        relations = OneToManyRelationDeduplicator.Deduplicate(relations);
         var baseClassName = CalculateBaseClassName(entity);
         var interfaceList = CalculateInterfaceList(entity);
         var dtoInterfaceList = string.Empty;
