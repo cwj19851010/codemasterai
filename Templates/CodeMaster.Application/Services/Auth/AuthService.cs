@@ -61,10 +61,11 @@ public class AuthService : IAuthService
 
     public async Task<LoginResultDto> LoginAsync(LoginDto loginDto)
     {
-        // 记录接收到的参数
-        _logger.LogInformation("LoginAsync called with UserName={UserName}, Password={Password}",
+        // Never include password values or password-shaped fields in logs.
+        _logger.LogInformation(
+            "LoginAsync called with UserName={UserName}, PasswordProvided={PasswordProvided}",
             loginDto?.UserName ?? "NULL",
-            string.IsNullOrEmpty(loginDto?.Password) ? "EMPTY" : "***");
+            !string.IsNullOrEmpty(loginDto?.Password));
 
         var loginIp = GetClientIp();
         var userAgent = _httpContextAccessor.HttpContext?.Request.Headers["User-Agent"].ToString() ?? "";

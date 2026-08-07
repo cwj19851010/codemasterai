@@ -34,7 +34,7 @@ public sealed class ProjectOperationTool
             type = "object",
             properties = new
             {
-                operation = new { type = "string", description = "initialize, initialize_step, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, sync_menus, or sync_languages." },
+                operation = new { type = "string", description = "initialize, initialize_step, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, test, sync_menus, or sync_languages." },
                 projectId = new { oneOf = new object[] { new { type = "integer" }, new { type = "string" } }, description = "Target project id." },
                 targetPath = new { type = "string", description = "Optional local initialization target path." },
                 step = new { type = "integer", description = "Step number 1-11 when operation=initialize_step." },
@@ -69,12 +69,13 @@ public sealed class ProjectOperationTool
             "status" => await ExecuteAsync("getProjectStatus", args),
             "migrate_database" => await ExecuteAsync("migrateDatabase", args),
             "build" => await ExecuteAsync("buildProject", args),
+            "test" => await ExecuteAsync("testProject", args),
             "sync_menus" => await ExecuteAsync("syncProjectMenus", args),
             "sync_languages" => await ExecuteAsync("syncProjectLanguages", args),
             _ => new
             {
                 success = false,
-                message = "operation must be one of: initialize, initialize_step, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, sync_menus, sync_languages."
+                message = "operation must be one of: initialize, initialize_step, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, test, sync_menus, sync_languages."
             }
         };
     }
@@ -82,10 +83,11 @@ public sealed class ProjectOperationTool
     private async Task<object> ExecuteAsync(string action, ProjectOperationInput args)
     {
         var session = await _apiClient.ResolveSessionAsync(args.WorkspacePath);
+        var targetPath = ResolveTargetPath(args.TargetPath, args.WorkspacePath);
         var payload = JsonSerializer.SerializeToElement(new
         {
             projectId = args.ProjectId,
-            targetPath = args.TargetPath
+            targetPath
         });
 
         var result = await _localExecutor.ExecuteAsync(action, new LocalExecutionRequest
@@ -97,6 +99,12 @@ public sealed class ProjectOperationTool
         });
 
         return CompactOperationResult(result);
+    }
+
+    internal static string? ResolveTargetPath(string? targetPath, string? workspacePath)
+    {
+        var candidate = string.IsNullOrWhiteSpace(targetPath) ? workspacePath : targetPath;
+        return string.IsNullOrWhiteSpace(candidate) ? null : Path.GetFullPath(candidate);
     }
 
     private static object CompactOperationResult(LocalExecutionResult result)

@@ -94,6 +94,12 @@
         </el-table-column>
         <el-table-column label="实体名称" prop="name" width="150" />
         <el-table-column label="实体描述" prop="description" />
+        <el-table-column label="类型" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="isMetadataOnly(row)" type="info">API 元数据</el-tag>
+            <el-tag v-else type="success">常规实体</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="主键" prop="hasPrimaryKey" width="80">
           <template #default="{ row }">
             <el-tag :type="row.hasPrimaryKey ? 'success' : 'info'">
@@ -148,7 +154,7 @@
           <template #default="{ row }">
             <el-button type="primary" link @click="handleView(row)">详情</el-button>
             <el-button type="primary" link @click="handleUpdate(row)">编辑</el-button>
-            <el-dropdown @command="(cmd) => handleDesign(row, cmd)" style="margin-right:8px;margin-top:3px;margin-left:8px">
+            <el-dropdown v-if="!isMetadataOnly(row)" @command="(cmd) => handleDesign(row, cmd)" style="margin-right:8px;margin-top:3px;margin-left:8px">
               <el-button type="info" link>
                 设计<el-icon class="el-icon--right"><ArrowDown /></el-icon>
               </el-button>
@@ -161,10 +167,10 @@
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
-            <el-button type="primary" link @click="handleGenerateIncrementalCode(row)">增量生成</el-button>
-            <el-button type="success" link @click="handleGenerateCode(row)">生成代码</el-button>
-            <el-button type="warning" link @click="handleSyncMenu(row)">更新到菜单</el-button>
-            <el-button type="warning" link @click="handleSyncLanguage(row)">更新到多语言</el-button>
+            <el-button v-if="!isMetadataOnly(row)" type="primary" link @click="handleGenerateIncrementalCode(row)">增量生成</el-button>
+            <el-button v-if="!isMetadataOnly(row)" type="success" link @click="handleGenerateCode(row)">生成代码</el-button>
+            <el-button v-if="!isMetadataOnly(row)" type="warning" link @click="handleSyncMenu(row)">更新到菜单</el-button>
+            <el-button v-if="!isMetadataOnly(row)" type="warning" link @click="handleSyncLanguage(row)">更新到多语言</el-button>
             <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -322,6 +328,10 @@ function handleAdd() {
   router.push('/codegen/moduleentity/add')
 }
 
+function isMetadataOnly(row) {
+  return Number(row?.generationMode) === 1
+}
+
 async function runProjectBatchAction({
   title,
   message,
@@ -387,7 +397,7 @@ async function runProjectBatchAction({
 function handleRegenerateAll() {
   return runProjectBatchAction({
     title: '全部重新生成',
-    message: `确定重新生成项目“${selectedProjectName.value}”的全部实体吗？所有生成文件都会按当前元数据和模板重新生成。`,
+    message: `确定重新生成项目“${selectedProjectName.value}”的全部常规实体吗？API 元数据模型不会参与生成。`,
     loadingMessage: '正在重新生成项目全部实体，请稍候...',
     successMessage: '项目全部实体重新生成完成',
     action: projectId => generateProjectCode(projectId),
@@ -398,7 +408,7 @@ function handleRegenerateAll() {
 function handleGenerateAllChanges() {
   return runProjectBatchAction({
     title: '生成全部变更',
-    message: `确定检查项目“${selectedProjectName.value}”的全部实体吗？仅增量生成实体、字段、关系或模块配置发生变化的部分。`,
+    message: `确定检查项目“${selectedProjectName.value}”的全部常规实体吗？API 元数据模型不会参与生成。`,
     loadingMessage: '正在检查并增量生成全部变更，请稍候...',
     successMessage: '项目变更检查和增量生成完成',
     action: projectId => generateProjectIncrementalCode(projectId),

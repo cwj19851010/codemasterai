@@ -14,4 +14,9 @@ public interface IReadOnlyApplicationService<TEntity, TGetOutputDto, TGetListOut
     /// 根据ID获取实体
     /// </summary>
     Task<TGetOutputDto?> GetByIdAsync(long id);
+
+    /// <summary>
+    /// 获取详情。与 GetByIdAsync 保持同一查询语义，供页面数据源使用。
+    /// </summary>
+    Task<TGetOutputDto?> GetDetailAsync(long id);
 }

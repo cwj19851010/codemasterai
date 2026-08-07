@@ -2643,6 +2643,38 @@
       }
     },
 {
+      "key": "theme_china_red",
+      "category": "common",
+      "translations": {
+        "en-US": "China red",
+        "zh-CN": "中国红"
+      }
+    },
+{
+      "key": "theme_classic_blue",
+      "category": "common",
+      "translations": {
+        "en-US": "Classic blue",
+        "zh-CN": "经典蓝"
+      }
+    },
+{
+      "key": "theme_code_green",
+      "category": "common",
+      "translations": {
+        "en-US": "Code green",
+        "zh-CN": "生成绿"
+      }
+    },
+{
+      "key": "theme_ocean",
+      "category": "common",
+      "translations": {
+        "en-US": "Ocean",
+        "zh-CN": "海青"
+      }
+    },
+{
       "key": "theme_dark",
       "category": "common",
       "translations": {

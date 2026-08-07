@@ -155,6 +155,17 @@ public static class GlobalTranslations
             { "chinese", new() { { "zh-CN", "简体中文" }, { "en-US", "Chinese" } } },
             { "english", new() { { "zh-CN", "英语" }, { "en-US", "English" } } },
 
+            // 主题皮肤
+            { "theme_tech_blue", new() { { "zh-CN", "科技蓝" }, { "en-US", "Tech Blue" } } },
+            { "theme_classic_blue", new() { { "zh-CN", "经典蓝" }, { "en-US", "Classic Blue" } } },
+            { "theme_code_green", new() { { "zh-CN", "代码绿" }, { "en-US", "Code Green" } } },
+            { "theme_ocean", new() { { "zh-CN", "海洋蓝" }, { "en-US", "Ocean" } } },
+            { "theme_dark", new() { { "zh-CN", "暗夜黑" }, { "en-US", "Dark" } } },
+            { "theme_china_red", new() { { "zh-CN", "中国红" }, { "en-US", "China Red" } } },
+            { "theme_business_gray", new() { { "zh-CN", "商务灰" }, { "en-US", "Business Gray" } } },
+            { "theme_switch", new() { { "zh-CN", "切换主题" }, { "en-US", "Switch Theme" } } },
+            { "theme_switch_success", new() { { "zh-CN", "主题已切换" }, { "en-US", "Theme switched" } } },
+
             // 操作日志相关
             { "title", new() { { "zh-CN", "标题" }, { "en-US", "title" } } },
             { "oper_name", new() { { "zh-CN", "操作人员" }, { "en-US", "operator" } } },

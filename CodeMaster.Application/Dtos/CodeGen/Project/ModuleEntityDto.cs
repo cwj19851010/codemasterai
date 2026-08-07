@@ -28,6 +28,11 @@ public class ModuleEntityDto : EntityDto
     public string Description { get; set; } = string.Empty;
 
     /// <summary>
+    /// Normal entities are full-stack generated; metadata-only entities describe external contracts.
+    /// </summary>
+    public CodeMaster.Domain.Entities.CodeGen.EntityGenerationMode GenerationMode { get; set; }
+
+    /// <summary>
     /// 是否有主键
     /// </summary>
     public bool HasPrimaryKey { get; set; }

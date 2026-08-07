@@ -28,7 +28,7 @@
                         Width="400"
                         Height="30"
                         VerticalContentAlignment="Center"
-                        Text="http://localhost:5170"
+                        Text="http://101.37.24.154:9000/index.html"
                         Margin="0,0,10,0"/>
                 <Button x:Name="NavigateButton"
                        Content="导航"
@@ -53,7 +53,7 @@
         <!-- WebView2 -->
         <wv2:WebView2 x:Name="WebView"
                      Grid.Row="1"
-                     Source="http://localhost:5170"/>
+                     Source="http://101.37.24.154:9000/index.html"/>
 
         <!-- 底部状态栏 -->
         <Border Grid.Row="2" Background="#34495e" Padding="10">

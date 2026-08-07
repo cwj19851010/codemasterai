@@ -13,5 +13,10 @@ public interface IQueryApplicationService<TEntity, TGetListOutputDto, in TGetLis
 
     Task<List<TGetListOutputDto>> GetListAsync(TGetListInput input);
 
+    /// <summary>
+    /// 获取选项数据。默认复用不分页查询，供页面下拉/选项数据源使用。
+    /// </summary>
+    Task<List<TGetListOutputDto>> GetOptionListAsync(TGetListInput input);
+
     Task<byte[]> ExportAsync(TGetListInput input);
 }

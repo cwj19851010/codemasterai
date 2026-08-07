@@ -5,6 +5,7 @@ using System.IO;
 using CodeMaster.Application.Services.CodeGen;
 using CodeMaster.CodeGenerator.Tests.Fixtures;
 using CodeMaster.Domain.Entities.CodeGen;
+using CodeMaster.Infrastructure.Persistence.SqlSugar;
 using SqlSugar;
 using Xunit;
 
@@ -18,6 +19,94 @@ public class CodeGeneratorServiceTests
     {
         // Pass null for ISqlSugarClient since we are testing methods that don't hit the DB
         _service = new CodeGeneratorService(null!);
+    }
+
+    [Fact]
+    public void ResolveComposableImportCollisions_ShouldAliasVueRouterHook()
+    {
+        var section = new CodeMaster.Application.ScriptBuilder.ScriptSection
+        {
+            Imports =
+            {
+                new CodeMaster.Application.ScriptBuilder.ImportInfo
+                {
+                    From = "vue-router",
+                    Mode = "named",
+                    Names = "useRouter, useRoute"
+                }
+            },
+            Refs =
+            {
+                new CodeMaster.Application.ScriptBuilder.RefInfo
+                {
+                    Name = "route",
+                    Value = "useRoute()"
+                }
+            }
+        };
+
+        TemplateCodeGenerator.ResolveComposableImportCollisions(section, "Route");
+
+        Assert.Equal("useRouter, useRoute as useRouteHook", section.Imports[0].Names);
+        Assert.Equal("useRouteHook()", section.Refs[0].Value);
+    }
+
+    [Fact]
+    public async Task GenerateServiceTemplates_ShouldAliasEntityType_WhenModuleNameMatchesEntityName()
+    {
+        var (db, dbFile) = CreateMetadataDb();
+        try
+        {
+            const long entityId = 99001;
+            db.Insertable(new ModuleEntity
+            {
+                Id = entityId,
+                ProjectId = 1,
+                ModuleId = 2,
+                Name = "BillOfLading",
+                Description = "Bill of lading",
+                HasPrimaryKey = true,
+                CreateBy = "test",
+                UpdateUserId = 0
+            }).ExecuteCommand();
+            db.Insertable(new[]
+            {
+                SystemField(99002, entityId, "Id", "long", isPrimaryKey: true),
+                new EntityField
+                {
+                    Id = 99003,
+                    ModuleEntityId = entityId,
+                    Name = "BlNo",
+                    Description = "Bill number",
+                    DataType = "string",
+                    ShowInList = true,
+                    CreateBy = "test",
+                    UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+
+            var generator = new CodeGeneratorService(db);
+            var serviceCode = await generator.GenerateServiceImplementationAsync(
+                entityId,
+                "Demo",
+                "BillOfLading");
+            var interfaceCode = await generator.GenerateServiceInterfaceAsync(
+                entityId,
+                "Demo",
+                "BillOfLading");
+
+            const string alias =
+                "using GeneratedEntity = Demo.Domain.Entities.BillOfLading.BillOfLading;";
+            Assert.Contains(alias, serviceCode);
+            Assert.Contains(alias, interfaceCode);
+            Assert.Contains("CrudApplicationService<GeneratedEntity,", serviceCode);
+            Assert.Contains("ICrudApplicationService<GeneratedEntity,", interfaceCode);
+        }
+        finally
+        {
+            db.Dispose();
+            TryDelete(dbFile);
+        }
     }
 
     [Fact]
@@ -396,9 +485,15 @@ public class CodeGeneratorServiceTests
             }
 
             if (expectsGetById)
+            {
                 Assert.Contains("export function getById", apiCode);
+                if (isTree || hasPrimaryKey)
+                    Assert.Contains("export function getDetail", apiCode);
+            }
             else
                 Assert.DoesNotContain("export function getById", apiCode);
+
+            Assert.Contains("export function getOptionList", apiCode);
 
             Assert.DoesNotContain("export function create", apiCode);
             Assert.DoesNotContain("export function update", apiCode);
@@ -727,7 +822,8 @@ public class CodeGeneratorServiceTests
             ConnectionString = $"Data Source={dbFile};Mode=ReadWriteCreate;",
             DbType = DbType.Sqlite,
             IsAutoCloseConnection = true,
-            InitKeyType = InitKeyType.Attribute
+            InitKeyType = InitKeyType.Attribute,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
         });
         db.CodeFirst.InitTables(
             typeof(ModuleEntity),

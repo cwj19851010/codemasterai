@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!-- Local machines with the CodeMaster.Private directory default to the full edition.
+         Public clones without it automatically fall back to the public edition. -->
+    <IncludePrivateModules Condition="'$(IncludePrivateModules)' == '' and Exists('$(MSBuildThisFileDirectory)CodeMaster.Private')">true</IncludePrivateModules>
+    <IncludePrivateModules Condition="'$(IncludePrivateModules)' == ''">false</IncludePrivateModules>
+    <CodeMasterEdition Condition="'$(CodeMasterEdition)' == '' and '$(IncludePrivateModules)' == 'true'">Full</CodeMasterEdition>
+    <CodeMasterEdition Condition="'$(CodeMasterEdition)' == ''">Public</CodeMasterEdition>
+    <CodeMasterVueBuildScript Condition="'$(CodeMasterVueBuildScript)' == '' and '$(IncludePrivateModules)' == 'true'">build:full</CodeMasterVueBuildScript>
+    <CodeMasterVueBuildScript Condition="'$(CodeMasterVueBuildScript)' == ''">build:public</CodeMasterVueBuildScript>
+  </PropertyGroup>
+</Project>

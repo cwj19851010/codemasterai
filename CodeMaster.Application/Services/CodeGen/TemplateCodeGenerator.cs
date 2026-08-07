@@ -37,7 +37,7 @@ public class TemplateCodeGenerator
             .Where(f => f.ModuleEntityId == entityId).OrderBy(f => f.OrderNum).ToListAsync();
 
         var relations = new List<OneToManyRelation>();
-        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false))
             relations = await _db.Queryable<OneToManyRelation>()
                 .Where(r => r.ModuleEntityId == entityId).OrderBy(r => r.OrderNum).ToListAsync();
         relations = OneToManyRelationDeduplicator.Deduplicate(relations);
@@ -345,6 +345,7 @@ public class TemplateCodeGenerator
             MergeScriptEntries(runtimeSection, result.FieldScripts);
         }
 
+        ResolveComposableImportCollisions(runtimeSection, entity.Name);
         result.MainScriptJson = JsonSerializer.Serialize(globalSection, new JsonSerializerOptions { WriteIndented = false });
         result.MainScriptContent = renderer.RenderComposable(runtimeSection, entity.Name);
         var mainExports = runtimeSection.GetExportNames();
@@ -362,6 +363,7 @@ public class TemplateCodeGenerator
             if (relationSection.IsEmpty) continue;
 
             var childFunctionName = relCtx.ChildEntityName + "Child";
+            ResolveComposableImportCollisions(relationSection, childFunctionName);
             var scriptJson = JsonSerializer.Serialize(relationSection, new JsonSerializerOptions { WriteIndented = false });
             var scriptContent = renderer.RenderComposable(relationSection, childFunctionName, "form");
             var exports = relationSection.GetExportNames();
@@ -403,10 +405,78 @@ public class TemplateCodeGenerator
         return result;
     }
 
+    internal static void ResolveComposableImportCollisions(
+        ScriptBuilder.ScriptSection section,
+        string composableSuffix)
+    {
+        var composableName = $"use{composableSuffix}";
+        var namedImports = section.Imports
+            .Where(importInfo => string.Equals(importInfo.Mode, "named", StringComparison.Ordinal))
+            .ToList();
+        var importBindings = namedImports
+            .SelectMany(importInfo => importInfo.Names.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(ParseImportBinding)
+            .ToList();
+
+        if (!importBindings.Any(binding =>
+                string.Equals(binding.LocalName, composableName, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var existingLocalNames = importBindings
+            .Select(binding => binding.LocalName)
+            .ToHashSet(StringComparer.Ordinal);
+        var alias = composableName + "Hook";
+        for (var suffix = 2; existingLocalNames.Contains(alias); suffix++)
+            alias = composableName + "Hook" + suffix;
+
+        foreach (var importInfo in namedImports)
+        {
+            var bindings = importInfo.Names.Split(
+                    ',',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(token =>
+                {
+                    var binding = ParseImportBinding(token);
+                    return string.Equals(binding.LocalName, composableName, StringComparison.Ordinal)
+                        ? $"{binding.ImportedName} as {alias}"
+                        : token;
+                });
+            importInfo.Names = string.Join(", ", bindings);
+        }
+
+        section.ReplaceMarkers(value => value.Replace(
+            composableName + "(",
+            alias + "(",
+            StringComparison.Ordinal));
+    }
+
+    private static (string ImportedName, string LocalName) ParseImportBinding(string token)
+    {
+        var match = Regex.Match(
+            token,
+            @"^\s*(?<imported>[A-Za-z_$][A-Za-z0-9_$]*)(?:\s+as\s+(?<local>[A-Za-z_$][A-Za-z0-9_$]*))?\s*$");
+        if (!match.Success)
+        {
+            var trimmed = token.Trim();
+            return (trimmed, trimmed);
+        }
+
+        var importedName = match.Groups["imported"].Value;
+        var localName = match.Groups["local"].Success
+            ? match.Groups["local"].Value
+            : importedName;
+        return (importedName, localName);
+    }
+
     private async Task<(string html, ScriptSection? section, FieldContext? fieldContext)> RenderFieldControl(
         EntityField field, string pageSection, ModuleEntity entity, GenContext genCtx, string formPrefix = "form")
     {
-        var controlType = MapControlType(field.FormControlType, pageSection, field.DataType);
+        var semantic = FieldSemanticMapper.Map(field);
+        var controlType = MapControlType(semantic.ControlType, pageSection, field.DataType);
         var template = await _db.Queryable<SysFieldControlTemplate>()
             .Where(t => t.ControlType == controlType && t.PageSection == pageSection && t.IsDeleted == false).FirstAsync();
         if (template == null)
@@ -450,7 +520,7 @@ public class TemplateCodeGenerator
             FormPrefix = formPrefix,
             RowPrefix = rowPrefix,
             DetailPrefix = detailPrefix,
-            FormControlType = field.FormControlType ?? "input",
+            FormControlType = semantic.ControlType,
             SelectDataSource = field.SelectDataSource ?? "",
             SelectOptions = field.SelectOptions ?? "",
             SelectOptionsLiteral = BuildStaticChoiceOptionsLiteral(field.SelectOptions),

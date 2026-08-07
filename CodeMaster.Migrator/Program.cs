@@ -27,7 +27,10 @@ Console.WriteLine("===========================================\n");
 
 // 1. 配置
 var configuration = new ConfigurationBuilder()
-    .SetBasePath(Directory.GetCurrentDirectory())
+    // Resolve configuration beside the executable so `dotnet run` is safe
+    // even when invoked from the solution root (which may contain another
+    // appsettings.json for a different host/provider).
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false)
     .Build();
 
@@ -48,20 +51,13 @@ YitIdHelper.SetIdGenerator(new IdGeneratorOptions { WorkerId = workerId });
 
 // 3. 配置 DbContext
 var services = new ServiceCollection();
-services.AddDbContext<CodeMasterDbContext>(opts =>
-{
-#if DB_MYSQL
-    opts.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
-#elif DB_PGSQL
-    opts.UseNpgsql(connectionString);
-#elif DB_SQLITE
-    opts.UseSqlite(connectionString);
-#elif DB_ORACLE
-    opts.UseOracle(connectionString);
-#else
-    opts.UseSqlServer(connectionString);
-#endif
-});
+var baseMigrationsAssembly = typeof(CodeMasterDbContext).Assembly.GetName().Name
+    ?? throw new InvalidOperationException("Unable to resolve the base migrations assembly name.");
+services.AddDbContext<CodeMasterDbContext>(opts => ConfigureDbContextOptions(
+    opts,
+    connectionString,
+    baseMigrationsAssembly,
+    "__EFMigrationsHistory"));
 
 var serviceProvider = services.BuildServiceProvider();
 using var scope = serviceProvider.CreateScope();
@@ -84,6 +80,7 @@ try
 #else
     await dbContext.Database.MigrateAsync();
 #endif
+    await ApplyModuleMigrationsAsync(dbProvider, connectionString);
     Console.WriteLine("✓ 数据库迁移完成\n");
 
     // 5. 初始化种子数据
@@ -111,6 +108,68 @@ catch (Exception ex)
 }
 
 return 0;
+
+static void ConfigureDbContextOptions(
+    DbContextOptionsBuilder optionsBuilder,
+    string connectionString,
+    string migrationsAssembly,
+    string migrationsHistoryTable)
+{
+#if DB_MYSQL
+    optionsBuilder.UseMySql(
+        connectionString,
+        ServerVersion.AutoDetect(connectionString),
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#elif DB_PGSQL
+    optionsBuilder.UseNpgsql(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#elif DB_SQLITE
+    optionsBuilder.UseSqlite(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#elif DB_ORACLE
+    optionsBuilder.UseOracle(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#else
+    optionsBuilder.UseSqlServer(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#endif
+}
+
+static async Task ApplyModuleMigrationsAsync(string databaseProvider, string connectionString)
+{
+    var modules = MigrationModuleCatalog.CreateDatabaseMigrationModules();
+    if (modules.Count == 0)
+    {
+        return;
+    }
+
+    var context = new MigrationModuleExecutionContext
+    {
+        DatabaseProvider = databaseProvider,
+        ConnectionString = connectionString,
+        ConfigureDbContext = ConfigureDbContextOptions
+    };
+
+    foreach (var module in modules)
+    {
+        Console.WriteLine($"  - Applying optional migration module: {module.ModuleName}");
+        await module.MigrateAsync(context);
+    }
+}
 
 static string MaskConnectionString(string connectionString)
 {
@@ -301,8 +360,8 @@ static List<ISeedModule> LoadAllModules()
     var modules = new List<ISeedModule>();
     var seedModuleType = typeof(ISeedModule);
 
-    var allModuleTypes = Assembly.GetExecutingAssembly()
-        .GetTypes()
+    var allModuleTypes = MigrationModuleCatalog.Assemblies
+        .SelectMany(MigrationModuleCatalog.GetLoadableTypes)
         .Where(t => t.IsClass && !t.IsAbstract && seedModuleType.IsAssignableFrom(t))
         .ToList();
 
@@ -335,8 +394,8 @@ static async Task CreateTopLevelDirectoriesAsync(CodeMasterDbContext dbContext, 
     Console.WriteLine("\n▶ 创建顶级目录菜单");
 
     var directoryType = typeof(ITopLevelDirectory);
-    var directories = Assembly.GetExecutingAssembly()
-        .GetTypes()
+    var directories = MigrationModuleCatalog.Assemblies
+        .SelectMany(MigrationModuleCatalog.GetLoadableTypes)
         .Where(t => t.IsClass && !t.IsAbstract && directoryType.IsAssignableFrom(t))
         .Select(t => Activator.CreateInstance(t) as ITopLevelDirectory)
         .Where(d => d != null)

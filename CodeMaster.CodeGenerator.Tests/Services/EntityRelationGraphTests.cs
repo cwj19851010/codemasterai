@@ -125,6 +125,43 @@ public class EntityRelationGraphTests
     }
 
     [Fact]
+    public async Task BuildForProject_ExcludesMetadataOnlyLegacyOneToManyEdges()
+    {
+        var (db, dbFile) = CreateDb();
+        try
+        {
+            SeedEntity(db, 1, 1, "Order", "Id");
+            SeedEntity(db, 2, 1, "ExternalOrderItemDto", "OrderId");
+            db.Updateable<ModuleEntity>()
+                .SetColumns(entity => entity.GenerationMode == EntityGenerationMode.MetadataOnly)
+                .Where(entity => entity.Id == 2)
+                .ExecuteCommand();
+            db.Insertable(new OneToManyRelation
+            {
+                Id = 104,
+                ModuleEntityId = 1,
+                MasterField = "Id",
+                ChildEntityId = 2,
+                ChildEntityName = "ExternalOrderItemDto",
+                ChildForeignKey = "OrderId",
+                OrderNum = 10,
+                CreateBy = "test",
+                CreateTime = DateTime.UtcNow,
+                UpdateUserId = 0
+            }).ExecuteCommand();
+
+            var graph = await new EntityRelationGraphBuilder(db).BuildForProjectAsync(1);
+
+            Assert.Empty(graph.GetOwnedOutgoing(1));
+        }
+        finally
+        {
+            db.Dispose();
+            CodeGeneratorServiceTests.TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
     public async Task Validate_RejectsOwnedCycle()
     {
         var (db, dbFile) = CreateDb();
@@ -377,6 +414,44 @@ public class EntityRelationGraphTests
                 () => new EntityRelationGraphBuilder(db).ValidateAsync(relation));
 
             Assert.Contains("one-to-one", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            db.Dispose();
+            CodeGeneratorServiceTests.TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
+    public async Task Validate_RejectsMetadataOnlyEntityRelations()
+    {
+        var (db, dbFile) = CreateDb();
+        try
+        {
+            SeedEntity(db, 1, 1, "Order", "Id");
+            SeedEntity(db, 2, 1, "ExternalOrderDto", "Id");
+            db.Updateable<ModuleEntity>()
+                .SetColumns(entity => entity.GenerationMode == EntityGenerationMode.MetadataOnly)
+                .SetColumns(entity => entity.HasPrimaryKey == false)
+                .SetColumns(entity => entity.IsReadOnly == true)
+                .SetColumns(entity => entity.TableName == null)
+                .Where(entity => entity.Id == 2)
+                .ExecuteCommand();
+
+            var relation = new EntityRelation
+            {
+                SourceEntityId = 1,
+                TargetEntityId = 2,
+                RelationName = "ExternalOrder",
+                SourceField = "Id",
+                TargetField = "Id",
+                Cardinality = EntityRelationCardinality.OneToOne,
+                Ownership = EntityRelationOwnership.Reference
+            };
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => new EntityRelationGraphBuilder(db).ValidateAsync(relation));
+            Assert.Contains("metadata-only", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

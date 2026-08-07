@@ -118,7 +118,9 @@ public sealed class EntityRelationGraphBuilder
     {
         var entityIds = await _db.Queryable<ModuleEntity>()
             .ClearFilter()
-            .Where(x => x.ProjectId == projectId && (includeDeleted || !x.IsDeleted))
+            .Where(x => x.ProjectId == projectId &&
+                        x.GenerationMode == EntityGenerationMode.FullStack &&
+                        (includeDeleted || !x.IsDeleted))
             .Select(x => x.Id)
             .ToListAsync();
 
@@ -127,11 +129,12 @@ public sealed class EntityRelationGraphBuilder
 
         var edges = new List<EntityRelationEdge>();
 
-        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false))
         {
             var legacy = await _db.Queryable<OneToManyRelation>()
                 .ClearFilter()
-                .Where(x => entityIds.Contains(x.ModuleEntityId) && (includeDeleted || !x.IsDeleted))
+                .Where(x => entityIds.Contains(x.ModuleEntityId) && entityIds.Contains(x.ChildEntityId) &&
+                            (includeDeleted || !x.IsDeleted))
                 .ToListAsync();
 
             edges.AddRange(legacy.Select(x => new EntityRelationEdge(
@@ -149,11 +152,12 @@ public sealed class EntityRelationGraphBuilder
                 true)));
         }
 
-        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
         {
             var current = await _db.Queryable<EntityRelation>()
                 .ClearFilter()
-                .Where(x => entityIds.Contains(x.SourceEntityId) && (includeDeleted || !x.IsDeleted))
+                .Where(x => entityIds.Contains(x.SourceEntityId) && entityIds.Contains(x.TargetEntityId) &&
+                            (includeDeleted || !x.IsDeleted))
                 .ToListAsync();
 
             edges.AddRange(current.Select(x => new EntityRelationEdge(
@@ -203,6 +207,12 @@ public sealed class EntityRelationGraphBuilder
             throw new InvalidOperationException("Relation source or target entity does not exist.");
         if (source.ProjectId != target.ProjectId)
             throw new InvalidOperationException("Relation entities must belong to the same project.");
+        if (source.GenerationMode == EntityGenerationMode.MetadataOnly ||
+            target.GenerationMode == EntityGenerationMode.MetadataOnly)
+        {
+            throw new InvalidOperationException(
+                "Metadata-only entities cannot participate in one-to-one or one-to-many entity relations.");
+        }
         if (relation.Ownership == EntityRelationOwnership.Owned && (source.IsReadOnly || target.IsReadOnly))
             throw new InvalidOperationException("Owned one-to-one relations require writable source and target entities.");
         if (relation.Ownership == EntityRelationOwnership.Owned && !target.HasPrimaryKey)
@@ -237,7 +247,7 @@ public sealed class EntityRelationGraphBuilder
                 $"Relation field types must match: {sourceField.DataType} and {targetField.DataType}.");
         }
 
-        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
         {
             var duplicateQuery = _db.Queryable<EntityRelation>()
                 .ClearFilter()

@@ -76,6 +76,12 @@ public class EntityField : EntityBaseWithTenant
     #region 数据库配置
 
     /// <summary>
+    /// 数据库实际列名。为空时按字段名转换为 snake_case。
+    /// </summary>
+    [SugarColumn(ColumnName = "column_name", Length = 100, IsNullable = true)]
+    public string? ColumnName { get; set; }
+
+    /// <summary>
     /// 是否忽略（不映射到数据库）
     /// </summary>
     [SugarColumn(ColumnName = "is_ignore", IsNullable = false)]

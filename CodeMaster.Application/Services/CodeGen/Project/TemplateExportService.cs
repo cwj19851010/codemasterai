@@ -29,6 +29,7 @@ public class IncludeConfig
     public List<string> Frontend { get; set; } = new();
     public List<string> Root { get; set; } = new();
     public List<string> SourceGenerator { get; set; } = new();
+    public List<string> Tests { get; set; } = new();
 }
 
 public class ExcludeConfig
@@ -152,6 +153,7 @@ public class TemplateExportService
         allFiles.AddRange(config.Include.Frontend);
         allFiles.AddRange(config.Include.Root);
         allFiles.AddRange(config.Include.SourceGenerator);
+        allFiles.AddRange(config.Include.Tests);
 
         foreach (var relativePath in allFiles)
         {

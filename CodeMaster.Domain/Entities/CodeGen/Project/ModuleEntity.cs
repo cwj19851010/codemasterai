@@ -34,6 +34,12 @@ public class ModuleEntity : EntityBaseWithTenant
     public string Description { get; set; } = string.Empty;
 
     /// <summary>
+    /// Controls whether this record is a normal generated entity or external-contract metadata only.
+    /// </summary>
+    [SugarColumn(ColumnName = "generation_mode", IsNullable = false)]
+    public EntityGenerationMode GenerationMode { get; set; } = EntityGenerationMode.FullStack;
+
+    /// <summary>
     /// 是否有主键（非ReadOnly时必须为true）
     /// </summary>
     [SugarColumn(ColumnName = "has_primary_key", IsNullable = false)]

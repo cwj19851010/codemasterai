@@ -113,8 +113,13 @@ docs/phase-1-closeout-and-roadmap.md
 docs/ProjectSummary.md
 docs/public-portal-auth-community.md
 
+# Private modules (never committed; local-only closed-source additions)
+/CodeMaster.Private/
+CodeMaster.Private.sln
+
 # Local publish and generated smoke-test output
 artifacts/
+/publish/
 .codex_webapi_publish/
 CodeMaster.Vue/.tauri-sidecar-publish/
 CodeMaster.Vue/src-tauri/resources/
@@ -164,12 +169,16 @@ _fix*/
 _fx/
 _g/
 api*.txt
-build_*.txt
+build*.txt
 build_output.txt
 err.txt
 rule.txt
 test_out.txt
 test_errors.txt
+test_*.txt
+/t[1-9].txt
+/pub.txt
+/webapi_tail.txt
 translations_export.json
 translations_clean.json
 webapi.pid

@@ -61,6 +61,13 @@ public class VueTemplateSerializer
         if (!string.IsNullOrEmpty(component.GenId))
             sb.Append($" data-gen-id=\"{component.GenId}\"");
 
+        // Stable entity metadata is parsed into dedicated model properties rather
+        // than Props, so it must be emitted explicitly during normalization/merge.
+        if (!string.IsNullOrEmpty(component.EntityTable))
+            sb.Append($" data-entity-table=\"{component.EntityTable}\"");
+        if (!string.IsNullOrEmpty(component.EntityField))
+            sb.Append($" data-entity-field=\"{component.EntityField}\"");
+
         // ref
         if (!string.IsNullOrEmpty(component.Ref))
             sb.Append($" ref=\"{component.Ref}\"");

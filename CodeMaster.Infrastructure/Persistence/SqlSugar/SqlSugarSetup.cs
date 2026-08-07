@@ -61,10 +61,16 @@ public static class SqlSugarSetup
                 EntityService = (property, column) =>
                 {
                     // 自动转换：UserName -> user_name
-                    column.DbColumnName = ToSnakeCase(property.Name);
+                    var sugarColumn = property.GetCustomAttributes(typeof(SugarColumn), false)
+                        .FirstOrDefault() as SugarColumn;
+                    column.DbColumnName = !string.IsNullOrWhiteSpace(sugarColumn?.ColumnName)
+                        ? sugarColumn.ColumnName
+                        : ToSnakeCase(property.Name);
 
                     // 自动映射数据库类型
-                    column.DataType = GetDatabaseType(property.PropertyType, dbType);
+                    column.DataType = !string.IsNullOrWhiteSpace(sugarColumn?.ColumnDataType)
+                        ? sugarColumn.ColumnDataType
+                        : GetDatabaseType(property.PropertyType, dbType);
                 }
             }
         });
@@ -121,21 +127,23 @@ public static class SqlSugarSetup
         // 只为每个实例注册一次 AOP 事件
         if (_registeredInstances.TryAdd(instanceId, true))
         {
-            // 配置SQL日志
+            // 配置SQL日志（参数值脱敏；无 logger 时仅输出 SQL，避免凭据/业务值进诊断流）
             db.Aop.OnLogExecuting = (sql, pars) =>
             {
                 var logMessage = $"[SqlSugar] {sql}";
-                if (pars != null && pars.Length > 0)
+                if (logger != null && pars != null && pars.Length > 0)
                 {
-                    var parameters = string.Join(", ", pars.Select(p => $"{p.ParameterName}={p.Value}"));
+                    var parameters = string.Join(", ", pars.Select(p => $"{p.ParameterName}={Redact(p.ParameterName, p.Value)}"));
+                    logMessage += $" | Parameters: {parameters}";
+                }
+                else if (pars != null && pars.Length > 0)
+                {
+                    var parameters = string.Join(", ", pars.Select(p => $"{p.ParameterName}=***"));
                     logMessage += $" | Parameters: {parameters}";
                 }
 
-                if (logger != null)
-                {
-                    logger.LogInformation(logMessage);
-                }
-                else
+                logger?.LogInformation(logMessage);
+                if (logger == null)
                 {
                     Console.WriteLine(logMessage);
                 }
@@ -150,7 +158,7 @@ public static class SqlSugarSetup
                 }
                 else
                 {
-                    Console.WriteLine($"[SqlSugar Error] SQL: {exp.Sql}, Exception: {exp.Parametres}");
+                    Console.WriteLine($"[SqlSugar Error] SQL: {exp.Sql}");
                 }
             };
         }
@@ -182,8 +190,14 @@ public static class SqlSugarSetup
             },
             EntityService = (property, column) =>
             {
-                column.DbColumnName = ToSnakeCase(property.Name);
-                column.DataType = GetDatabaseType(property.PropertyType, dbType);
+                var sugarColumn = property.GetCustomAttributes(typeof(SugarColumn), false)
+                    .FirstOrDefault() as SugarColumn;
+                column.DbColumnName = !string.IsNullOrWhiteSpace(sugarColumn?.ColumnName)
+                    ? sugarColumn.ColumnName
+                    : ToSnakeCase(property.Name);
+                column.DataType = !string.IsNullOrWhiteSpace(sugarColumn?.ColumnDataType)
+                    ? sugarColumn.ColumnDataType
+                    : GetDatabaseType(property.PropertyType, dbType);
             }
         };
     }
@@ -318,5 +332,19 @@ public static class SqlSugarSetup
         }
 
         return dbType == DbType.SqlServer ? "nvarchar(max)" : "text";
+    }
+
+    /// <summary>
+    /// 脱敏日志中的敏感参数值（凭据/连接串/令牌等）
+    /// </summary>
+    private static string Redact(string parameterName, object? value)
+    {
+        if (value == null)
+            return "null";
+
+        if (Regex.IsMatch(parameterName, "password|connectionstring|token|secret|apikey|api_key|authorization", RegexOptions.IgnoreCase))
+            return "***";
+
+        return value.ToString() ?? "null";
     }
 }

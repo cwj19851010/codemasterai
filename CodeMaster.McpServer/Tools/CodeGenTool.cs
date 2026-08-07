@@ -40,6 +40,7 @@ public sealed class CodeGenTool
                 mode = new { type = "string", description = "full or incremental. Defaults to full." },
                 validateBuild = new { type = "boolean", description = "Run dotnet build after generation. Defaults to true." },
                 validateFrontendBuild = new { type = "boolean", description = "Run npm run build after generation. Defaults to false." },
+                validateTests = new { type = "boolean", description = "Run dotnet test on the generated test project if one exists. Defaults to false." },
                 buildTimeoutSeconds = new { type = "integer", description = "Reserved for compatibility. LocalAgent currently uses its configured build timeout." },
                 workspacePath = new { type = "string", description = "Optional generated project directory." }
             }
@@ -93,15 +94,20 @@ public sealed class CodeGenTool
 
         LocalExecutionResult? solutionBuild = null;
         LocalExecutionResult? frontendBuild = null;
+        LocalExecutionResult? projectTests = null;
         if (allGenerated && args.ValidateBuild)
             solutionBuild = await ExecuteLocalAsync("buildProject", target.Project!.Id, null, null, args, session);
 
         if (allGenerated && args.ValidateFrontendBuild)
             frontendBuild = await ExecuteLocalAsync("buildFrontend", target.Project!.Id, null, null, args, session);
 
+        if (allGenerated && args.ValidateTests)
+            projectTests = await ExecuteLocalAsync("testProject", target.Project!.Id, null, null, args, session);
+
         var success = allGenerated &&
                       (solutionBuild?.Success ?? true) &&
-                      (frontendBuild?.Success ?? true);
+                      (frontendBuild?.Success ?? true) &&
+                      (projectTests?.Success ?? true);
 
         return new
         {
@@ -116,6 +122,7 @@ public sealed class CodeGenTool
             generatedItems,
             solutionBuild,
             frontendBuild,
+            projectTests,
             message = success
                 ? "Code generated and requested validation completed."
                 : "Code generation or validation failed. Inspect generatedItems and build output."
@@ -221,6 +228,7 @@ public sealed class CodeGenInput
     public string? Mode { get; set; }
     public bool ValidateBuild { get; set; } = true;
     public bool ValidateFrontendBuild { get; set; }
+    public bool ValidateTests { get; set; }
     public int BuildTimeoutSeconds { get; set; } = 300;
     public string? WorkspacePath { get; set; }
 }

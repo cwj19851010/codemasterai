@@ -425,6 +425,10 @@
     "sourcegenerator": [
       "CodeMaster.SourceGenerator/CodeMaster.SourceGenerator.csproj",
       "CodeMaster.SourceGenerator/DbContextGenerator.cs"
+    ],
+    "tests": [
+      "CodeMaster.GeneratedTests/CodeMaster.GeneratedTests.csproj",
+      "CodeMaster.GeneratedTests/GeneratedProjectSmokeTests.cs"
     ]
   },
   "exclude": {

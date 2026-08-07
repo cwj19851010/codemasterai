@@ -10,10 +10,31 @@ namespace CodeMaster.Infrastructure.VueParser;
 /// </summary>
 public class VueTemplateParser
 {
+    private readonly VueOfficialSfcParser _officialParser = new();
+
     /// <summary>
     /// 解析 Vue 文件中的 template 部分为 Component 树
     /// </summary>
     public List<Component> Parse(string vueContent)
+    {
+        if (_officialParser.IsAvailable)
+        {
+            return vueContent.Contains("<template", StringComparison.OrdinalIgnoreCase)
+                ? _officialParser.Parse(vueContent).Components
+                : _officialParser.ParseTemplateContent(vueContent).Components;
+        }
+
+        return ParseLegacy(vueContent);
+    }
+
+    /// <summary>
+    /// Requires the pinned official Vue SFC compiler and returns the raw script
+    /// blocks in addition to the mapped component tree.
+    /// </summary>
+    public VueOfficialSfcParseResult ParseOfficial(string vueContent, string filename = "component.vue")
+        => _officialParser.Parse(vueContent, filename);
+
+    private List<Component> ParseLegacy(string vueContent)
     {
         // 1. 提取 template 内部内容
         string templateContent = ExtractTemplateContent(vueContent);
@@ -38,6 +59,9 @@ public class VueTemplateParser
     /// </summary>
     public List<Component> ParseTemplateContent(string templateInner)
     {
+        if (_officialParser.IsAvailable)
+            return _officialParser.ParseTemplateContent(templateInner).Components;
+
         string clean = RemoveComments(templateInner);
         string escaped = EscapeGtInQuotes(clean);
         string fixed_ = FixUnclosedTags(escaped);

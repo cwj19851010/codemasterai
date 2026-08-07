@@ -58,9 +58,17 @@ builder.Services.AddRepositories();
 
 // 获取 Application 程序集
 var applicationAssembly = Assembly.Load("CodeMaster.Application");
+var optionalModuleAssemblies = CodeMasterModuleAssemblyLoader.LoadOptionalModules(
+    AppContext.BaseDirectory,
+    Environment.GetEnvironmentVariable("CODEMASTER_MODULE_PATHS"));
+var applicationAssemblies = new[] { applicationAssembly }
+    .Concat(optionalModuleAssemblies)
+    .ToArray();
+if (optionalModuleAssemblies.Count > 0)
+    Console.WriteLine($"[Modules] Loaded {optionalModuleAssemblies.Count} optional assemblies");
 
 // 自动注册所有 Application Service
-builder.Services.AddApplicationServices(applicationAssembly);
+builder.Services.AddApplicationServices(applicationAssemblies);
 
 // 手动注册认证相关服务
 builder.Services.AddScoped<CodeMaster.Application.Services.Auth.IJwtService, CodeMaster.Application.Services.Auth.JwtService>();
@@ -101,7 +109,7 @@ builder.Services.AddControllersWithViews(options =>
         options.JsonSerializerOptions.Converters.Add(new CodeMaster.WebApi.Converters.UtcDateTimeConverter());
         options.JsonSerializerOptions.Converters.Add(new CodeMaster.WebApi.Converters.NullableUtcDateTimeConverter());
     })
-    .AddDynamicApi(applicationAssembly, options =>
+    .AddDynamicApi(applicationAssemblies, options =>
     {
         options.RoutePrefix = "api";
         options.RemoveServiceSuffix = true;

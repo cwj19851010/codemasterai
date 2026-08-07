@@ -13,6 +13,8 @@ namespace CodeMaster.Client;
 /// </summary>
 public partial class MainWindow : Window
 {
+    public static string ServerBaseUrl = "http://101.37.24.154:9000/index.html";
+
     public MainWindow()
     {
         InitializeComponent();
@@ -27,6 +29,27 @@ public partial class MainWindow : Window
 
             // 注册 JSBridge
             WebView.CoreWebView2.AddHostObjectToScript("jsbridge", new JsBridge());
+
+            // 支持命令行覆盖服务器地址: CodeMaster.Client.exe --url=http://x.x.x.x:9000
+            var args = Environment.GetCommandLineArgs();
+            for (var i = 1; i < args.Length; i++)
+            {
+                if (args[i].StartsWith("--url=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var customUrl = args[i]["--url=".Length..].Trim().TrimEnd('/');
+                    if (customUrl.Length > 0)
+                    {
+                        ServerBaseUrl = customUrl;
+                    }
+                }
+            }
+            if (!ServerBaseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !ServerBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                ServerBaseUrl = "http://" + ServerBaseUrl;
+            }
+            UrlTextBox.Text = ServerBaseUrl;
+            WebView.Source = new Uri(ServerBaseUrl);
 
             // 监听导航完成事件
             WebView.CoreWebView2.NavigationCompleted += (s, e) =>

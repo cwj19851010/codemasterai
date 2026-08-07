@@ -62,6 +62,9 @@ public abstract class QueryApplicationService<TEntity, TGetListOutputDto, TGetLi
         return entities.Adapt<List<TGetListOutputDto>>();
     }
 
+    public virtual Task<List<TGetListOutputDto>> GetOptionListAsync(TGetListInput input)
+        => GetListAsync(input);
+
     protected virtual Task<ISugarQueryable<TEntity>> CreateFilteredQueryAsync(TGetListInput input)
     {
         return Task.FromResult(Repository.GetQueryable());

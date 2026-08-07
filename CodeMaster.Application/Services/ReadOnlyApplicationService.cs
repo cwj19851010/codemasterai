@@ -30,4 +30,7 @@ public abstract class ReadOnlyApplicationService<TEntity, TGetOutputDto, TGetLis
         var entity = await Repository.GetByIdAsync(id);
         return entity == null ? default : entity.Adapt<TGetOutputDto>();
     }
+
+    public virtual Task<TGetOutputDto?> GetDetailAsync(long id)
+        => GetByIdAsync(id);
 }

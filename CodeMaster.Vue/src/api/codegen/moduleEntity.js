@@ -1,6 +1,9 @@
 import request from '@/utils/request'
 import { executeCodegenAction } from '@/utils/codegenExecution'
 
+const CODE_GENERATION_TIMEOUT = 300000
+const PROJECT_SYNC_TIMEOUT = 180000
+
 /**
  * 获取全部模块实体列表
  */
@@ -90,7 +93,8 @@ export function generateCode(id) {
   return executeCodegenAction('generateCode', { entityId: id, id }, () =>
     request({
       url: `/codegen/moduleentity/generatecode/${id}`,
-      method: 'post'
+      method: 'post',
+      timeout: CODE_GENERATION_TIMEOUT
     })
   )
 }
@@ -102,7 +106,8 @@ export function generateIncrementalCode(id) {
   return executeCodegenAction('generateIncrementalCode', { entityId: id, id }, () =>
     request({
       url: `/codegen/moduleentity/generateincrementalcode/${id}`,
-      method: 'post'
+      method: 'post',
+      timeout: CODE_GENERATION_TIMEOUT
     })
   )
 }
@@ -113,7 +118,8 @@ export function generateProjectCode(projectId, entityIds = []) {
     request({
       url: '/codegen/moduleentity/generateprojectcode',
       method: 'post',
-      data
+      data,
+      timeout: CODE_GENERATION_TIMEOUT
     })
   )
 }
@@ -124,7 +130,8 @@ export function generateProjectIncrementalCode(projectId, entityIds = []) {
     request({
       url: '/codegen/moduleentity/generateprojectincrementalcode',
       method: 'post',
-      data
+      data,
+      timeout: CODE_GENERATION_TIMEOUT
     })
   )
 }
@@ -136,7 +143,8 @@ export function syncMenu(id) {
   return executeCodegenAction('syncMenu', { entityId: id, id }, () =>
     request({
       url: `/codegen/moduleentity/syncmenutotarget/${id}`,
-      method: 'post'
+      method: 'post',
+      timeout: PROJECT_SYNC_TIMEOUT
     })
   )
 }
@@ -147,7 +155,8 @@ export function syncProjectMenus(projectId, entityIds = []) {
     request({
       url: '/codegen/moduleentity/syncprojectmenustotarget',
       method: 'post',
-      data
+      data,
+      timeout: PROJECT_SYNC_TIMEOUT
     })
   )
 }
@@ -159,7 +168,8 @@ export function syncLanguage(id) {
   return executeCodegenAction('syncLanguage', { entityId: id, id }, () =>
     request({
       url: `/codegen/moduleentity/synclanguagetotarget/${id}`,
-      method: 'post'
+      method: 'post',
+      timeout: PROJECT_SYNC_TIMEOUT
     })
   )
 }
@@ -170,7 +180,8 @@ export function syncProjectLanguages(projectId, entityIds = []) {
     request({
       url: '/codegen/moduleentity/syncprojectlanguagestotarget',
       method: 'post',
-      data
+      data,
+      timeout: PROJECT_SYNC_TIMEOUT
     })
   )
 }

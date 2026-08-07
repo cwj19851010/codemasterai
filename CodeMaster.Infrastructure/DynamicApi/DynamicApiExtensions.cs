@@ -1,40 +1,39 @@
 using System.Reflection;
 using CodeMaster.Core.DynamicApi;
+using CodeMaster.Core.Extensibility;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace CodeMaster.Infrastructure.DynamicApi;
 
-/// <summary>
-/// 动态 API 扩展方法
-/// </summary>
 public static class DynamicApiExtensions
 {
-    /// <summary>
-    /// 添加动态 API 支持
-    /// </summary>
-    public static IMvcBuilder AddDynamicApi(this IMvcBuilder mvcBuilder, Assembly applicationAssembly, Action<DynamicApiOptions>? configure = null)
+    public static IMvcBuilder AddDynamicApi(
+        this IMvcBuilder mvcBuilder,
+        Assembly applicationAssembly,
+        Action<DynamicApiOptions>? configure = null)
+        => AddDynamicApi(mvcBuilder, new[] { applicationAssembly }, configure);
+
+    public static IMvcBuilder AddDynamicApi(
+        this IMvcBuilder mvcBuilder,
+        IEnumerable<Assembly> applicationAssemblies,
+        Action<DynamicApiOptions>? configure = null)
     {
-        // 配置选项
+        var assemblies = applicationAssemblies.Distinct().ToArray();
         var services = mvcBuilder.Services;
         if (configure != null)
-        {
             services.Configure(configure);
-        }
         else
-        {
-            services.Configure<DynamicApiOptions>(options => { });
-        }
+            services.Configure<DynamicApiOptions>(_ => { });
 
-        // 添加 Feature Provider
         mvcBuilder.ConfigureApplicationPartManager(manager =>
         {
-            manager.FeatureProviders.Add(new DynamicApiControllerFeatureProvider(applicationAssembly));
+            manager.FeatureProviders.Add(new DynamicApiControllerFeatureProvider(assemblies));
         });
 
-        // 添加约定
         mvcBuilder.AddMvcOptions(options =>
         {
-            var serviceProvider = services.BuildServiceProvider();
+            using var serviceProvider = services.BuildServiceProvider();
             var convention = new DynamicApiControllerConvention(
                 serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<DynamicApiOptions>>());
             options.Conventions.Add(convention);
@@ -43,57 +42,91 @@ public static class DynamicApiExtensions
         return mvcBuilder;
     }
 
-    /// <summary>
-    /// 自动注册 Application Service
-    /// </summary>
-    public static IServiceCollection AddApplicationServices(this IServiceCollection services, Assembly applicationAssembly)
+    public static IServiceCollection AddApplicationServices(
+        this IServiceCollection services,
+        Assembly applicationAssembly)
+        => AddApplicationServices(services, new[] { applicationAssembly });
+
+    public static IServiceCollection AddApplicationServices(
+        this IServiceCollection services,
+        IEnumerable<Assembly> applicationAssemblies)
     {
-        // 扫描所有实现了 IApplicationService 的类
-        var serviceTypes = applicationAssembly.GetTypes()
-            .Where(t => t.IsClass && !t.IsAbstract && typeof(Core.Services.IApplicationService).IsAssignableFrom(t))
+        var allTypes = applicationAssemblies
+            .Distinct()
+            .SelectMany(GetLoadableTypes)
+            .ToList();
+        var serviceTypes = allTypes
+            .Where(type => type.IsClass && !type.IsAbstract &&
+                           typeof(Core.Services.IApplicationService).IsAssignableFrom(type))
             .ToList();
 
-        Console.WriteLine($"[AddApplicationServices] 扫描到 {serviceTypes.Count} 个服务:");
-
+        Console.WriteLine($"[AddApplicationServices] Found {serviceTypes.Count} application services");
         foreach (var serviceType in serviceTypes)
         {
-            // 查找对应的接口（优先查找直接实现的接口，且继承自 IApplicationService）
             var interfaceType = serviceType.GetInterfaces()
-                .FirstOrDefault(i =>
-                    i.Name == $"I{serviceType.Name}" &&
-                    i.GetInterfaces().Any(ii => ii.Name == "IApplicationService"));
+                .FirstOrDefault(candidate =>
+                    candidate.Name == $"I{serviceType.Name}" &&
+                    candidate.GetInterfaces().Any(parent => parent.Name == "IApplicationService"));
 
             if (interfaceType != null)
             {
-                // 注册接口和实现
                 services.AddScoped(interfaceType, serviceType);
-                Console.WriteLine($"  - 注册服务: {interfaceType.Name} -> {serviceType.Name}");
-            }
-            else
-            {
-                Console.WriteLine($"  - 未找到接口: {serviceType.Name}，接口列表: {string.Join(", ", serviceType.GetInterfaces().Select(i => i.Name))}");
+                Console.WriteLine($"  - Register service: {interfaceType.Name} -> {serviceType.Name}");
             }
 
-            // 也注册实现类本身（用于动态 API）
             services.AddScoped(serviceType);
+        }
+
+        services.TryAddSingleton<IApplicationServiceCapabilityCatalog>(
+            new ApplicationServiceCapabilityCatalog(serviceTypes));
+
+        services.AddCodeMasterExtensions(allTypes);
+
+        return services;
+    }
+
+    public static IServiceCollection AddCodeMasterExtensions(
+        this IServiceCollection services,
+        IEnumerable<Assembly> extensionAssemblies)
+        => services.AddCodeMasterExtensions(extensionAssemblies.Distinct().SelectMany(GetLoadableTypes));
+
+    private static IServiceCollection AddCodeMasterExtensions(
+        this IServiceCollection services,
+        IEnumerable<Type> candidateTypes)
+    {
+        var extensionMarker = typeof(ICodeMasterExtension);
+        var extensionTypes = candidateTypes
+            .Where(type => type.IsClass && !type.IsAbstract && extensionMarker.IsAssignableFrom(type))
+            .Distinct()
+            .ToList();
+        foreach (var extensionType in extensionTypes)
+        {
+            foreach (var contract in extensionType.GetInterfaces().Where(extensionMarker.IsAssignableFrom))
+            {
+                services.AddScoped(contract, extensionType);
+                Console.Error.WriteLine($"  - Register extension: {contract.Name} -> {extensionType.Name}");
+            }
         }
 
         return services;
     }
 
-    /// <summary>
-    /// 自动注册仓储
-    /// </summary>
     public static IServiceCollection AddRepositories(this IServiceCollection services)
     {
-        // 注册泛型仓储
-        services.AddScoped(typeof(Core.Repositories.IReadOnlyRepository<>), typeof(Infrastructure.Persistence.Repositories.ReadOnlyRepository<>));
-        services.AddScoped(typeof(Core.Repositories.IRepository<>), typeof(Infrastructure.Persistence.Repositories.Repository<>));
-
-        Console.WriteLine("[AddRepositories] 已注册泛型仓储:");
-        Console.WriteLine("  - IReadOnlyRepository<> -> ReadOnlyRepository<>");
-        Console.WriteLine("  - IRepository<> -> Repository<>");
-
+        services.AddScoped(typeof(Core.Repositories.IReadOnlyRepository<>), typeof(Persistence.Repositories.ReadOnlyRepository<>));
+        services.AddScoped(typeof(Core.Repositories.IRepository<>), typeof(Persistence.Repositories.Repository<>));
         return services;
+    }
+
+    private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException exception)
+        {
+            return exception.Types.Where(type => type != null).Cast<Type>();
+        }
     }
 }

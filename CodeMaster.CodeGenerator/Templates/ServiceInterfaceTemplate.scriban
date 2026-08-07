@@ -1,6 +1,6 @@
 using {{ entity.project_name }}.Core.Services;
 using {{ entity.project_name }}.Application.Dtos.{{ entity.module_name }};
-using {{ entity.project_name }}.Domain.Entities.{{ entity.module_name }};
+using GeneratedEntity = {{ entity.project_name }}.Domain.Entities.{{ entity.module_name }}.{{ entity.name }};
 
 namespace {{ entity.project_name }}.Application.Services.{{ entity.module_name }};
 
@@ -9,16 +9,16 @@ namespace {{ entity.project_name }}.Application.Services.{{ entity.module_name }
 /// </summary>
 {{~ if entity.is_read_only ~}}
 {{~ if entity.is_tree ~}}
-public interface I{{ entity.name }}Service : IReadOnlyTreeApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>
+public interface I{{ entity.name }}Service : IReadOnlyTreeApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>
 {{~ else if entity.has_primary_key ~}}
-public interface I{{ entity.name }}Service : IReadOnlyApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>
+public interface I{{ entity.name }}Service : IReadOnlyApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>
 {{~ else ~}}
-public interface I{{ entity.name }}Service : IQueryApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}QueryDto>
+public interface I{{ entity.name }}Service : IQueryApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}QueryDto>
 {{~ end ~}}
 {{~ else if entity.is_tree ~}}
-public interface I{{ entity.name }}Service : ITreeApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, IApplicationService
+public interface I{{ entity.name }}Service : ITreeApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, IApplicationService
 {{~ else ~}}
-public interface I{{ entity.name }}Service : ICrudApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, IApplicationService
+public interface I{{ entity.name }}Service : ICrudApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, IApplicationService
 {{~ end ~}}
 {
 {{~ for field in entity.remote_select_fields ~}}

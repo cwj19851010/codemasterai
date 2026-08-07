@@ -64,6 +64,11 @@ public class EntityFieldDto : EntityDto
     #region 数据库配置
 
     /// <summary>
+    /// 数据库实际列名。为空时按字段名转换为 snake_case。
+    /// </summary>
+    public string? ColumnName { get; set; }
+
+    /// <summary>
     /// 是否忽略
     /// </summary>
     public bool IsIgnore { get; set; }
@@ -266,6 +271,11 @@ public class CreateEntityFieldDto
     public string? DefaultValue { get; set; }
 
     /// <summary>
+    /// 数据库实际列名。为空时按字段名转换为 snake_case。
+    /// </summary>
+    public string? ColumnName { get; set; }
+
+    /// <summary>
     /// 是否忽略
     /// </summary>
     public bool IsIgnore { get; set; }
@@ -434,6 +444,11 @@ public class UpdateEntityFieldDto
     /// 默认值
     /// </summary>
     public string? DefaultValue { get; set; }
+
+    /// <summary>
+    /// 数据库实际列名。为空时按字段名转换为 snake_case。
+    /// </summary>
+    public string? ColumnName { get; set; }
 
     /// <summary>
     /// 是否忽略

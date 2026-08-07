@@ -37,7 +37,8 @@ public class CodeGenerationIntegrationTests : IDisposable
             ConnectionString = $"Data Source={_sqliteFile};Mode=ReadWriteCreate;",
             DbType = DbType.Sqlite,
             IsAutoCloseConnection = true,
-            InitKeyType = InitKeyType.Attribute
+            InitKeyType = InitKeyType.Attribute,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
         });
 
         _db.CodeFirst.InitTables(
@@ -189,6 +190,9 @@ public class CodeGenerationIntegrationTests : IDisposable
             Assert.True(
                 File.Exists(Path.Combine(frontendPath, $"demoAutomatedUser.{pageType}.tree.json")),
                 $"{pageType} tree.json was not generated.");
+            Assert.True(
+                File.Exists(Path.Combine(frontendPath, $"{pageType}.vue.genhash.json")),
+                $"{pageType} generated-region sidecar was not generated.");
         }
 
         var modifiedUserContent = "public partial class DemoAutomatedUser { // user code }";
@@ -210,6 +214,62 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.Contains("public string Name", autoContent);
 
         Assert.True(File.Exists(Path.Combine(frontendPath, "index.vue")), "Generated frontend files should remain after regeneration.");
+
+    }
+
+    [Fact]
+    public async Task MetadataOnlyEntity_RejectsDirectGeneration_AndProjectGenerationSkipsIt()
+    {
+        var project = new Project
+        {
+            Id = 9500,
+            ProjectName = "MetadataOnlyProject",
+            ProjectPath = _tempProjectPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile}",
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var module = new ProjectModule
+        {
+            Id = 9501,
+            ProjectId = project.Id,
+            ModuleName = "ExternalApi",
+            ModuleDescription = "External API",
+            Icon = string.Empty,
+            RoutePath = string.Empty,
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var entity = new ModuleEntity
+        {
+            Id = 9502,
+            ProjectId = project.Id,
+            ModuleId = module.Id,
+            Name = "ExternalOrderDto",
+            Description = "Imported API model",
+            GenerationMode = EntityGenerationMode.MetadataOnly,
+            HasPrimaryKey = false,
+            IsReadOnly = true,
+            GenerateFrontend = false,
+            HasAudit = false,
+            HasSoftDelete = false,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        _db.Insertable(project).ExecuteCommand();
+        _db.Insertable(module).ExecuteCommand();
+        _db.Insertable(entity).ExecuteCommand();
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+        var directError = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateCodeAsync(entity.Id));
+        Assert.Contains("metadata-only", directError.Message, StringComparison.OrdinalIgnoreCase);
+
+        var input = new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id };
+        Assert.True(await service.GenerateProjectCodeAsync(input));
+        Assert.Empty(input.EntityIds);
+        Assert.False(Directory.Exists(Path.Combine(_tempProjectPath, "MetadataOnlyProject.Domain")));
     }
 
     [Fact]
@@ -1971,6 +2031,98 @@ public class CodeGenerationIntegrationTests : IDisposable
     }
 
     private long GenerateSnowflakeId() => DateTime.UtcNow.Ticks + new Random().Next(100, 999);
+
+    [Fact]
+    public async Task FullAndIncrementalRegeneration_PreservesLegacyCrudPageBehavior()
+    {
+        var project = new Project
+        {
+            Id = 71,
+            ProjectName = "LegacyStabilityProject",
+            ProjectPath = _tempProjectPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile}",
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var module = new ProjectModule
+        {
+            Id = 72,
+            ProjectId = project.Id,
+            ModuleName = "Stability",
+            ModuleDescription = "Stability",
+            Icon = "folder",
+            RoutePath = "/stability",
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var entity = new ModuleEntity
+        {
+            Id = 73,
+            ProjectId = project.Id,
+            ModuleId = module.Id,
+            Name = "StableEntity",
+            Description = "Stable entity",
+            TableName = "stability_stable_entity",
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var nameField = new EntityField
+        {
+            Id = 74,
+            ModuleEntityId = entity.Id,
+            Name = "Name",
+            Description = "Name",
+            DataType = "string",
+            ShowInList = true,
+            ShowInDetail = true,
+            ShowInAddForm = true,
+            ShowInEditForm = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var codeField = new EntityField
+        {
+            Id = 75,
+            ModuleEntityId = entity.Id,
+            Name = "Code",
+            Description = "Code",
+            DataType = "string",
+            ShowInList = true,
+            ShowInDetail = true,
+            ShowInAddForm = true,
+            ShowInEditForm = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+
+        _db.Insertable(project).ExecuteCommand();
+        _db.Insertable(module).ExecuteCommand();
+        _db.Insertable(entity).ExecuteCommand();
+        _db.Insertable(new[] { nameField, codeField }).ExecuteCommand();
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+        var viewPath = Path.Combine(_tempProjectPath, $"{project.ProjectName}.Vue", "src", "views", "stability", "stableentity");
+
+        Assert.True(await service.GenerateProjectCodeAsync(new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+
+        Assert.True(await service.GenerateProjectCodeAsync(new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+        var vueSnapshot = Directory.Exists(viewPath)
+            ? Directory.GetFiles(viewPath, "*.vue", SearchOption.AllDirectories)
+                .ToDictionary(file => Path.GetRelativePath(viewPath, file), File.ReadAllText)
+            : new Dictionary<string, string>();
+        Assert.NotEmpty(vueSnapshot);
+
+        Assert.True(await service.GenerateProjectCodeAsync(new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+        foreach (var (relative, content) in vueSnapshot)
+            Assert.Equal(content, File.ReadAllText(Path.Combine(viewPath, relative)));
+
+        Assert.True(await service.GenerateProjectIncrementalCodeAsync(new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+        foreach (var (relative, content) in vueSnapshot)
+            Assert.Equal(content, File.ReadAllText(Path.Combine(viewPath, relative)));
+    }
 
     public void Dispose()
     {

@@ -2,6 +2,7 @@ using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.Application.Services.CodeGen;
 using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.Infrastructure.Persistence.Repositories;
+using CodeMaster.Infrastructure.Persistence.SqlSugar;
 using SqlSugar;
 
 namespace CodeMaster.CodeGenerator.Tests.Services;
@@ -19,7 +20,8 @@ public class ProjectModuleServiceTests : IDisposable
             ConnectionString = $"Data Source={_databasePath};Mode=ReadWriteCreate;",
             DbType = DbType.Sqlite,
             IsAutoCloseConnection = true,
-            InitKeyType = InitKeyType.Attribute
+            InitKeyType = InitKeyType.Attribute,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
         });
 
         _db.CodeFirst.InitTables(typeof(Project), typeof(ProjectModule));

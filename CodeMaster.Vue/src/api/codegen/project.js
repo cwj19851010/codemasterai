@@ -86,7 +86,8 @@ export function startProject(id) {
   return executeCodegenAction('startProject', { projectId: id, id }, () =>
     request({
       url: `/codegen/project/start/${id}`,
-      method: 'post'
+      method: 'post',
+      timeout: 120000
     })
   )
 }
@@ -98,7 +99,8 @@ export function stopProject(id) {
   return executeCodegenAction('stopProject', { projectId: id, id }, () =>
     request({
       url: `/codegen/project/stop/${id}`,
-      method: 'post'
+      method: 'post',
+      timeout: 60000
     })
   )
 }
@@ -196,6 +198,20 @@ export function buildProject(projectId) {
       method: 'post',
       data: { projectId },
       timeout: 180000 // 3分钟超时
+    })
+  )
+}
+
+/**
+ * 运行目标项目测试（dotnet test）
+ */
+export function testProject(projectId) {
+  return executeCodegenAction('testProject', { projectId }, () =>
+    request({
+      url: '/codegen/project/test',
+      method: 'post',
+      data: { projectId },
+      timeout: 600000 // 10分钟超时
     })
   )
 }

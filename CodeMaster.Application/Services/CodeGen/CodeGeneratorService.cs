@@ -240,7 +240,7 @@ public class CodeGeneratorService
         if (field.IsPrimaryKey)
             arguments.Add("IsPrimaryKey = true");
 
-        arguments.Add($"ColumnName = \"{ToSnakeCase(field.Name)}\"");
+        arguments.Add($"ColumnName = \"{EscapeAttributeString(string.IsNullOrWhiteSpace(field.ColumnName) ? ToSnakeCase(field.Name) : field.ColumnName.Trim())}\"");
 
         if (field.MaxLength is > 0)
             arguments.Add($"Length = {field.MaxLength.Value}");
@@ -280,6 +280,7 @@ public class CodeGeneratorService
         var fieldList = fields.Select(f =>
         {
             var regexPattern = NormalizeRegexPattern(f.RegexPattern);
+            var semantic = FieldSemanticMapper.Map(f);
             return new Dictionary<string, object?>
             {
             ["name"] = f.Name,
@@ -293,7 +294,7 @@ public class CodeGeneratorService
             ["is_interface_field"] = IsInterfaceField(f.Name, entity, baseClassName),
             ["is_ignore"] = f.IsIgnore,
             ["sugar_column_args"] = BuildSugarColumnArguments(f),
-            ["form_control_type"] = f.FormControlType,
+            ["form_control_type"] = semantic.ControlType,
             ["select_data_source"] = f.SelectDataSource,
             ["select_options"] = f.SelectOptions,
             ["is_multiple"] = f.IsMultiple,
@@ -311,7 +312,7 @@ public class CodeGeneratorService
             ["show_in_detail"] = f.ShowInDetail,
             ["show_in_search"] = f.ShowInSearch,
             ["list_width"] = f.ListWidth,
-            ["column_name"] = ToSnakeCase(f.Name),
+            ["column_name"] = string.IsNullOrWhiteSpace(f.ColumnName) ? ToSnakeCase(f.Name) : f.ColumnName.Trim(),
             ["field_category"] = f.FieldCategory,
             ["formula"] = f.Formula,
             ["aggregate_type"] = f.AggregateType,
@@ -930,7 +931,7 @@ public class CodeGeneratorService
             .ToListAsync();
 
         var entityRelations = new List<EntityRelation>();
-        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
         {
             entityRelations = await _db.Queryable<EntityRelation>()
                 .Where(r => r.SourceEntityId == entityId)

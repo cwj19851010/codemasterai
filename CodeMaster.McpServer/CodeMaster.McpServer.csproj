@@ -33,4 +33,33 @@
     </Content>
   </ItemGroup>
 
+  <Target Name="ValidateFullEditionMcpModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
+    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+  </Target>
+
+  <Target Name="BuildUiCompositionMcpModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
+  </Target>
+
+  <Target Name="PublishUiCompositionMcpModule"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
+    <ItemGroup>
+      <UiCompositionMcpFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiCompositionMcpFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiCompositionMcpFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiCompositionMcpFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiCompositionMcpFiles Include="..\CodeMaster.Private\UiComposition.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.LocalAgent.dll" />
+      <UiCompositionMcpFiles Include="..\CodeMaster.Private\UiComposition.McpServer\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.McpServer.dll" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(UiCompositionMcpFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
+
 </Project>

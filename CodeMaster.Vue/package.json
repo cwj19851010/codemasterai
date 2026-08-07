@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build:full",
+    "build:full": "vite build --mode full",
+    "build:public": "vite build --mode public",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
@@ -34,6 +36,8 @@
   "devDependencies": {
     "@playwright/test": "^1.62.0",
     "@tauri-apps/cli": "^2.0.0",
+    "@vue/compiler-dom": "3.5.28",
+    "@vue/compiler-sfc": "3.5.28",
     "@vitejs/plugin-vue": "^5.0.4",
     "sass": "^1.71.1",
     "vite": "^5.1.5"

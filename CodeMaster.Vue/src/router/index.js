@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import Layout from '@/layout/index.vue'
 import { useUserStore } from '@/stores/user'
 import { usePermissionStore } from '@/stores/permission'
+import { modules } from '@view-modules'
 
 // 静态路由（不需要权限）
 export const constantRoutes = [
@@ -53,8 +54,6 @@ const router = createRouter({
 let isAddingRoutes = false
 
 // 使用 import.meta.glob 预加载所有视图组件
-const modules = import.meta.glob('@/views/**/*.vue')
-
 // 动态加载组件
 const loadView = (view) => {
   if (!view) return null

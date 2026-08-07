@@ -34,7 +34,14 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
     public override async Task<long> CreateAsync(CreateProjectModuleDto input)
     {
         input.ModuleName = CSharpModuleNameValidator.RequireValid(input.ModuleName);
-        return await base.CreateAsync(input);
+        try
+        {
+            return await base.CreateAsync(input);
+        }
+        catch (Exception ex)
+        {
+            throw UniqueViolationGuard.Wrap(ex, $"项目下已存在同名模块 '{input.ModuleName}'");
+        }
     }
 
     public override async Task<int> UpdateAsync(long id, UpdateProjectModuleDto input)

@@ -4,6 +4,7 @@ using {{ entity.project_name }}.Core.Repositories;
 using {{ entity.project_name }}.Core.Services;
 using {{ entity.project_name }}.Application.Dtos.{{ entity.module_name }};
 using {{ entity.project_name }}.Domain.Entities.{{ entity.module_name }};
+using GeneratedEntity = {{ entity.project_name }}.Domain.Entities.{{ entity.module_name }}.{{ entity.name }};
 using SqlSugar;
 
 namespace {{ entity.project_name }}.Application.Services.{{ entity.module_name }};
@@ -13,20 +14,20 @@ namespace {{ entity.project_name }}.Application.Services.{{ entity.module_name }
 /// </summary>
 {{~ if entity.is_read_only ~}}
 {{~ if entity.is_tree ~}}
-public class {{ entity.name }}Service : ReadOnlyTreeApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
+public class {{ entity.name }}Service : ReadOnlyTreeApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
 {{~ else if entity.has_primary_key ~}}
-public class {{ entity.name }}Service : ReadOnlyApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
+public class {{ entity.name }}Service : ReadOnlyApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
 {{~ else ~}}
-public class {{ entity.name }}Service : QueryApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
+public class {{ entity.name }}Service : QueryApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}QueryDto>, I{{ entity.name }}Service
 {{~ end ~}}
 {
 {{~ if entity.has_remote_select ~}}
     private readonly ISqlSugarClient _remoteDb;
 {{~ end ~}}
 {{~ if entity.is_tree ~}}
-    public {{ entity.name }}Service(IReadOnlyRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, db, excelService, cacheService)
+    public {{ entity.name }}Service(IReadOnlyRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, db, excelService, cacheService)
 {{~ else ~}}
-    public {{ entity.name }}Service(IReadOnlyRepository<{{ entity.name }}> repository{{ if entity.has_remote_select }}, ISqlSugarClient db{{ end }}, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IReadOnlyRepository<GeneratedEntity> repository{{ if entity.has_remote_select }}, ISqlSugarClient db{{ end }}, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ end ~}}
     {
 {{~ if entity.has_remote_select ~}}
@@ -34,7 +35,7 @@ public class {{ entity.name }}Service : QueryApplicationService<{{ entity.name }
 {{~ end ~}}
     }
 
-    protected override async Task<ISugarQueryable<{{ entity.name }}>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
+    protected override async Task<ISugarQueryable<GeneratedEntity>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
     {
         var query = Repository.GetQueryable();
 {{~ for field in entity.fields ~}}
@@ -51,7 +52,7 @@ public class {{ entity.name }}Service : QueryApplicationService<{{ entity.name }
             var {{ field.name_lower }}Values = input.{{ field.name }}.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if ({{ field.name_lower }}Values.Length > 0)
             {
-                var {{ field.name_lower }}Expression = Expressionable.Create<{{ entity.name }}>();
+                var {{ field.name_lower }}Expression = Expressionable.Create<GeneratedEntity>();
                 foreach (var value in {{ field.name_lower }}Values)
                 {
                     var current = value;
@@ -71,27 +72,27 @@ public class {{ entity.name }}Service : QueryApplicationService<{{ entity.name }
     }
 {{~ if entity.has_primary_key ~}}
 
-    protected override ISugarQueryable<{{ entity.name }}> ApplySorting(ISugarQueryable<{{ entity.name }}> queryable, {{ entity.name }}QueryDto input)
+    protected override ISugarQueryable<GeneratedEntity> ApplySorting(ISugarQueryable<GeneratedEntity> queryable, {{ entity.name }}QueryDto input)
     {
         return queryable.OrderBy(e => e.Id);
     }
 {{~ end ~}}
 {{~ else if entity.is_tree ~}}
-public class {{ entity.name }}Service : TreeApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, I{{ entity.name }}Service
+public class {{ entity.name }}Service : TreeApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, I{{ entity.name }}Service
 {
 {{~ if entity.has_remote_select ~}}
     private readonly ISqlSugarClient _remoteDb;
 {{~ end ~}}
-    public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, db, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, db, cacheService)
     {
 {{~ if entity.has_remote_select ~}}
         _remoteDb = db;
 {{~ end ~}}
     }
 
-    protected override async Task<ISugarQueryable<{{ entity.name }}>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
+    protected override async Task<ISugarQueryable<GeneratedEntity>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
     {
-        var query = (ISugarQueryable<{{ entity.name }}>)Repository.GetQueryable();
+        var query = (ISugarQueryable<GeneratedEntity>)Repository.GetQueryable();
 {{~ for field in entity.fields ~}}
 {{~ if field.show_in_search ~}}
 {{~ if field.form_control_type == "date" ~}}
@@ -106,7 +107,7 @@ public class {{ entity.name }}Service : TreeApplicationService<{{ entity.name }}
             var {{ field.name_lower }}Values = input.{{ field.name }}.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if ({{ field.name_lower }}Values.Length > 0)
             {
-                var {{ field.name_lower }}Expression = Expressionable.Create<{{ entity.name }}>();
+                var {{ field.name_lower }}Expression = Expressionable.Create<GeneratedEntity>();
                 foreach (var value in {{ field.name_lower }}Values)
                 {
                     var current = value;
@@ -125,20 +126,20 @@ public class {{ entity.name }}Service : TreeApplicationService<{{ entity.name }}
         return await Task.FromResult(query);
     }
 {{~ else ~}}
-public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, I{{ entity.name }}Service
+public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, {{ entity.name }}Dto, {{ entity.name }}Dto, {{ entity.name }}QueryDto, Create{{ entity.name }}Dto, Update{{ entity.name }}Dto>, I{{ entity.name }}Service
 {
 {{~ if entity.has_aggregate_relations ~}}
     private readonly ISqlSugarClient _db;
-    public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
     {
         _db = db;
     }
 {{~ else ~}}
 {{~ if entity.has_remote_select ~}}
     private readonly ISqlSugarClient _remoteDb;
-    public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ else ~}}
-    public {{ entity.name }}Service(IRepository<{{ entity.name }}> repository, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ end ~}}
     {
 {{~ if entity.has_remote_select ~}}
@@ -147,9 +148,9 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
     }
 {{~ end ~}}
 
-    protected override async Task<ISugarQueryable<{{ entity.name }}>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
+    protected override async Task<ISugarQueryable<GeneratedEntity>> CreateFilteredQueryAsync({{ entity.name }}QueryDto input)
     {
-        var query = (ISugarQueryable<{{ entity.name }}>)Repository.GetQueryable();
+        var query = (ISugarQueryable<GeneratedEntity>)Repository.GetQueryable();
 {{~ for field in entity.fields ~}}
 {{~ if field.show_in_search ~}}
 {{~ if field.form_control_type == "date" ~}}
@@ -164,7 +165,7 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
             var {{ field.name_lower }}Values = input.{{ field.name }}.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if ({{ field.name_lower }}Values.Length > 0)
             {
-                var {{ field.name_lower }}Expression = Expressionable.Create<{{ entity.name }}>();
+                var {{ field.name_lower }}Expression = Expressionable.Create<GeneratedEntity>();
                 foreach (var value in {{ field.name_lower }}Values)
                 {
                     var current = value;
@@ -183,7 +184,7 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
         return await Task.FromResult(query);
     }
 
-    protected override ISugarQueryable<{{ entity.name }}> ApplySorting(ISugarQueryable<{{ entity.name }}> queryable, {{ entity.name }}QueryDto input)
+    protected override ISugarQueryable<GeneratedEntity> ApplySorting(ISugarQueryable<GeneratedEntity> queryable, {{ entity.name }}QueryDto input)
     {
         return queryable.OrderBy(e => e.Id);
     }
@@ -195,7 +196,7 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
     /// </summary>
     public override async Task<{{ entity.name }}Dto> GetByIdAsync(long id)
     {
-        var entity = await _db.Queryable<{{ entity.name }}>()
+        var entity = await _db.Queryable<GeneratedEntity>()
 {{~ for relation in entity.one_to_many_relations ~}}
             .Includes(e => e.{{ relation.child_entity_name }}s)
 {{~ end ~}}
@@ -265,7 +266,7 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
         try
         {
 {{~ end ~}}
-        var entity = new {{ entity.name }}();
+        var entity = new GeneratedEntity();
         input.Adapt(entity);
 {{~ for relation in entity.one_to_many_relations ~}}
         entity.{{ relation.child_entity_name }}s = null!;
@@ -323,7 +324,7 @@ public class {{ entity.name }}Service : CrudApplicationService<{{ entity.name }}
         try
         {
 {{~ end ~}}
-        var entity = new {{ entity.name }}();
+        var entity = new GeneratedEntity();
         input.Adapt(entity);
 {{~ for relation in entity.one_to_many_relations ~}}
         entity.{{ relation.child_entity_name }}s = null!;

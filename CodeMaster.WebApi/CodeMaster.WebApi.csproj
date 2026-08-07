@@ -15,6 +15,36 @@
     <PackageReference Include="System.ClientModel" Version="1.10.0" />
   </ItemGroup>
 
+  <Target Name="ValidateCodeMasterVue"
+          BeforeTargets="Publish"
+          Condition="'$(SkipCodeMasterVueBuild)' != 'true' and !Exists('..\CodeMaster.Vue\package.json')">
+    <Error Text="CodeMaster publish requires the CodeMaster.Vue directory. Set SkipCodeMasterVueBuild=true only for a backend-only publish." />
+  </Target>
+
+  <Target Name="BuildCodeMasterVue"
+          BeforeTargets="Publish"
+          Condition="'$(SkipCodeMasterVueBuild)' != 'true' and Exists('..\CodeMaster.Vue\package.json')">
+    <Exec Condition="!Exists('..\CodeMaster.Vue\node_modules')"
+          WorkingDirectory="..\CodeMaster.Vue"
+          Command="npm install" />
+    <Exec WorkingDirectory="..\CodeMaster.Vue"
+          Command="npm run $(CodeMasterVueBuildScript)" />
+  </Target>
+
+  <Target Name="PublishCodeMasterVue"
+          AfterTargets="Publish"
+          Condition="'$(SkipCodeMasterVueBuild)' != 'true' and Exists('..\CodeMaster.Vue\dist\index.html')">
+    <ItemGroup>
+      <CodeMasterVueFiles Include="..\CodeMaster.Vue\dist\**\*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(PublishDir)wwwroot\assets" />
+    <Delete Files="$(PublishDir)wwwroot\index.html" />
+    <MakeDir Directories="$(PublishDir)wwwroot" />
+    <Copy SourceFiles="@(CodeMasterVueFiles)"
+          DestinationFiles="@(CodeMasterVueFiles->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\CodeMaster.Agent\CodeMaster.Agent.csproj" />
     <ProjectReference Include="..\CodeMaster.Application\CodeMaster.Application.csproj" />
@@ -33,5 +63,49 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="ValidateFullEditionModules"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
+    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+  </Target>
+
+  <Target Name="BuildUiCompositionModules"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
+    <MSBuild Projects="..\CodeMaster.Private\UiComposition.Agent\CodeMaster.UiComposition.Agent.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
+  </Target>
+
+  <Target Name="PublishUiCompositionModules"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
+    <ItemGroup>
+      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition.Agent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Agent.dll" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(UiModuleFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
+
+  <Target Name="RemoveUiCompositionModulesFromPublicPublish"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' != 'true'">
+    <ItemGroup>
+      <PublicPublishPrivateFiles Include="$(PublishDir)modules\CodeMaster.UiComposition.dll" />
+      <PublicPublishPrivateFiles Include="$(PublishDir)modules\CodeMaster.UiComposition.Agent.dll" />
+      <PublicPublishPrivateFiles Include="$(PublishDir)modules\Microsoft.OpenApi.dll" />
+      <PublicPublishPrivateFiles Include="$(PublishDir)modules\Microsoft.OpenApi.Readers.dll" />
+      <PublicPublishPrivateFiles Include="$(PublishDir)modules\SharpYaml.dll" />
+    </ItemGroup>
+    <Delete Files="@(PublicPublishPrivateFiles)" />
+  </Target>
 
 </Project>

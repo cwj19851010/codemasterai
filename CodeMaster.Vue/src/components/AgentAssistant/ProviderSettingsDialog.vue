@@ -189,7 +189,7 @@ const handleSave = async () => {
     const payload = { ...form }
     const isLocal = payload.executionMode === 'Local'
     const serverPayload = isLocal
-      ? { ...payload, apiKey: '', clearApiKey: true }
+      ? { ...payload, apiKey: '', clearApiKey: true, extraHeadersJson: '' }
       : payload
     let savedProvider
     if (editingId.value) {

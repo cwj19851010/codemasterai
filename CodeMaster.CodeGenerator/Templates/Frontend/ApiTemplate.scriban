@@ -51,6 +51,26 @@ export function getById(id) {
     method: 'get'
   })
 }
+{{~ if entity.is_read_only ~}}
+// 获取详情（只读数据源别名）
+export function getDetail(id) {
+  return request({
+    url: `/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/getdetail/${id}`,
+    method: 'get'
+  })
+}
+{{~ end ~}}
+{{~ end ~}}
+
+{{~ if entity.is_read_only ~}}
+// 获取选项列表
+export function getOptionList(params) {
+  return request({
+    url: '/{{ entity.module_name_all_lower }}/{{ entity.name_all_lower }}/getoptionlist',
+    method: 'get',
+    params
+  })
+}
 {{~ end ~}}
 
 {{~ if !entity.is_read_only ~}}

@@ -65,6 +65,7 @@
 
       "CodeMaster.Core/DynamicApi/DynamicApiAttribute.cs",
       "CodeMaster.Core/DynamicApi/DynamicApiOptions.cs",
+      "CodeMaster.Core/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
 
       "CodeMaster.Core/Entities/DataPermissionEntityBase.cs",
       "CodeMaster.Core/Entities/EntityBase.cs",
@@ -201,6 +202,7 @@
 
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiControllerConvention.cs",
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiControllerFeatureProvider.cs",
+      "CodeMaster.Infrastructure/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiExtensions.cs",
 
       "CodeMaster.Infrastructure/Middleware/DataPermissionMiddleware.cs",

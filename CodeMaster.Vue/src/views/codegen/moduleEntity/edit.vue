@@ -156,7 +156,7 @@
     </el-card>
 
     <!-- 一对一组成关系 -->
-    <el-card shadow="never" style="margin-top: 20px">
+    <el-card v-if="!isMetadataOnlyEntity" shadow="never" style="margin-top: 20px">
       <template #header>
         <div class="card-header">
           <div>
@@ -204,7 +204,7 @@
     </el-card>
 
     <!-- 一对多关系 -->
-    <el-card shadow="never" style="margin-top: 20px">
+    <el-card v-if="!isMetadataOnlyEntity" shadow="never" style="margin-top: 20px">
       <template #header>
         <div class="card-header">
           <span>一对多关系</span>
@@ -569,7 +569,7 @@
         </el-form-item>
         <el-form-item label="子表" prop="childEntityId">
           <el-select v-model="relationForm.childEntityId" placeholder="选择子表" style="width: 100%" @change="handleChildEntityChange">
-            <el-option v-for="e in allEntities" :key="e.id" :label="`${e.name}（${e.description}）`" :value="e.id" />
+            <el-option v-for="e in relationEntityOptions" :key="e.id" :label="`${e.name}（${e.description}）`" :value="e.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="子表外键" prop="childForeignKey">
@@ -678,6 +678,7 @@ const resultMappingRows = ref([])
 const form = reactive({
   id: null, projectId: null, moduleId: null,
   name: '', description: '', tableName: '',
+  generationMode: 0,
   hasPrimaryKey: true, isTree: false, isReadOnly: false,
   hasDataPermission: false, hasTenant: false,
   hasAudit: true, hasSoftDelete: true,
@@ -1031,9 +1032,17 @@ const entitySourceFieldOptions = computed(() =>
   displayFields.value.filter(field => !field._deleted && isPersistedRelationField(field))
 )
 
-const entityRelationTargetOptions = computed(() =>
-  allEntities.value.filter(entity => entity.id !== form.id && (!form.projectId || entity.projectId === form.projectId))
+const isMetadataOnlyEntity = computed(() => Number(form.generationMode) === 1)
+
+const relationEntityOptions = computed(() =>
+  allEntities.value.filter(entity =>
+    Number(entity.generationMode) !== 1 &&
+    entity.id !== form.id &&
+    (!form.projectId || entity.projectId === form.projectId)
+  )
 )
+
+const entityRelationTargetOptions = computed(() => relationEntityOptions.value)
 
 function isPersistedRelationField(field) {
   const category = String(field?.fieldCategory || 'Normal').toLowerCase()

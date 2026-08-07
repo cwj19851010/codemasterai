@@ -33,12 +33,12 @@
 
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.18" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.18">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.0">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.18">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
@@ -55,11 +55,11 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(DbProvider)'=='PostgreSQL'">
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(DbProvider)'=='Sqlite'">
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.18" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(DbProvider)'=='Oracle'">
@@ -67,7 +67,7 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(DbProvider)'=='' OR '$(DbProvider)'=='SqlServer'">
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.18" />
   </ItemGroup>
 
   <ItemGroup>
@@ -83,5 +83,33 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <Target Name="ValidateFullEditionMigratorModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
+    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+  </Target>
+
+  <Target Name="BuildUiCompositionMigratorModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);DbProvider=$(DbProvider);SkipUiCompositionWebApiCopy=true" />
+  </Target>
+
+  <Target Name="PublishUiCompositionMigratorModule"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
+    <ItemGroup>
+      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition.Migrator\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Migrator.dll" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(UiCompositionMigratorFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
 
 </Project>

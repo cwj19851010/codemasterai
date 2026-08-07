@@ -65,8 +65,8 @@ public sealed class AgentController : ControllerBase
         => ExecuteAsync(async () => await _conversationService.GetToolExecutionsAsync(id));
 
     [HttpPost("chat")]
-    public Task<IActionResult> Chat([FromBody] SendAiMessageRequest input)
-        => ExecuteAsync(async () => await _conversationService.SendAsync(input));
+    public Task<IActionResult> Chat([FromBody] SendAiMessageRequest input, CancellationToken cancellationToken)
+        => ExecuteAsync(async () => await _conversationService.SendAsync(input, cancellationToken));
 
     [HttpPost("local/chat/begin")]
     public Task<IActionResult> BeginLocalChat([FromBody] SendAiMessageRequest input)
