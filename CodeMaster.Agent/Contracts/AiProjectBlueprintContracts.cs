@@ -2,12 +2,97 @@ namespace CodeMaster.Agent.Contracts;
 
 public sealed class AiProjectBlueprintDto
 {
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public AiProjectSummaryDto Project { get; set; } = new();
     public List<AiModuleBlueprintDto> Modules { get; set; } = new();
     public List<AiControlCatalogDto> Controls { get; set; } = new();
     public List<AiPageTemplateCatalogDto> PageTemplates { get; set; } = new();
     public List<AiChildTemplateCatalogDto> ChildTemplates { get; set; } = new();
+}
+
+public sealed class AiProjectOverviewDto
+{
+    public int SchemaVersion { get; set; } = 2;
+    public string StructureVersion { get; set; } = string.Empty;
+    public AiProjectSummaryDto Project { get; set; } = new();
+    public AiProjectOverviewTotalsDto Totals { get; set; } = new();
+    public List<AiModuleOverviewDto> Modules { get; set; } = new();
+}
+
+public sealed class AiProjectOverviewTotalsDto
+{
+    public int ModuleCount { get; set; }
+    public int EntityCount { get; set; }
+    public int FieldCount { get; set; }
+    public int RelationCount { get; set; }
+}
+
+public sealed class AiModuleOverviewDto
+{
+    public long Id { get; set; }
+    public string ModuleName { get; set; } = string.Empty;
+    public string ModuleDescription { get; set; } = string.Empty;
+    public int OrderNum { get; set; }
+    public List<AiEntityOverviewDto> Entities { get; set; } = new();
+}
+
+public sealed class AiEntityOverviewDto
+{
+    public long Id { get; set; }
+    public long ModuleId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? BusinessDescription { get; set; }
+    public bool HasPrimaryKey { get; set; }
+    public bool IsTree { get; set; }
+    public bool IsReadOnly { get; set; }
+    public bool HasTenant { get; set; }
+    public bool HasDataPermission { get; set; }
+    public bool HasAudit { get; set; }
+    public bool HasSoftDelete { get; set; }
+    public bool GenerateFrontend { get; set; }
+    public bool IsChildTable { get; set; }
+    public bool IsGenerated { get; set; }
+    public int OrderNum { get; set; }
+    public List<AiFieldOverviewDto> Fields { get; set; } = new();
+    public List<AiRelationOverviewDto> Relations { get; set; } = new();
+}
+
+public sealed class AiFieldOverviewDto
+{
+    public long Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? BusinessDescription { get; set; }
+    public string DataType { get; set; } = string.Empty;
+    public bool IsSystemField { get; set; }
+    public bool IsRequired { get; set; }
+    public string FormControlType { get; set; } = string.Empty;
+    public string FieldCategory { get; set; } = string.Empty;
+    public string? SelectDataSource { get; set; }
+    public string? RelatedEntityName { get; set; }
+    public bool IsMultiple { get; set; }
+    public string PageUsage { get; set; } = string.Empty;
+    public int OrderNum { get; set; }
+}
+
+public sealed class AiRelationOverviewDto
+{
+    public long Id { get; set; }
+    public long TargetEntityId { get; set; }
+    public string? TargetEntityName { get; set; }
+    public string RelationName { get; set; } = string.Empty;
+    public string Cardinality { get; set; } = string.Empty;
+    public string Ownership { get; set; } = string.Empty;
+}
+
+public sealed class AiCodegenCatalogDto
+{
+    public List<AiControlCatalogDto> Controls { get; set; } = new();
+    public List<AiPageTemplateCatalogDto> PageTemplates { get; set; } = new();
+    public List<AiChildTemplateCatalogDto> ChildTemplates { get; set; } = new();
+    /// <summary>CodeMaster platform constraints (frontend, backend, controls, workflow, generation).</summary>
+    public AiPlatformConstraintsDto? PlatformConstraints { get; set; }
 }
 
 public sealed class AiProjectSummaryDto
@@ -42,6 +127,7 @@ public sealed class AiEntityBlueprintDto
     public long ModuleId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public string? BusinessDescription { get; set; }
     public string? TableName { get; set; }
     public bool HasPrimaryKey { get; set; }
     public bool IsTree { get; set; }
@@ -68,6 +154,7 @@ public sealed class AiUiPageBlueprintDto
     public long EntityId { get; set; }
     public string EntityName { get; set; } = string.Empty;
     public string EntityDescription { get; set; } = string.Empty;
+    public string? EntityBusinessDescription { get; set; }
     public string PageType { get; set; } = string.Empty;
     public List<AiUiStableNodeDto> StableNodes { get; set; } = new();
     public List<AiUiFieldNodeDto> Fields { get; set; } = new();
@@ -86,6 +173,7 @@ public sealed class AiUiFieldNodeDto
     public long FieldId { get; set; }
     public string FieldName { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public string? BusinessDescription { get; set; }
     public string ControlType { get; set; } = string.Empty;
     public List<string> GenIds { get; set; } = new();
     public bool Visible { get; set; }
@@ -96,7 +184,9 @@ public sealed class AiFieldBlueprintDto
 {
     public long Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string? ColumnName { get; set; }
     public string Description { get; set; } = string.Empty;
+    public string? BusinessDescription { get; set; }
     public bool IsSystemField { get; set; }
     public string DataType { get; set; } = string.Empty;
     public bool IsNullable { get; set; }
@@ -180,4 +270,14 @@ public sealed class AiChildTemplateCatalogDto
 {
     public string PageType { get; set; } = string.Empty;
     public string ChildType { get; set; } = string.Empty;
+}
+
+public sealed class AiPlatformConstraintsDto
+{
+    public string Frontend { get; set; } = string.Empty;
+    public string Backend { get; set; } = string.Empty;
+    public string Relations { get; set; } = string.Empty;
+    public string Controls { get; set; } = string.Empty;
+    public string Workflow { get; set; } = string.Empty;
+    public string Generation { get; set; } = string.Empty;
 }

@@ -1,8 +1,24 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using CodeMaster.Agent.Serialization;
 using CodeMaster.Application.Dtos.CodeGen;
 
 namespace CodeMaster.Agent.Contracts;
+
+public static class AiWorkflowModes
+{
+    public const string Standard = "Standard";
+    public const string Minimal = "Minimal";
+
+    public static string Normalize(string? value)
+        => string.Equals(value, Minimal, StringComparison.OrdinalIgnoreCase)
+            ? Minimal
+            : Standard;
+
+    public static bool ShouldAutoApprove(string? workflowMode, bool autoApproveApprovals)
+        => Normalize(workflowMode) == Minimal || autoApproveApprovals;
+}
 
 public sealed class AiConversationDto
 {
@@ -13,6 +29,8 @@ public sealed class AiConversationDto
     public string ProviderName { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string WorkflowMode { get; set; } = AiWorkflowModes.Standard;
+    public bool AutoApproveApprovals { get; set; }
     public DateTime? LastMessageAt { get; set; }
     public DateTime CreateTime { get; set; }
 }
@@ -22,6 +40,19 @@ public sealed class CreateAiConversationRequest
     public long ProjectId { get; set; }
     public long ProviderId { get; set; }
     public string? Title { get; set; }
+    public string? WorkflowMode { get; set; }
+    public bool AutoApproveApprovals { get; set; }
+}
+
+public sealed class UpdateAiConversationPreferencesRequest
+{
+    public string? WorkflowMode { get; set; }
+    public bool AutoApproveApprovals { get; set; }
+}
+
+public sealed class UpdateAiConversationProviderRequest
+{
+    public long ProviderId { get; set; }
 }
 
 public sealed class AiMessageDto
@@ -42,10 +73,37 @@ public sealed class SendAiMessageRequest
     public string Content { get; set; } = string.Empty;
 }
 
+public sealed class CancelAiChatRequest
+{
+    public long ConversationId { get; set; }
+    public string RequestId { get; set; } = string.Empty;
+}
+
 public sealed class AiChatResult
 {
     public AiMessageDto Message { get; set; } = new();
     public List<AiToolExecutionDto> PendingApprovals { get; set; } = new();
+}
+
+public sealed class AiChatStreamEvent
+{
+    public string Event { get; set; } = string.Empty;
+    public string RequestId { get; set; } = string.Empty;
+    public int Sequence { get; set; }
+    public string? Phase { get; set; }
+    public string? Text { get; set; }
+    public string? ToolName { get; set; }
+    public string? Message { get; set; }
+    public string? ToolStage { get; set; }
+    public string? NextAction { get; set; }
+    public int Attempt { get; set; }
+    public string? ExceptionType { get; set; }
+    public string? ExceptionSource { get; set; }
+    public string? FailureKind { get; set; }
+    public string? CorrelationId { get; set; }
+    public string? StackSnippet { get; set; }
+    public AiChatResult? Result { get; set; }
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }
 
 public sealed class BeginLocalAiChatResult
@@ -58,6 +116,7 @@ public sealed class BeginLocalAiChatResult
     public string Instructions { get; set; } = string.Empty;
     public List<AiMessageDto> Messages { get; set; } = new();
     public List<string> AvailableTools { get; set; } = new();
+    public bool RequiresWorkPlan { get; set; }
 }
 
 public sealed class InvokeLocalAiToolRequest
@@ -65,12 +124,15 @@ public sealed class InvokeLocalAiToolRequest
     public long ConversationId { get; set; }
     public string RequestId { get; set; } = string.Empty;
     public string ToolName { get; set; } = string.Empty;
+    public string? KnownProjectStructureVersion { get; set; }
     public JsonElement Arguments { get; set; }
 }
 
 public sealed class InvokeLocalAiToolResult
 {
     public string Output { get; set; } = string.Empty;
+    public string? ProjectStructureVersion { get; set; }
+    public bool ProjectStructureNotModified { get; set; }
 }
 
 public sealed class CompleteLocalAiChatRequest
@@ -78,6 +140,7 @@ public sealed class CompleteLocalAiChatRequest
     public long ConversationId { get; set; }
     public string RequestId { get; set; } = string.Empty;
     public string ResponseText { get; set; } = string.Empty;
+    public int PlanContinuationAttempts { get; set; }
 }
 
 public sealed class AiToolExecutionDto
@@ -85,6 +148,9 @@ public sealed class AiToolExecutionDto
     public long Id { get; set; }
     public long ConversationId { get; set; }
     public long ProjectId { get; set; }
+    public long? WorkPlanId { get; set; }
+    public long? WorkBatchId { get; set; }
+    public long? WorkTaskId { get; set; }
     public string? RequestId { get; set; }
     public string ToolName { get; set; } = string.Empty;
     public string? InputJson { get; set; }
@@ -101,6 +167,7 @@ public sealed class CreateModuleProposal
     [Description("Human-readable module title. Chinese or another display language belongs here, for example 订单管理.")]
     public string ModuleDescription { get; set; } = string.Empty;
     public string? Icon { get; set; }
+    [Description("Top-level menu order. Use 3..9998 for ordinary business modules. Values 1 and 2 are reserved for System/Monitor. Use 9999 only for the Reporting/Reports module; use 0 to request automatic allocation.")]
     public int OrderNum { get; set; }
     public string? RoutePath { get; set; }
     public string? Remark { get; set; }
@@ -112,7 +179,10 @@ public sealed class CreateEntityProposal
     [Description("Technical module name. Use the existing/proposed ASCII PascalCase ModuleName, for example OrderManagement; never use the Chinese display title.")]
     public string? ModuleName { get; set; }
     public string Name { get; set; } = string.Empty;
+    [Description("Short display title used by menus and page headings. Keep it within 50 characters. Prefer Chinese when the project's display language is Chinese.")]
     public string Description { get; set; } = string.Empty;
+    [Description("Long-form business semantics for Agent analysis and documentation. Explain purpose, lifecycle, tenant or deletion rules, and important constraints. It is not rendered as a menu title.")]
+    public string? BusinessDescription { get; set; }
     [Description("Optional custom physical table name. Leave null for CodeMaster's default plural snake_case name without a prefix. Set only when the user explicitly requests a custom table name; never invent a prefix.")]
     public string? TableName { get; set; }
     [Description("Whether to generate the standard long Id field and IEntity<long>. Writable and tree entities require this. Keyless entities must be read-only.")]
@@ -135,6 +205,10 @@ public sealed class CreateEntityProposal
     public string? MenuIcon { get; set; }
     public int OrderNum { get; set; }
     public string? Remark { get; set; }
+    [Description("Optional existing entity id whose non-system field and control metadata should be copied into this new entity. Prefer CopyFieldsFromEntityName when the name is known. This is useful for repeated or all-controls entities and is expanded by the local client before server validation. Explicit Fields are appended and replace copied fields with the same name.")]
+    public long? CopyFieldsFromEntityId { get; set; }
+    [Description("Optional existing entity name whose non-system field and control metadata should be copied into this new entity. Use this instead of enumerating every field for repeated or all-controls entities. Do not set both copy source properties. Explicit Fields are appended and replace copied fields with the same name.")]
+    public string? CopyFieldsFromEntityName { get; set; }
     public List<CreateEntityFieldProposal> Fields { get; set; } = new();
     public List<CreateEntityRelationProposal> Relations { get; set; } = new();
 }
@@ -142,7 +216,10 @@ public sealed class CreateEntityProposal
 public sealed class CreateEntityFieldProposal
 {
     public string Name { get; set; } = string.Empty;
+    [Description("Short field label used by generated forms and tables. Keep it within 50 characters. Prefer Chinese when the project's display language is Chinese.")]
     public string Description { get; set; } = string.Empty;
+    [Description("Long-form field semantics for Agent analysis and documentation. Explain business meaning, units, value rules, relations, and constraints. It is not rendered as a field label.")]
+    public string? BusinessDescription { get; set; }
     [Description("C# data type. Prefer canonical names such as string, int, long, decimal, bool, DateTime, DateOnly, DateTimeOffset, Guid. Use FormControlType=datetime for the UI control; do not use it as the C# type name.")]
     public string DataType { get; set; } = "string";
     public bool IsNullable { get; set; }
@@ -169,15 +246,19 @@ public sealed class CreateEntityFieldProposal
     public int OrderNum { get; set; }
     [Description("For ordinary select: enum, dict, or api. api means a project/built-in related entity and enables generated batch label resolution plus form option loading.")]
     public string? SelectDataSource { get; set; }
-    [Description("For api select, JSON config such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field. For dict/static select, keep the existing dictionary code or option JSON.")]
+    [Description("For api select, pass a JSON string or object such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field. For dict/static select, keep the existing dictionary code or option JSON.")]
+    [JsonConverter(typeof(JsonTextValueConverter))]
     public string? SelectOptions { get; set; }
     public bool IsMultiple { get; set; }
     [Description("Source entity for api select, select-table, or cascader. Do not use select-table for a simple scalar code lookup. For a self-contained control demo, select-table may use SysUser and cascader may use the tree entity SysDept.")]
     public string? RelatedEntityName { get; set; }
     [Description("Value/code field on the api source entity. Defaults to Id.")]
     public string? RelatedEntityIdField { get; set; }
-    [Description("JSON array of label fields on the related entity, for example [\"Name\"]. Required for api select, select-table, and cascader.")]
+    [Description("Label fields on the related entity. A native string array such as [\"Name\"] and a JSON-encoded string are both accepted. Required for api select, select-table, and cascader.")]
+    [JsonConverter(typeof(JsonTextValueConverter))]
     public string? RelatedEntityDisplayFields { get; set; }
+    [Description("Optional result mappings. A native JSON array of sourceField/targetField objects and a JSON-encoded string are both accepted.")]
+    [JsonConverter(typeof(JsonTextValueConverter))]
     public string? ResultMappings { get; set; }
     [Description("Normal, Computed, or Aggregate. Computed and Aggregate fields are generated as read-only calculated form values.")]
     public string FieldCategory { get; set; } = "Normal";
@@ -228,6 +309,8 @@ public sealed class ProjectChangeSetProposal
     public string Summary { get; set; } = string.Empty;
     public List<CreateModuleProposal> Modules { get; set; } = new();
     public List<CreateEntityProposal> Entities { get; set; } = new();
+    [Description("Dictionary changes included in this same CodeMaster metadata change. Use this list instead of creating a separate dictionary request when a request also changes modules or entities.")]
+    public List<ProjectDictionaryChangeProposal> Dictionaries { get; set; } = new();
     public List<UpdateModuleProposal> ModuleUpdates { get; set; } = new();
     public List<UpdateEntityProposal> EntityUpdates { get; set; } = new();
     public List<long> DeleteEntityIds { get; set; } = new();
@@ -235,6 +318,70 @@ public sealed class ProjectChangeSetProposal
     public string GenerationMode { get; set; } = "None";
     public List<long> GenerationEntityIds { get; set; } = new();
     public bool BuildAfterGeneration { get; set; }
+
+    [Description("Whether to run the generated project test project after generation. Defaults to true to close the auto-test loop.")]
+    public bool TestAfterGeneration { get; set; } = true;
+}
+
+public sealed class ProjectDictionaryQuery
+{
+    [Description("Target tenant id inside the generated project. Use 0 for the host/default tenant.")]
+    public long TenantId { get; set; }
+
+    [Description("Optional exact dictionary code, for example order_status.")]
+    public string? DictType { get; set; }
+
+    [Description("Optional text matched against dictionary code, name, entry label, or entry value.")]
+    public string? Keyword { get; set; }
+
+    public bool IncludeItems { get; set; } = true;
+
+    public bool IncludeDisabled { get; set; } = true;
+}
+
+public sealed class ProjectDictionaryChangeProposal
+{
+    public string Summary { get; set; } = string.Empty;
+
+    [Description("Target tenant id inside the generated project. Use 0 for the host/default tenant.")]
+    public long TenantId { get; set; }
+
+    [Description("Stable dictionary code referenced by field SelectOptions, for example order_status.")]
+    public string DictType { get; set; } = string.Empty;
+
+    public string DictName { get; set; } = string.Empty;
+
+    public string? LangKey { get; set; }
+
+    [Description("0 enabled, 1 disabled. Omit to preserve the existing value.")]
+    public int? Status { get; set; }
+
+    public int? Sort { get; set; }
+
+    public string? Remark { get; set; }
+
+    [Description("Entries to create or update. Existing entries omitted from this list are preserved.")]
+    public List<ProjectDictionaryItemProposal> Items { get; set; } = new();
+}
+
+public sealed class ProjectDictionaryItemProposal
+{
+    public string Label { get; set; } = string.Empty;
+
+    [Description("Stable stored value. Existing entries are matched by this value.")]
+    public string Value { get; set; } = string.Empty;
+
+    public string? LangKey { get; set; }
+
+    [Description("0 no, 1 yes. Omit to preserve the existing value.")]
+    public int? IsDefault { get; set; }
+
+    [Description("0 enabled, 1 disabled. Omit to preserve the existing value.")]
+    public int? Status { get; set; }
+
+    public int? Sort { get; set; }
+
+    public string? Remark { get; set; }
 }
 
 public sealed class UpdateModuleProposal
@@ -245,6 +392,7 @@ public sealed class UpdateModuleProposal
     [Description("New human-readable module title. Chinese or another display language belongs here.")]
     public string? ModuleDescription { get; set; }
     public string? Icon { get; set; }
+    [Description("Top-level menu order. Ordinary business modules must use 3..9998; 1 and 2 are reserved, and 9999 is only for Reporting/Reports. Omit to preserve the current order.")]
     public int? OrderNum { get; set; }
     public string? RoutePath { get; set; }
     public string? Remark { get; set; }
@@ -254,7 +402,10 @@ public sealed class UpdateEntityProposal
 {
     public long EntityId { get; set; }
     public string? Name { get; set; }
+    [Description("New short display title. Keep it within 50 characters; omit to preserve the current title.")]
     public string? Description { get; set; }
+    [Description("New long-form business semantics. Omit to preserve the current value; use an empty string to clear it.")]
+    public string? BusinessDescription { get; set; }
     [Description("Optional custom physical table name. Omit to keep the current value. Use an empty string only when the user explicitly asks to restore CodeMaster's default unprefixed table name.")]
     public string? TableName { get; set; }
     [Description("Whether the entity has the standard long Id primary key. Setting false also requires IsReadOnly=true and IsTree=false.")]
@@ -285,7 +436,10 @@ public sealed class UpdateEntityFieldProposal
 {
     public long FieldId { get; set; }
     public string? Name { get; set; }
+    [Description("New short field label. Keep it within 50 characters; omit to preserve the current label.")]
     public string? Description { get; set; }
+    [Description("New long-form field semantics. Omit to preserve the current value; use an empty string to clear it.")]
+    public string? BusinessDescription { get; set; }
     [Description("C# data type. Prefer canonical names such as string, int, long, decimal, bool, DateTime, DateOnly, DateTimeOffset, Guid.")]
     public string? DataType { get; set; }
     public bool? IsNullable { get; set; }
@@ -316,15 +470,19 @@ public sealed class UpdateEntityFieldProposal
     public int? OrderNum { get; set; }
     [Description("For select, use enum, dict, or api. api enables generated batch label resolution and option loading.")]
     public string? SelectDataSource { get; set; }
-    [Description("For api select, JSON such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field; otherwise preserve dictionary/static option config.")]
+    [Description("For api select, pass a JSON string or object such as {\"loadMode\":\"batch\",\"parentField\":\"ProvinceCode\",\"parentValueField\":\"ParentCode\"}; parentField is the current form field and parentValueField is the source-entity filter field; otherwise preserve dictionary/static option config.")]
+    [JsonConverter(typeof(JsonTextValueConverter))]
     public string? SelectOptions { get; set; }
     public bool? IsMultiple { get; set; }
     [Description("Related source entity for api select, select-table, or cascader. For a self-contained control demo, use SysUser for select-table and the tree entity SysDept for cascader.")]
     public string? RelatedEntityName { get; set; }
     [Description("Value/code field on the api source entity; defaults to Id.")]
     public string? RelatedEntityIdField { get; set; }
-    [Description("JSON array of related display fields. Required for api select, select-table, and cascader.")]
+    [Description("Related display fields. A native string array and a JSON-encoded string are both accepted. Required for api select, select-table, and cascader.")]
+    [JsonConverter(typeof(JsonTextValueConverter))]
     public string? RelatedEntityDisplayFields { get; set; }
+    [Description("Optional result mappings. A native JSON array of sourceField/targetField objects and a JSON-encoded string are both accepted.")]
+    [JsonConverter(typeof(JsonTextValueConverter))]
     public string? ResultMappings { get; set; }
     [Description("Normal, Computed, or Aggregate.")]
     public string? FieldCategory { get; set; }
@@ -369,12 +527,17 @@ public sealed class ProjectChangeSetValidationResult
     public int UpdatedEntityCount { get; set; }
     public int DeletedModuleCount { get; set; }
     public int DeletedEntityCount { get; set; }
+    public int DictionaryCount { get; set; }
 }
 
 public sealed class ProjectChangeSetExecutionResult
 {
     public long ProjectId { get; set; }
+    public long? WorkPlanId { get; set; }
+    public long? WorkBatchId { get; set; }
+    public long? WorkTaskId { get; set; }
     public string Summary { get; set; } = string.Empty;
+    public List<string> AutomaticRepairs { get; set; } = new();
     public List<ProjectChangeCreatedItem> CreatedModules { get; set; } = new();
     public List<ProjectChangeCreatedItem> CreatedEntities { get; set; } = new();
     public List<ProjectChangeCreatedItem> UpdatedModules { get; set; } = new();
@@ -382,6 +545,7 @@ public sealed class ProjectChangeSetExecutionResult
     public List<long> DeletedModuleIds { get; set; } = new();
     public List<long> DeletedEntityIds { get; set; } = new();
     public int CreatedRelationCount { get; set; }
+    public int CreatedDictionaryCount { get; set; }
     public List<AiClientActionDto> ClientActions { get; set; } = new();
     public string? ClientExecutionOutput { get; set; }
     public string? ClientExecutionFailedAction { get; set; }
@@ -467,6 +631,15 @@ public sealed class AiClientActionDto
 {
     public string Action { get; set; } = string.Empty;
     public long ProjectId { get; set; }
+    public long? WorkPlanId { get; set; }
+    public long? WorkBatchId { get; set; }
+    public long? WorkTaskId { get; set; }
+    public long? WorkAttemptId { get; set; }
+    public long? WorkCheckpointId { get; set; }
+    public string? WorkCheckpointKey { get; set; }
+    public string? InputHash { get; set; }
+    public string? IdempotencyKey { get; set; }
+    public long? PageId { get; set; }
     public long? EntityId { get; set; }
     public List<long> EntityIds { get; set; } = new();
     public string? TargetKind { get; set; }
@@ -479,7 +652,15 @@ public sealed class AiClientActionDto
     public string? PrimaryColor { get; set; }
     public string? SecondaryColor { get; set; }
     public bool ReplaceExistingDesign { get; set; }
+    public bool Incremental { get; set; } = true;
     public List<ProjectUiNodeOperationDto> Operations { get; set; } = new();
+}
+
+public sealed class FailLocalAiChatRequest
+{
+    public long ConversationId { get; set; }
+    public string RequestId { get; set; } = string.Empty;
+    public string ErrorMessage { get; set; } = string.Empty;
 }
 
 public sealed class CompleteAiClientActionsRequest
@@ -494,7 +675,10 @@ public sealed class CompleteAiClientActionsRequest
 public sealed class CompleteAiClientActionsResult
 {
     public AiToolExecutionDto Execution { get; set; } = new();
+    public AiToolExecutionDto? NextExecution { get; set; }
+    public AiProjectWorkPlanDto? WorkPlan { get; set; }
     public AiMessageDto? RepairMessage { get; set; }
+    public SendAiMessageRequest? LocalRepairRequest { get; set; }
     public List<AiToolExecutionDto> PendingApprovals { get; set; } = new();
     public int RepairAttempt { get; set; }
     public bool AutomaticRepairStopped { get; set; }
