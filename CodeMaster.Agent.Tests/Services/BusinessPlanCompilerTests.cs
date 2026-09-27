@@ -6,6 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using CodeMaster.Agent.Contracts;
 using CodeMaster.Agent.Services;
+using Xunit;
+
+namespace CodeMaster.Agent.Tests.Services;
 
 public class BusinessPlanCompilerTests
 {
@@ -13,8 +16,6 @@ public class BusinessPlanCompilerTests
     public async Task EngineeringManagement_CompilesToStandardPlan()
     {
         var def = BuildEngineeringManagementDefinition();
-        Console.WriteLine("Input: " + def.Modules.Count + " module(s), " + def.Entities.Count + " entity/entities, " + def.Relations.Count + " relation(s), " + def.Views.Count + " view(s), " + def.Pages.Count + " page(s)");
-        Console.WriteLine();
 
         var blueprintService = new FakeBlueprintService();
         var progressEvents = new List<BusinessPlanCompileEvent>();
@@ -24,38 +25,106 @@ public class BusinessPlanCompilerTests
             projectId: 2104017857959563264,
             conversationId: 2104092621113790464,
             blueprintService: blueprintService,
-            progressAsync: evt => { progressEvents.Add(evt); Console.WriteLine("  [compile " + (evt.Percent.HasValue ? evt.Percent.Value.ToString().PadLeft(3) : "  ?") + "%] " + evt.Stage.PadRight(40) + " " + evt.Message); return Task.CompletedTask; },
+            progressAsync: evt => { progressEvents.Add(evt); return Task.CompletedTask; },
             cancellationToken: CancellationToken.None);
 
-        Console.WriteLine();
-        Console.WriteLine("=== Compile result ===");
-        Console.WriteLine("Stages: " + result.CompiledPlan.Stages.Count);
+        Assert.Equal(7, result.CompiledPlan.Stages.Count);
         var totalTasks = result.CompiledPlan.Stages.Sum(s => s.Tasks.Count);
-        Console.WriteLine("Total tasks: " + totalTasks);
-        Console.WriteLine("Progress events emitted: " + progressEvents.Count);
-        Console.WriteLine("Warnings: " + result.Warnings.Count);
-        Console.WriteLine();
+        Assert.Equal(7, totalTasks);
+        Assert.Equal(10, progressEvents.Count);
 
-        int missingDefCount = 0;
         foreach (var stage in result.CompiledPlan.Stages)
         {
-            Console.WriteLine("Stage: " + stage.StageKey + " (" + stage.Title + ") - " + stage.Tasks.Count + " task(s)");
             foreach (var task in stage.Tasks)
             {
                 JsonElement defElement = task.Definition ?? default;
-                var defStr = defElement.ValueKind != JsonValueKind.Null ? defElement.ToString() : "(null)";
-                var isMissingDef = defElement.ValueKind == JsonValueKind.Null || string.IsNullOrWhiteSpace(defStr) || defStr == "null";
-                var dependsOn = string.Join(",", task.DependsOnTaskKeys);
-                Console.WriteLine("  - " + task.TaskKey.PadRight(50) + " op=" + task.OperationKind.PadRight(30) + " dep=[" + dependsOn + "] def=" + (isMissingDef ? "MISSING" : "OK"));
-                if (isMissingDef) missingDefCount++;
+                Assert.NotEqual(JsonValueKind.Null, defElement.ValueKind);
             }
         }
 
-        Console.WriteLine();
-        Console.WriteLine("=== Summary ===");
-        Console.WriteLine("Plan JSON length: " + JsonSerializer.Serialize(result.CompiledPlan, new JsonSerializerOptions { WriteIndented = false }).Length + " chars");
-        Console.WriteLine("Tasks missing definition: " + missingDefCount);
-        Console.WriteLine("All " + totalTasks + " tasks have definitions: " + (missingDefCount == 0));
+        Assert.Contains("create_engineeringmanagement_entities", result.CompiledPlan.Stages.Find(s => s.StageKey == "Relations")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("setup_engineeringmanagement_relations", result.CompiledPlan.Stages.Find(s => s.StageKey == "FieldControls")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("setup_engineeringmanagement_controls", result.CompiledPlan.Stages.Find(s => s.StageKey == "ComplexPages")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("setup_engineeringmanagement_pages", result.CompiledPlan.Stages.Find(s => s.StageKey == "ConsistencyCheck")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("consistency_check", result.CompiledPlan.Stages.Find(s => s.StageKey == "GenerateCode")!.Tasks[0].DependsOnTaskKeys);
+    }
+
+    [Fact]
+    public async Task EmptyDefinition_StillProducesValidPlan()
+    {
+        var def = new BusinessPlanDefinition();
+        var result = await BusinessPlanCompiler.CompileAsync(
+            def, 1L, 1L, new FakeBlueprintService(),
+            progressAsync: null, cancellationToken: default);
+        Assert.Equal(7, result.CompiledPlan.Stages.Count);
+        Assert.NotNull(result.CompiledPlan.Stages.Single(s => s.StageKey == "ConsistencyCheck").Tasks.Single().Definition);
+        Assert.NotNull(result.CompiledPlan.Stages.Single(s => s.StageKey == "GenerateCode").Tasks.Single().Definition);
+    }
+
+    [Fact]
+    public async Task EntityReferencingUnknownModule_ThrowsArgumentException()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = new List<BusinessModuleDefinition> { new() { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" } },
+            Entities = new List<BusinessEntityDefinition>
+            {
+                new() { Key = "orphan", ModuleKey = "nonexistent", TechnicalName = "Orphan", DisplayName = "孤儿实体" }
+            }
+        };
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService()));
+    }
+
+    [Fact]
+    public async Task RelationReferencingUnknownEntity_ThrowsArgumentException()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = new List<BusinessModuleDefinition> { new() { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" } },
+            Entities = new List<BusinessEntityDefinition>
+            {
+                new() { Key = "project", ModuleKey = "engineering", TechnicalName = "Project", DisplayName = "项目" }
+            },
+            Relations = new List<BusinessRelationDefinition>
+            {
+                new() { Key = "bad", Kind = "OwnedOneToMany", SourceEntityKey = "project", TargetEntityKey = "ghost" }
+            }
+        };
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService()));
+    }
+
+    [Fact]
+    public async Task EndToEnd_PlanIsCompilableJsonRoundtrip()
+    {
+        var def = BuildEngineeringManagementDefinition();
+        var compiled = await BusinessPlanCompiler.CompileAsync(
+            def, 1L, 1L, new FakeBlueprintService(), progressAsync: null);
+
+        var json = JsonSerializer.Serialize(compiled.CompiledPlan, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        });
+
+        var deserialized = JsonSerializer.Deserialize<UpsertAiProjectWorkPlanRequest>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        Assert.Equal(7, deserialized!.Stages.Count);
+
+        var allTasks = deserialized.Stages.SelectMany(s => s.Tasks).ToList();
+        Assert.True(allTasks.Count > 0);
+        Assert.All(allTasks, t => Assert.NotEqual(JsonValueKind.Null, (t.Definition ?? default).ValueKind));
+
+        var entityTaskKey = "create_engineeringmanagement_entities";
+        var relationsKey = "setup_engineeringmanagement_relations";
+        Assert.Contains(entityTaskKey, deserialized.Stages.Find(s => s.StageKey == "Relations")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains(relationsKey, deserialized.Stages.Find(s => s.StageKey == "FieldControls")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("setup_engineeringmanagement_controls", deserialized.Stages.Find(s => s.StageKey == "ComplexPages")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("setup_engineeringmanagement_pages", deserialized.Stages.Find(s => s.StageKey == "ConsistencyCheck")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Contains("consistency_check", deserialized.Stages.Find(s => s.StageKey == "GenerateCode")!.Tasks[0].DependsOnTaskKeys);
     }
 
     static BusinessPlanDefinition BuildEngineeringManagementDefinition()
@@ -130,50 +199,4 @@ public class FakeBlueprintService : ICodeMasterProjectBlueprintService
 
     public Task<AiUiPageBlueprintDto> GetUiPageAsync(long projectId, long? entityId, string? entityName, string pageType) =>
         Task.FromResult(new AiUiPageBlueprintDto());
-
-    [Fact]
-    public async Task EmptyDefinition_StillProducesValidPlan()
-    {
-        var def = new BusinessPlanDefinition();
-        var result = await BusinessPlanCompiler.CompileAsync(
-            def, 1L, 1L, new FakeBlueprintService(),
-            progressAsync: null, cancellationToken: default);
-        Assert.Equal(7, result.CompiledPlan.Stages.Count);
-        Assert.NotNull(result.CompiledPlan.Stages.Single(s => s.StageKey == "ConsistencyCheck").Tasks.Single().Definition);
-        Assert.NotNull(result.CompiledPlan.Stages.Single(s => s.StageKey == "GenerateCode").Tasks.Single().Definition);
-    }
-
-    [Fact]
-    public async Task EntityReferencingUnknownModule_ThrowsArgumentException()
-    {
-        var def = new BusinessPlanDefinition
-        {
-            Modules = new List<BusinessModuleDefinition> { new() { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" } },
-            Entities = new List<BusinessEntityDefinition>
-            {
-                new() { Key = "orphan", ModuleKey = "nonexistent", TechnicalName = "Orphan", DisplayName = "孤儿实体" }
-            }
-        };
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService()));
-    }
-
-    [Fact]
-    public async Task RelationReferencingUnknownEntity_ThrowsArgumentException()
-    {
-        var def = new BusinessPlanDefinition
-        {
-            Modules = new List<BusinessModuleDefinition> { new() { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" } },
-            Entities = new List<BusinessEntityDefinition>
-            {
-                new() { Key = "project", ModuleKey = "engineering", TechnicalName = "Project", DisplayName = "项目" }
-            },
-            Relations = new List<BusinessRelationDefinition>
-            {
-                new() { Key = "bad", Kind = "OwnedOneToMany", SourceEntityKey = "project", TargetEntityKey = "ghost" }
-            }
-        };
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService()));
-    }
 }
