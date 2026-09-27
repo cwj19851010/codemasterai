@@ -30,6 +30,7 @@ public static class AgentServiceCollectionExtensions
         services.AddScoped<IAiProjectWorkPlanService, AiProjectWorkPlanService>();
         services.TryAddSingleton<IAiProjectValidationRunner, AiProjectValidationRunner>();
         services.AddScoped<IAiProjectSourceRepairExecutor, AiProjectSourceRepairExecutor>();
+        services.TryAddSingleton<AiConversationReadCacheManager>();
         services.AddScoped<ICodeMasterAgentToolFactory, CodeMasterAgentToolFactory>();
         services.AddScoped<IAiConversationService, AiConversationService>();
         services.TryAddSingleton<IPlatformConstraintsProvider, PlatformConstraintsProvider>();

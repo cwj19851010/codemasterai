@@ -19,7 +19,7 @@ namespace CodeMaster.Agent.Tools;
 
 public interface ICodeMasterAgentToolFactory
 {
-    Task<IList<AITool>> CreateToolsAsync(long conversationId, long projectId, string requestId);
+    Task<IList<AITool>> CreateToolsAsync(long conversationId, long projectId, string requestId, Func<AiChatStreamEvent, CancellationToken, ValueTask>? publishAsync = null);
     Task<AgentToolInvocationResult> InvokeAsync(
         long conversationId,
         long projectId,
@@ -69,6 +69,8 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
     private readonly IReadOnlyCollection<ICodeMasterAgentToolExtension> _toolExtensions;
     private readonly IReadOnlyDictionary<string, ICodeMasterAgentBatchOperationAdapter> _batchAdapters;
     private readonly IPlatformConstraintsProvider? _platformConstraints;
+    private Func<AiChatStreamEvent, CancellationToken, ValueTask>? _publishAsync;
+    private AiConversationReadCacheManager? _cacheManager;
 
     public CodeMasterAgentToolFactory(
         IProjectService projectService,
@@ -86,8 +88,10 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         IEnumerable<ICodeMasterAgentToolExtension>? toolExtensions = null,
         IEnumerable<ICodeMasterAgentBatchOperationAdapter>? batchAdapters = null,
         IAiProjectSourceRepairExecutor? sourceRepairExecutor = null,
-        IPlatformConstraintsProvider? platformConstraints = null)
+        IPlatformConstraintsProvider? platformConstraints = null,
+        AiConversationReadCacheManager? cacheManager = null)
     {
+        _cacheManager = cacheManager;
         _projectService = projectService;
         _moduleService = moduleService;
         _entityService = entityService;
@@ -106,9 +110,12 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         _platformConstraints = platformConstraints;
     }
 
-    public async Task<IList<AITool>> CreateToolsAsync(long conversationId, long projectId, string requestId)
+    public async Task<IList<AITool>> CreateToolsAsync(long conversationId, long projectId, string requestId, Func<AiChatStreamEvent, CancellationToken, ValueTask>? publishAsync = null)
     {
-        var readCache = new AiProjectReadCache(_blueprintService);
+        _publishAsync = publishAsync;
+        if (_cacheManager == null)
+            return Array.Empty<AITool>();
+        var readCache = _cacheManager.Acquire(conversationId, _blueprintService);
         var dictionaryTasks = new Dictionary<string, Task<string>>(StringComparer.Ordinal);
 
         void InvalidateReadCaches()
@@ -442,6 +449,116 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             }
         }
 
+        async Task<string> SubmitBusinessPlanAsync(BusinessPlanDefinition input)
+        {
+            try
+            {
+                if (input == null)
+                    return JsonSerializer.Serialize(new
+                    {
+                        success = false,
+                        projectId,
+                        diagnostic = "BusinessPlanDefinition payload is required.",
+                        errorType = nameof(ArgumentNullException),
+                        message = "业务计划为空，请提交完整的 modules/entities/relations/views/pages。"
+                    }, JsonOptions);
+
+                Func<BusinessPlanCompileEvent, Task>? progressAsync = evt =>
+                {
+                    if (_publishAsync == null) return Task.CompletedTask;
+                    return _publishAsync(new AiChatStreamEvent
+                    {
+                        Event = "compile_progress",
+                        RequestId = requestId,
+                        Phase = evt.Phase,
+                        Stage = evt.Stage,
+                        Percent = evt.Percent,
+                        AddedEntities = evt.AddedEntities,
+                        AddedViews = evt.AddedViews,
+                        TotalTasks = evt.TotalTasks,
+                        Message = evt.Message
+                    }, CancellationToken.None).AsTask();
+                };
+
+                var compile = await BusinessPlanCompiler.CompileAsync(
+                    input, projectId, conversationId, _blueprintService, progressAsync);
+
+                var saved = await _workPlanService.UpsertAsync(compile.CompiledPlan);
+
+                AiToolExecutionDto? execution = null;
+                var conversation = await _conversationRepository.GetQueryable()
+                    .Where(item => item.Id == conversationId && item.UserId == _currentUser.UserId)
+                    .FirstAsync();
+                var preferences = AiWorkflowPreferencesStore.Read(conversation?.ContextSummary);
+                if (preferences.ShouldAutoApprove)
+                {
+                    if (saved.RequiresConfirmation)
+                    {
+                        saved = await _workPlanService.ConfirmAsync(
+                            saved.Id,
+                            new ConfirmAiProjectWorkPlanRequest
+                            {
+                                ExpectedStructureVersion = saved.StructureVersion,
+                                ContentHash = saved.ContentHash ?? string.Empty
+                            });
+                    }
+                    saved = await _workPlanService.GetAsync(saved.Id);
+                    var hasReadyTask = saved.Stages
+                        .SelectMany(stage => stage.Tasks)
+                        .Any(task => string.Equals(task.Status, "Ready", StringComparison.OrdinalIgnoreCase));
+                    if (!saved.ActiveBatchId.HasValue && hasReadyTask)
+                    {
+                        execution = await ExecuteNextWorkPlanBatchAsync(
+                            conversationId, projectId, saved.Id,
+                            $"plan-auto-{saved.Id}-{DateTime.UtcNow.Ticks}");
+                    }
+                    saved = await _workPlanService.GetAsync(saved.Id);
+                    InvalidateReadCaches();
+                }
+
+                return JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    projectId,
+                    planId = saved.Id,
+                    plan = saved,
+                    execution,
+                    report = compile.Report,
+                    warnings = compile.Warnings,
+                    message = execution != null
+                        ? $"业务计划已编译并保存，已自动开始执行就绪任务，共 {compile.Report.Tasks} 项。"
+                        : saved.Status is "Blocked" or "Failed"
+                            ? $"业务计划已编译保存，但当前仍有阻塞任务，请查看任务列表。"
+                            : saved.Stages.SelectMany(s => s.Tasks).Any(t =>
+                                string.Equals(t.Status, "Ready", StringComparison.OrdinalIgnoreCase))
+                                ? $"业务计划已编译保存，存在就绪任务但本轮未能启动执行。"
+                                : $"业务计划已编译保存，当前没有可执行任务。"
+                }, JsonOptions);
+            }
+            catch (ArgumentException ex)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    projectId,
+                    diagnostic = ex.GetBaseException().Message,
+                    errorType = nameof(ArgumentException),
+                    message = "业务计划校验未通过，请根据提示修正 modules/entities/fields/relations 之间的引用后重试。"
+                }, JsonOptions);
+            }
+            catch (Exception ex)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    projectId,
+                    diagnostic = ex.GetBaseException().Message,
+                    errorType = ex.GetBaseException().GetType().Name,
+                    message = "业务计划编译或保存失败，请根据提示修正后重试。"
+                }, JsonOptions);
+            }
+        }
+
         async Task<string> ProposeProjectWorkBatchAsync(ProposeAiProjectWorkBatchRequest input)
         {
             var pending = await _executionRepository.GetQueryable()
@@ -656,7 +773,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             includeSourceRepair: canSourceRepair,
             inspectCodeMasterSource: InspectCodeMasterSourceAsync,
             applyTestSourceRepair: ApplyTestSourceRepairAsync,
-            supersedeProjectWorkPlan: SupersedeProjectWorkPlanAsync);
+            supersedeProjectWorkPlan: SupersedeProjectWorkPlanAsync,
+            includeSubmitBusinessPlan: canChange,
+            submitBusinessPlan: SubmitBusinessPlanAsync);
 
         if (_toolExtensions.Count == 0)
             return tools;
@@ -1314,6 +1433,7 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
 
     private async Task<object> ExecuteProjectWorkBatchAsync(AiToolExecution execution)
     {
+        var requestId = execution.RequestId ?? string.Empty;
         var proposal = DeserializeInput<AiProjectWorkBatchProposal>(execution);
         if (execution.WorkPlanId != proposal.PlanId || execution.WorkBatchId != proposal.Batch.Id)
             throw new InvalidDataException("The approval record is not linked to the proposed work batch.");
@@ -1328,7 +1448,17 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         };
         foreach (var operation in proposal.Operations)
         {
-            var operationResult = await ExecuteBatchOperationAsync(execution.ProjectId, operation);
+            await PublishTaskEventAsync(proposal, operation, "task_started", requestId);
+            object operationResult;
+            try
+            {
+                operationResult = await ExecuteBatchOperationAsync(execution.ProjectId, operation);
+            }
+            catch (Exception ex)
+            {
+                await PublishTaskEventAsync(proposal, operation, "task_completed", requestId, success: false, errorMessage: ex.GetBaseException().Message);
+                throw;
+            }
             await VerifyWorkBatchOperationAsync(execution.ProjectId, operation, operationResult);
             result.OperationResults.Add(operationResult);
             var actions = operationResult switch
@@ -1346,8 +1476,36 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                 action.IdempotencyKey = $"work-batch:{proposal.Batch.Id}:task:{operation.TaskId}:action:{result.ClientActions.Count}";
                 result.ClientActions.Add(action);
             }
+            await PublishTaskEventAsync(proposal, operation, "task_completed", requestId, success: true);
         }
         return result;
+    }
+
+    private async Task PublishTaskEventAsync(
+        AiProjectWorkBatchProposal proposal,
+        AiProjectWorkBatchOperation operation,
+        string eventName,
+        string requestId,
+        bool success = false,
+        string? errorMessage = null)
+    {
+        if (_publishAsync == null) return;
+        var taskIndex = proposal.Operations.FindIndex(item => item.TaskId == operation.TaskId);
+        var total = proposal.Operations.Count;
+        await _publishAsync(new AiChatStreamEvent
+        {
+            Event = eventName,
+            RequestId = requestId,
+            ToolName = "project_work_batch",
+            ToolStage = operation.TaskKey,
+            TaskId = operation.TaskId.ToString(),
+            TaskKey = operation.TaskKey,
+            TaskIndex = taskIndex >= 0 ? taskIndex + 1 : null,
+            TaskSuccess = success,
+            ErrorMessage = errorMessage,
+            PlanId = proposal.PlanId.ToString(),
+            Message = $"{operation.TaskKey} {(eventName == "task_started" ? "started" : success ? "completed" : "failed")}"
+        }, CancellationToken.None);
     }
 
     private async Task VerifyWorkBatchOperationAsync(
