@@ -262,32 +262,29 @@ public static class BusinessPlanCompiler
                 ? PascalCase(module.Key)
                 : module.TechnicalName.Trim();
 
-            var operations = group.Select(e =>
+            var entities = group.Select(e =>
             {
-                var op = new Dictionary<string, object?>
+                var entity = new Dictionary<string, object?>
                 {
-                    ["kind"] = "add_entity",
-                    ["module"] = moduleTechName,
-                    ["entityName"] = PascalCase(e.TechnicalName),
-                    ["displayName"] = e.DisplayName?.Trim() ?? PascalCase(e.Key),
+                    ["moduleName"] = moduleTechName,
+                    ["name"] = PascalCase(e.TechnicalName),
                     ["description"] = e.DisplayName?.Trim() ?? PascalCase(e.Key),
+                    ["businessDescription"] = e.BusinessDescription,
                     ["tableName"] = (e.TableName ?? moduleTechName + "_" + PascalCase(e.Key)).Trim(),
-                    ["generationMode"] = "None",
                     ["isTree"] = e.IsTree ?? false,
                     ["isReadOnly"] = e.IsReadOnly ?? false,
                     ["hasTenant"] = e.HasTenant ?? true,
                     ["hasAudit"] = e.HasAudit ?? true,
                     ["hasSoftDelete"] = e.HasSoftDelete ?? true,
-                    ["fields"] = e.Fields.Select(BuildField).ToList<object>()
+                    ["fields"] = e.Fields.Select(BuildFieldForEntity).ToList<object>()
                 };
-                return op;
+                return entity;
             }).ToList<object>();
 
             var definition = JsonSerializer.SerializeToElement(new
             {
-                kind = "project_change_set",
                 summary = $"创建 {module.DisplayName} 模块下的 {group.Count()} 个实体",
-                operations
+                entities
             });
 
             tasks.Add(new AiProjectWorkTaskInput
@@ -308,6 +305,21 @@ public static class BusinessPlanCompiler
         }
 
         return tasks;
+    }
+
+    private static Dictionary<string, object?> BuildFieldForEntity(BusinessFieldDefinition f)
+    {
+        var dataType = (f.DataType ?? "string").Trim().ToLowerInvariant();
+        return new Dictionary<string, object?>
+        {
+            ["name"] = PascalCase(f.TechnicalName),
+            ["dataType"] = dataType,
+            ["description"] = f.DisplayName?.Trim() ?? PascalCase(f.TechnicalName),
+            ["businessDescription"] = null,
+            ["isNullable"] = !(f.Required ?? false),
+            ["maxLength"] = f.MaxLength,
+            ["dictType"] = f.Dictionary
+        };
     }
 
     private static Dictionary<string, object?> BuildField(BusinessFieldDefinition f)
