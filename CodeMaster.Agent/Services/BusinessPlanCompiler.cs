@@ -281,9 +281,19 @@ public static class BusinessPlanCompiler
                 return entity;
             }).ToList<object>();
 
+            var moduleDef = new Dictionary<string, object?>
+            {
+                ["moduleName"] = moduleTechName,
+                ["moduleDescription"] = module.DisplayName?.Trim() ?? moduleTechName,
+                ["icon"] = module.Icon ?? "",
+                ["routePath"] = module.RoutePath ?? "",
+                ["orderNum"] = module.OrderNum ?? 3
+            };
+
             var definition = JsonSerializer.SerializeToElement(new
             {
                 summary = $"创建 {module.DisplayName} 模块下的 {group.Count()} 个实体",
+                modules = new[] { moduleDef },
                 entities
             });
 
