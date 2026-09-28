@@ -413,9 +413,8 @@ public static class BusinessPlanCompiler
                 RequiresBuild = false,
                 Definition = JsonSerializer.SerializeToElement(new
                 {
-                    kind = "project_change_set",
                     summary = "建立关系",
-                    operations = Array.Empty<object>()
+                    generationMode = "Incremental"
                 })
             });
         }
@@ -448,9 +447,8 @@ public static class BusinessPlanCompiler
                 RequiresBuild = false,
                 Definition = JsonSerializer.SerializeToElement(new
                 {
-                    kind = "project_change_set",
                     summary = "配置字段控件",
-                    operations = Array.Empty<object>()
+                    generationMode = "Incremental"
                 })
             });
         }
@@ -484,9 +482,8 @@ public static class BusinessPlanCompiler
                 RequiresBuild = false,
                 Definition = JsonSerializer.SerializeToElement(new
                 {
-                    kind = "project_change_set",
                     summary = "配置复杂页面",
-                    operations = Array.Empty<object>()
+                    generationMode = "Incremental"
                 })
             });
         }
