@@ -341,6 +341,55 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             return JsonSerializer.Serialize(result, JsonOptions);
         }
 
+
+        /// <summary>
+        /// Local helper: after a plan is saved, optionally confirm it and start
+        /// executing the first ready batch. Both upsert_project_work_plan and
+        /// submit_business_plan paths call this so the auto-continue behavior
+        /// stays in lock-step (doc section 5.3).
+        /// </summary>
+        async Task<(AiProjectWorkPlanDto Plan, AiToolExecutionDto? Execution)> AutoApproveAndExecuteAsync(
+            AiProjectWorkPlanDto plan)
+        {
+            if (plan.ActiveBatchId.HasValue)
+                return (await _workPlanService.GetAsync(plan.Id), null);
+
+            var conv = await _conversationRepository.GetQueryable()
+                .Where(item => item.Id == conversationId && item.UserId == _currentUser.UserId)
+                .FirstAsync();
+            var preferences = AiWorkflowPreferencesStore.Read(conv?.ContextSummary);
+            if (!preferences.ShouldAutoApprove)
+                return (plan, null);
+
+            if (plan.RequiresConfirmation)
+            {
+                plan = await _workPlanService.ConfirmAsync(
+                    plan.Id,
+                    new ConfirmAiProjectWorkPlanRequest
+                    {
+                        ExpectedStructureVersion = plan.StructureVersion,
+                        ContentHash = plan.ContentHash ?? string.Empty
+                    });
+            }
+
+            plan = await _workPlanService.GetAsync(plan.Id);
+            var hasReadyTask = plan.Stages
+                .SelectMany(stage => stage.Tasks)
+                .Any(task => string.Equals(task.Status, "Ready", StringComparison.OrdinalIgnoreCase));
+            AiToolExecutionDto? execution = null;
+            if (!plan.ActiveBatchId.HasValue && hasReadyTask)
+            {
+                execution = await ExecuteNextWorkPlanBatchAsync(
+                    conversationId,
+                    projectId,
+                    plan.Id,
+                    $"plan-auto-{plan.Id}-{DateTime.UtcNow.Ticks}");
+            }
+            plan = await _workPlanService.GetAsync(plan.Id);
+            InvalidateReadCaches();
+            return (plan, execution);
+        }
+
         async Task<string> UpsertProjectWorkPlanAsync(UpsertAiProjectWorkPlanRequest input)
         {
             try
@@ -348,46 +397,8 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                 input.ProjectId = projectId;
                 input.ConversationId = conversationId;
                 var plan = await _workPlanService.UpsertAsync(input);
-                AiToolExecutionDto? execution = null;
-                var conversation = await _conversationRepository.GetQueryable()
-                    .Where(item => item.Id == conversationId && item.UserId == _currentUser.UserId)
-                    .FirstAsync();
-                var preferences = AiWorkflowPreferencesStore.Read(conversation?.ContextSummary);
-                if (preferences.ShouldAutoApprove)
-                {
-                    if (plan.RequiresConfirmation)
-                    {
-                        plan = await _workPlanService.ConfirmAsync(
-                            plan.Id,
-                            new ConfirmAiProjectWorkPlanRequest
-                            {
-                                ExpectedStructureVersion = plan.StructureVersion,
-                                ContentHash = plan.ContentHash ?? string.Empty
-                            });
-                    }
-
-                    // A repair/update to an already-confirmed plan used to stop
-                    // here because only the initial confirmation path launched
-                    // the scheduler. If the update makes a task Ready, advance
-                    // the plan in the same turn without asking the user again.
-                    plan = await _workPlanService.GetAsync(plan.Id);
-                    var hasReadyTask = plan.Stages
-                        .SelectMany(stage => stage.Tasks)
-                        .Any(task => string.Equals(task.Status, "Ready", StringComparison.OrdinalIgnoreCase));
-                    if (!plan.ActiveBatchId.HasValue && hasReadyTask)
-                    {
-                        execution = await ExecuteNextWorkPlanBatchAsync(
-                            conversationId,
-                            projectId,
-                            plan.Id,
-                            $"plan-auto-{plan.Id}-{DateTime.UtcNow.Ticks}");
-                    }
-                    plan = await _workPlanService.GetAsync(plan.Id);
-                    // The automatic batch may have changed modules, entities,
-                    // fields, relations, or dictionaries. Do not let a later
-                    // tool call in this same turn observe the pre-write snapshot.
-                    InvalidateReadCaches();
-                }
+                var (finalPlan, execution) = await AutoApproveAndExecuteAsync(plan);
+                plan = finalPlan;
                 return JsonSerializer.Serialize(new
                 {
                     success = true,
@@ -486,35 +497,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                 var saved = await _workPlanService.UpsertAsync(compile.CompiledPlan);
 
                 AiToolExecutionDto? execution = null;
-                var conversation = await _conversationRepository.GetQueryable()
-                    .Where(item => item.Id == conversationId && item.UserId == _currentUser.UserId)
-                    .FirstAsync();
-                var preferences = AiWorkflowPreferencesStore.Read(conversation?.ContextSummary);
-                if (preferences.ShouldAutoApprove)
-                {
-                    if (saved.RequiresConfirmation)
-                    {
-                        saved = await _workPlanService.ConfirmAsync(
-                            saved.Id,
-                            new ConfirmAiProjectWorkPlanRequest
-                            {
-                                ExpectedStructureVersion = saved.StructureVersion,
-                                ContentHash = saved.ContentHash ?? string.Empty
-                            });
-                    }
-                    saved = await _workPlanService.GetAsync(saved.Id);
-                    var hasReadyTask = saved.Stages
-                        .SelectMany(stage => stage.Tasks)
-                        .Any(task => string.Equals(task.Status, "Ready", StringComparison.OrdinalIgnoreCase));
-                    if (!saved.ActiveBatchId.HasValue && hasReadyTask)
-                    {
-                        execution = await ExecuteNextWorkPlanBatchAsync(
-                            conversationId, projectId, saved.Id,
-                            $"plan-auto-{saved.Id}-{DateTime.UtcNow.Ticks}");
-                    }
-                    saved = await _workPlanService.GetAsync(saved.Id);
-                    InvalidateReadCaches();
-                }
+                var (finalSaved, execFromHelper) = await AutoApproveAndExecuteAsync(saved);
+                saved = finalSaved;
+                if (execution == null) execution = execFromHelper;
 
                 return JsonSerializer.Serialize(new
                 {
@@ -1438,6 +1423,8 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         if (execution.WorkPlanId != proposal.PlanId || execution.WorkBatchId != proposal.Batch.Id)
             throw new InvalidDataException("The approval record is not linked to the proposed work batch.");
         await _workPlanService.BeginBatchExecutionAsync(proposal.Batch.Id, proposal.InputHash);
+        var batchStage = await ResolveBatchStageAsync(proposal);
+        await PublishStageEventAsync(proposal, batchStage, "stage_started", requestId);
 
         var result = new AiProjectWorkBatchExecutionResult
         {
@@ -1457,6 +1444,7 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             catch (Exception ex)
             {
                 await PublishTaskEventAsync(proposal, operation, "task_completed", requestId, success: false, errorMessage: ex.GetBaseException().Message);
+                await PublishStageEventAsync(proposal, batchStage, "stage_completed", requestId, success: false, errorMessage: ex.GetBaseException().Message);
                 throw;
             }
             await VerifyWorkBatchOperationAsync(execution.ProjectId, operation, operationResult);
@@ -1478,6 +1466,7 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             }
             await PublishTaskEventAsync(proposal, operation, "task_completed", requestId, success: true);
         }
+        await PublishStageEventAsync(proposal, batchStage, "stage_completed", requestId);
         return result;
     }
 
@@ -1505,6 +1494,39 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             ErrorMessage = errorMessage,
             PlanId = proposal.PlanId.ToString(),
             Message = $"{operation.TaskKey} {(eventName == "task_started" ? "started" : success ? "completed" : "failed")}"
+        }, CancellationToken.None);
+    }
+
+    private async Task<(string Key, string Title)?> ResolveBatchStageAsync(AiProjectWorkBatchProposal proposal)
+    {
+        if (!proposal.Batch.StageId.HasValue)
+            return null;
+        var plan = await _workPlanService.GetAsync(proposal.PlanId);
+        var stage = plan.Stages.FirstOrDefault(item => item.Id == proposal.Batch.StageId.Value);
+        return stage == null ? null : (stage.StageKey, stage.Title);
+    }
+
+    private async Task PublishStageEventAsync(
+        AiProjectWorkBatchProposal proposal,
+        (string Key, string Title)? stage,
+        string eventName,
+        string requestId,
+        bool success = true,
+        string? errorMessage = null)
+    {
+        if (_publishAsync == null || stage == null)
+            return;
+        await _publishAsync(new AiChatStreamEvent
+        {
+            Event = eventName,
+            RequestId = requestId,
+            ToolName = "project_work_batch",
+            ToolStage = stage.Value.Key,
+            Stage = stage.Value.Title,
+            PlanId = proposal.PlanId.ToString(),
+            TaskSuccess = success,
+            ErrorMessage = errorMessage,
+            Message = $"{stage.Value.Title} {(eventName == "stage_started" ? "started" : success ? "completed" : "failed")}"
         }, CancellationToken.None);
     }
 
