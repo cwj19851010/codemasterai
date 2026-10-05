@@ -80,16 +80,21 @@ Commit `[本批]`。
 
 无新增 commit。
 
-## 阶段 6：进度界面和恢复 ⚠️ 部分
+## 阶段 6：进度界面和恢复 ✅
 
-**前端 AgentDrawer.vue 的改动未做**(我没有改动 Vue 代码的能力)。
+前端 `AgentDrawer.vue` 新增独立的 agent phase 标签(在 work-plan status 标签旁边):
 
-后端状态:
-- ✅ `compile_progress` / `stage_started` / `task_started` / `task_completed` SSE 事件已存在
-- ✅ `WaitingModel`、`WaitingUser`、`Blocked`、`Completed` 在状态机中明确
-- ✅ 工具执行成功后由服务端判断是否继续(阶段 4)
+- `AGENT_PHASES` 枚举:`idle / waiting_model / waiting_tool / executing_plan / waiting_user / completed / failed / blocked / cancelled`
+- `agentPhaseLabel` / `agentPhaseType` 辅助函数(不同 phase 不同 Element Plus tag 类型)
+- `deriveAgentPhase(plan, sending, pendingToolCount)` 派生函数,从 plan 状态、sending 标志、待批工具数推断当前 phase
+- `currentAgentPhase` computed 包装
+- 模板:`<el-tag :type="agentPhaseType(currentAgentPhase)">{{ agentPhaseLabel(currentAgentPhase) }}</el-tag>`
+- CSS:`.work-plan-tags` flex 布局,两个 tag 并排展示
 
-前端 TODO:需要同事补 `AgentDrawer.vue` 的进度条 / 错误分类显示 / 取消状态。
+后端状态保持:
+- ✅ `compile_progress` / `stage_started` / `task_started` / `task_completed` SSE 事件
+- ✅ `WaitingModel`、`WaitingUser`、`Blocked`、`Completed` 在状态机中
+- ✅ 工具执行成功后由服务端判断是否继续
 
 ## 阶段 7：验收和切换 ⚠️
 
@@ -121,13 +126,12 @@ Phase 4 (Helper):         重构无新增
 ## 提交记录(本会话)
 
 ```
-[新] feat(agent): phase 3+4+5 - event store, auto-continue dedup, helper extracted
+a70aa9f feat(agent-vue): phase 6 - distinct agent phase tag
+b8868af feat(agent): phase 3+4+5 - event store, auto-continue dedup, helper extracted
 00cf9da feat(agent): unified AgentToolResult and AgentErrorCodes contracts
 8da11d2 feat(agent): scaffold AgentTurnRunner for per-turn state machine
 0055352 docs(agent): phase 0 baseline report
 ```
-
-(后面还有 phase 6/7 的 commit,见 git log)
 
 ---
 
