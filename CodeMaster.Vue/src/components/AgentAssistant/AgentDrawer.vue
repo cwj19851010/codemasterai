@@ -80,18 +80,9 @@
         </div>
 
         <div v-if="selectedProjectId" class="context-field workflow-field">
-          <span class="context-label">工作模式</span>
-          <el-radio-group
-            v-model="workflowMode"
-            size="small"
-            :disabled="sending || confirmingWorkPlan || applyingWorkPlanMetadata || materializingProject"
-            @change="handleWorkflowPreferencesChange"
-          >
-            <el-radio-button :label="AGENT_WORKFLOW_MODES.STANDARD">标准模式</el-radio-button>
-            <el-radio-button :label="AGENT_WORKFLOW_MODES.MINIMAL">极简模式</el-radio-button>
-          </el-radio-group>
-          <div v-if="workflowMode === AGENT_WORKFLOW_MODES.STANDARD" class="workflow-auto-toggle">
-            <span>自动应用变更</span>
+          <span class="context-label">自动执行</span>
+          <div class="workflow-auto-toggle">
+            <span>确认设计后自动执行后续任务</span>
             <el-switch
               v-model="autoApproveApprovals"
               size="small"
@@ -99,14 +90,11 @@
               @change="handleWorkflowPreferencesChange"
             />
           </div>
-          <small v-if="workflowMode === AGENT_WORKFLOW_MODES.MINIMAL">
-            需求明确后自动列出完整任务，按依赖顺序执行，最后统一生成、迁移、构建和测试。
-          </small>
-          <small v-else-if="autoApproveApprovals">
-            标准模式已开启自动应用变更；后续项目操作统一执行。
+          <small v-if="autoApproveApprovals">
+            第一轮给出设计，确认后自动调用 upsert_project_work_plan 并推进所有就绪任务。
           </small>
           <small v-else>
-            标准模式只需确认一次，之后任务会按依赖自动执行。
+            第一轮给出设计并等待确认；确认后自动调用 upsert_project_work_plan 并推进所有就绪任务。
           </small>
         </div>
 
@@ -173,7 +161,15 @@
                 <strong>{{ workPlan.title }}</strong>
                 <span>{{ workPlan.completedTasks }}/{{ workPlan.totalTasks }} 个任务完成</span>
               </div>
-              <el-tag size="small" :type="workPlanStatusType(workPlan.status)">{{ workPlanStatusLabel(workPlan.status) }}</el-tag>
+              <div class="work-plan-tags">
+                <el-tag
+                  size="small"
+                  :type="agentPhaseType(currentAgentPhase)"
+                  :title="agentPhaseLabel(currentAgentPhase)"
+                  data-testid="agent-phase-tag"
+                >{{ agentPhaseLabel(currentAgentPhase) }}</el-tag>
+                <el-tag size="small" :type="workPlanStatusType(workPlan.status)">{{ workPlanStatusLabel(workPlan.status) }}</el-tag>
+              </div>
             </div>
             <el-progress
               :percentage="workPlanProgress"
@@ -264,6 +260,56 @@
                 <div v-if="item.value.streamStatus" class="stream-status">
                   <span class="stream-status-dot"></span>
                   {{ item.value.streamStatus }}
+                </div>
+                <div v-if="item.value.compileProgress?.active" class="compile-progress-panel">
+                  <div class="compile-progress-header">
+                    <span>业务计划编译</span>
+                    <span>{{ item.value.compileProgress.percent }}%</span>
+                  </div>
+                  <el-progress
+                    :percentage="item.value.compileProgress.percent"
+                    :show-text="false"
+                    :stroke-width="8"
+                  />
+                  <div class="compile-progress-message">
+                    {{ item.value.compileProgress.message || item.value.compileProgress.stage }}
+                  </div>
+                  <div v-if="item.value.compileProgress.totalTasks" class="compile-progress-meta">
+                    预计任务数：{{ item.value.compileProgress.totalTasks }}
+                    <span v-if="item.value.compileProgress.addedEntities"> · 已处理实体 {{ item.value.compileProgress.addedEntities }}</span>
+                    <span v-if="item.value.compileProgress.addedViews"> · 已处理视图 {{ item.value.compileProgress.addedViews }}</span>
+                  </div>
+                </div>
+                <div v-if="item.value.stageProgress?.length" class="stage-progress-panel">
+                  <div class="stage-progress-title">阶段进度</div>
+                  <ul class="stage-progress-list">
+                    <li
+                      v-for="stage in item.value.stageProgress"
+                      :key="stage.key"
+                      class="stage-progress-item"
+                      :class="`stage-${stage.status}`"
+                    >
+                      <span class="stage-progress-dot" />
+                      <span class="stage-progress-name">{{ stage.title }}</span>
+                      <span class="stage-progress-status">{{ stageStatusLabel(stage.status) }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div v-if="item.value.taskProgress?.active" class="task-progress-panel">
+                  <div class="task-progress-header">
+                    <span>任务执行</span>
+                    <span>{{ item.value.taskProgress.index || 1 }}/{{ item.value.taskProgress.total || '?' }}</span>
+                  </div>
+                  <div class="task-progress-title">{{ item.value.taskProgress.title || item.value.taskProgress.taskKey }}</div>
+                  <el-progress
+                    v-if="item.value.taskProgress.total"
+                    :percentage="Math.round((item.value.taskProgress.index / item.value.taskProgress.total) * 100)"
+                    :show-text="false"
+                    :stroke-width="6"
+                  />
+                  <div v-if="item.value.taskProgress.errorMessage" class="task-progress-error">
+                    {{ item.value.taskProgress.errorMessage }}
+                  </div>
                 </div>
                 <div v-if="item.value.toolError" class="stream-tool-error">
                   <div class="tool-error-summary">
@@ -535,7 +581,6 @@ import { takePendingDraft } from './wizardDraft'
 import { buildConversationTimeline } from './conversationTimeline'
 import { PROJECT_MATERIALIZATION_ACTIONS } from './projectMaterialization'
 import {
-  AGENT_WORKFLOW_MODES,
   DEFAULT_AGENT_WORKFLOW_MODE,
   executionProgressKey,
   normalizeWorkflowMode,
@@ -659,6 +704,12 @@ const workPlanChanges = computed(() => (workPlan.value?.stages || []).flatMap(st
 ))
 const workPlanCanConfirm = computed(() => Boolean(workPlan.value?.requiresConfirmation))
 const autoApprovalEnabled = computed(() => shouldAutoProcessApprovals(workflowMode.value, autoApproveApprovals.value))
+// Doc phase 6: distinct agent phase tag (WaitingModel / WaitingUser / Blocked / Completed).
+const currentAgentPhase = computed(() => deriveAgentPhase(
+  workPlan.value,
+  sending,
+  pendingApprovals.value.length
+))
 const workPlanCanResume = computed(() => Boolean(
   workPlan.value?.status === 'Active' &&
   Number(workPlan.value?.completedTasks || 0) < Number(workPlan.value?.totalTasks || 0) &&
@@ -952,7 +1003,7 @@ const handleWorkflowPreferencesChange = async () => {
   try {
     const conversation = await updateConversationPreferences(activeConversationId.value, {
       workflowMode: workflowMode.value,
-      autoApproveApprovals: workflowMode.value === AGENT_WORKFLOW_MODES.STANDARD && autoApproveApprovals.value
+      autoApproveApprovals: autoApproveApprovals.value
     })
     workflowMode.value = normalizeWorkflowMode(conversation?.workflowMode || workflowMode.value)
     autoApproveApprovals.value = Boolean(conversation?.autoApproveApprovals)
@@ -973,7 +1024,7 @@ const ensureConversation = async () => {
     projectId: selectedProjectId.value,
     providerId: selectedProviderId.value,
     workflowMode: workflowMode.value,
-    autoApproveApprovals: workflowMode.value === AGENT_WORKFLOW_MODES.STANDARD && autoApproveApprovals.value
+    autoApproveApprovals: autoApproveApprovals.value
   })
   activeConversationId.value = conversation.id
   workflowMode.value = normalizeWorkflowMode(conversation.workflowMode || workflowMode.value)
@@ -1256,9 +1307,117 @@ const updateStreamingMessage = (message, progress) => {
     message.streamStatus = '工具调用失败，正在处理错误…'
   } else if (progress.event === 'status') {
     message.streamStatus = streamPhaseTitle(progress.phase)
+  } else if (progress.event === 'compile_progress') {
+    applyCompileProgress(message, progress)
+  } else if (progress.event === 'stage_started') {
+    applyStageEvent(message, progress, 'started')
+  } else if (progress.event === 'stage_completed') {
+    applyStageEvent(message, progress, 'completed')
+  } else if (progress.event === 'task_started') {
+    applyTaskEvent(message, progress, 'started')
+  } else if (progress.event === 'task_completed') {
+    applyTaskEvent(message, progress, 'completed')
   }
 
   scrollToBottom()
+}
+
+const ensureProgressState = message => {
+  if (!message.compileProgress) {
+    message.compileProgress = {
+      active: false,
+      stage: '',
+      percent: 0,
+      message: '',
+      addedEntities: 0,
+      addedViews: 0,
+      totalTasks: 0
+    }
+  }
+  if (!message.stageProgress) {
+    message.stageProgress = []
+  }
+  if (!message.taskProgress) {
+    message.taskProgress = {
+      active: false,
+      planId: '',
+      taskKey: '',
+      title: '',
+      index: 0,
+      total: 0,
+      success: false,
+      errorMessage: ''
+    }
+  }
+  return message
+}
+
+const stageStatusLabel = status => ({
+  pending: '待开始',
+  in_progress: '进行中',
+  completed: '已完成',
+  failed: '失败'
+}[status] || status)
+
+const applyCompileProgress = (message, progress) => {
+  ensureProgressState(message)
+  const cp = message.compileProgress
+  cp.active = true
+  cp.stage = progress.stage || cp.stage
+  cp.percent = Number(progress.percent || cp.percent || 0)
+  cp.message = progress.message || cp.message
+  if (progress.addedEntities != null) cp.addedEntities = Number(progress.addedEntities)
+  if (progress.addedViews != null) cp.addedViews = Number(progress.addedViews)
+  if (progress.totalTasks != null) cp.totalTasks = Number(progress.totalTasks)
+  message.streamStatus = cp.message || cp.stage || '正在编译业务计划…'
+}
+
+const applyStageEvent = (message, progress, kind) => {
+  ensureProgressState(message)
+  const stages = message.stageProgress
+  const key = progress.stageKey || progress.stage || progress.toolStage
+  let entry = stages.find(item => item.key === key)
+  if (!entry) {
+    entry = {
+      key,
+      title: progress.stage || progress.message || key,
+      status: kind === 'started' ? 'in_progress' : 'pending',
+      startedAt: null,
+      completedAt: null
+    }
+    stages.push(entry)
+  }
+  if (kind === 'started') {
+    entry.status = 'in_progress'
+    entry.startedAt = entry.startedAt || new Date().toISOString()
+  } else if (kind === 'completed') {
+    entry.status = 'completed'
+    entry.completedAt = new Date().toISOString()
+  }
+  message.streamStatus = `${entry.title}: ${kind === 'started' ? '开始' : '完成'}`
+}
+
+const applyTaskEvent = (message, progress, kind) => {
+  ensureProgressState(message)
+  const tp = message.taskProgress
+  tp.active = true
+  tp.planId = progress.planId || tp.planId
+  if (kind === 'started') {
+    tp.taskKey = progress.taskKey || tp.taskKey
+    tp.title = progress.title || tp.title
+    tp.index = Number(progress.taskIndex || tp.index)
+    tp.total = Number(progress.total || tp.total)
+    tp.success = false
+    tp.errorMessage = ''
+  } else if (kind === 'completed') {
+    tp.success = progress.taskSuccess !== false && !progress.errorMessage
+    tp.errorMessage = progress.errorMessage || ''
+  }
+  message.streamStatus = kind === 'started'
+    ? `正在执行 ${tp.index || 1}/${tp.total || '?'}：${tp.title || tp.taskKey}`
+    : (tp.success
+      ? `任务完成：${tp.title || tp.taskKey}`
+      : `任务失败：${tp.taskKey}（${tp.errorMessage || ''}）`)
 }
 
 const removeStreamingMessage = message => {
@@ -1613,8 +1772,8 @@ const processAutomaticApprovals = async () => {
       appliedStandaloneMetadata = true
     }
 
-    if (appliedStandaloneMetadata && workflowMode.value === AGENT_WORKFLOW_MODES.MINIMAL) {
-      ElMessage.info('极简模式元数据已完成，开始统一生成、迁移、构建和测试')
+    if (appliedStandaloneMetadata && autoApproveApprovals.value) {
+      ElMessage.info('元数据已完成，开始统一生成、迁移、构建和测试')
       await materializeCurrentProject()
     }
   } catch (error) {
@@ -2092,6 +2251,55 @@ const workPlanStatusType = status => ({
   Superseded: 'info'
 }[status] || 'primary')
 
+// Doc §6 §13 step 7: explicit "agent phase" so users can distinguish
+// waiting-on-model, waiting-on-user, blocked, and completed.
+const AGENT_PHASES = {
+  IDLE: 'idle',
+  WAITING_MODEL: 'waiting_model',
+  WAITING_TOOL: 'waiting_tool',
+  EXECUTING_PLAN: 'executing_plan',
+  WAITING_USER: 'waiting_user',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+  BLOCKED: 'blocked',
+  CANCELLED: 'cancelled'
+}
+
+const agentPhaseLabel = phase => ({
+  [AGENT_PHASES.IDLE]: '空闲',
+  [AGENT_PHASES.WAITING_MODEL]: '等待模型',
+  [AGENT_PHASES.WAITING_TOOL]: '等待工具',
+  [AGENT_PHASES.EXECUTING_PLAN]: '执行计划',
+  [AGENT_PHASES.WAITING_USER]: '等待用户',
+  [AGENT_PHASES.COMPLETED]: '已完成',
+  [AGENT_PHASES.FAILED]: '执行失败',
+  [AGENT_PHASES.BLOCKED]: '已阻塞',
+  [AGENT_PHASES.CANCELLED]: '已取消'
+}[phase] || phase)
+
+const agentPhaseType = phase => ({
+  [AGENT_PHASES.WAITING_MODEL]: 'info',
+  [AGENT_PHASES.WAITING_TOOL]: 'info',
+  [AGENT_PHASES.EXECUTING_PLAN]: 'primary',
+  [AGENT_PHASES.WAITING_USER]: 'warning',
+  [AGENT_PHASES.COMPLETED]: 'success',
+  [AGENT_PHASES.FAILED]: 'danger',
+  [AGENT_PHASES.BLOCKED]: 'warning',
+  [AGENT_PHASES.CANCELLED]: 'info'
+}[phase] || '')
+
+const deriveAgentPhase = (plan, sending, pendingToolCount) => {
+  if (!plan) return sending.value ? AGENT_PHASES.WAITING_MODEL : AGENT_PHASES.IDLE
+  if (plan.status === 'Completed') return AGENT_PHASES.COMPLETED
+  if (plan.status === 'Cancelled') return AGENT_PHASES.CANCELLED
+  if (plan.status === 'Failed') return AGENT_PHASES.FAILED
+  if (plan.requiresConfirmation) return AGENT_PHASES.WAITING_USER
+  if (pendingToolCount > 0) return AGENT_PHASES.WAITING_USER
+  if (hasBlockedPlanTask(plan)) return AGENT_PHASES.BLOCKED
+  if (plan.activeBatchId) return AGENT_PHASES.EXECUTING_PLAN
+  return sending.value ? AGENT_PHASES.WAITING_MODEL : AGENT_PHASES.IDLE
+}
+
 const taskStatusLabel = (status, automatic = false) => ({
   Pending: '等待',
   Ready: '可执行',
@@ -2515,6 +2723,14 @@ const formatTime = value => {
   overflow-wrap: anywhere;
 }
 
+.work-plan-tags {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .work-plan-header {
   justify-content: space-between;
   gap: 12px;
@@ -2824,6 +3040,98 @@ const formatTime = value => {
   border-radius: 50%;
   background: var(--app-primary, #2563eb);
   animation: typing 1s infinite ease-in-out;
+}
+
+.compile-progress-panel,
+.stage-progress-panel,
+.task-progress-panel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.05);
+  border-left: 3px solid var(--app-primary, #2563eb);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--app-text, #1f2937);
+}
+
+.compile-progress-header,
+.task-progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.compile-progress-message,
+.task-progress-title,
+.task-progress-error {
+  color: var(--app-text-muted, #475569);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.compile-progress-meta {
+  font-size: 11px;
+  color: var(--app-text-muted, #64748b);
+}
+
+.stage-progress-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.stage-progress-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stage-progress-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.stage-progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #cbd5f5;
+  flex-shrink: 0;
+}
+
+.stage-progress-item.stage-in_progress .stage-progress-dot {
+  background: var(--app-primary, #2563eb);
+  animation: typing 1.2s infinite ease-in-out;
+}
+
+.stage-progress-item.stage-completed .stage-progress-dot {
+  background: #16a34a;
+}
+
+.stage-progress-item.stage-failed .stage-progress-dot {
+  background: var(--el-color-danger);
+}
+
+.stage-progress-name {
+  flex: 1;
+  color: var(--app-text, #1f2937);
+}
+
+.stage-progress-status {
+  font-size: 11px;
+  color: var(--app-text-muted, #64748b);
+}
+
+.task-progress-error {
+  color: var(--el-color-danger);
+  font-weight: 500;
 }
 
 .stream-tool-error {
