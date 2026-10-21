@@ -143,6 +143,7 @@ Templates/CodeMaster.Migrator/Migrations/
 *.db.bak_*
 Templates/CodeMaster_Template_*.zip
 Templates/CodeMaster_Template_*.tar.gz
+Templates/latest-template.txt
 CodeMaster.WebApi/Templates/CodeMaster_Template_*.zip
 CodeMaster.WebApi/Templates/CodeMaster_Template_*.tar.gz
 
@@ -182,6 +183,29 @@ test_*.txt
 translations_export.json
 translations_clean.json
 webapi.pid
+
+# Root-level debugging scratch produced while chasing agent/e2e failures.
+# These are throwaway request/response dumps, captured logs and one-off probes;
+# token.txt in particular holds a live bearer token and must never be committed.
+/token.txt
+/convid.txt
+/*_body.json
+/*_body2.json
+/*body*.json
+/*_resp.json
+/agent-prompt.txt
+/e2e_*.err
+/e2e_*.log.stderr
+/e2e_*.log.stdout
+/e2e_done.txt
+/e2e_debug.log.stderr
+/e2e_debug.log.stdout
+/webapi*.err
+/webapi_final*.err
+/temp_overwrite.cs
+/temp_service.cs
+*.log.stderr
+*.log.stdout
 
 # Local runtime configuration. Commit sanitized appsettings.example.json files instead.
 **/appsettings.json
