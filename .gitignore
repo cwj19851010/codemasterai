@@ -136,7 +136,6 @@ Templates/CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs
 docs/print-template-schema.md
 docs/agent-printing-review-20260916.md
 docs/miniapp-control-map.md
-CODEGEN_ARCHITECTURE.md
 
 # Front-end tests for the private print feature
 CodeMaster.Vue/tests/generatedPrintTemplateSfc.test.mjs
