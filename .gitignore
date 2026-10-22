@@ -121,6 +121,7 @@ CodeMaster.Private.sln
 # Their back ends are modules under CodeMaster.Private/, so the UI goes with them.
 # viewModules.public.js already excludes projectPage from the public build.
 CodeMaster.Vue/src/views/codegen/projectPage/
+CodeMaster.Vue/src/api/codegen/projectPage.js
 CodeMaster.Vue/src/views/codegen/print/
 CodeMaster.Vue/src/views/codegen/printTemplate/
 CodeMaster.Vue/src/components/PrintDesigner/

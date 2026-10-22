@@ -118,6 +118,25 @@
              Properties="Configuration=$(Configuration)" />
   </Target>
 
+  <!-- 小程序与生成物 AI 是 2026-10 从 Application 里搬出来的独立模块。
+       Build 时它们自己会往 bin/.../modules 拷一份；这里补上 Publish 前的构建，
+       否则 dotnet publish 不会带上它们。 -->
+  <Target Name="BuildMiniAppModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\MiniApp\CodeMaster.GeneratedMiniApp.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\MiniApp\CodeMaster.GeneratedMiniApp.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="BuildGeneratedProjectAiModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\GeneratedProjectAi\CodeMaster.GeneratedProjectAi.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\GeneratedProjectAi\CodeMaster.GeneratedProjectAi.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)" />
+  </Target>
+
   <Target Name="PublishUiCompositionModules"
           AfterTargets="Publish"
           Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
