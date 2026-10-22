@@ -31,11 +31,11 @@ public class HealthController : BaseController
         return Success(new
         {
             projectName = "CodeMaster",
-            description = "代码大师 - 企业级快速开发平台",
+            description = "独立业务管理系统",
             version = "1.0.0",
-            framework = ".NET 8.0",
-            database = "SQL Server",
-            orm = "EF Core + SqlSugar",
+            framework = ".NET 10.0",
+            database = "Configured by DbProvider",
+            orm = "SqlSugar + EF Core Migrator",
             ui = "Vue 3 + Element Plus"
         });
     }

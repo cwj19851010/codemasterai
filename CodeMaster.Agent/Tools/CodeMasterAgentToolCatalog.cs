@@ -20,10 +20,13 @@ public static class CodeMasterAgentToolCatalog
     public const string GetProjectWorkTask = "get_project_work_task";
     public const string UpsertProjectWorkPlan = "upsert_project_work_plan";
     public const string SupersedeProjectWorkPlan = "supersede_project_work_plan";
+    public const string SubmitBusinessPlan = "submit_business_plan";
     public const string GetViewBuilderContext = "get_view_builder_context";
     public const string GetUiCompositionContext = "get_ui_composition_context";
     public const string GetComplexPageContext = "get_complex_page_context";
     public const string ProposeProjectWorkBatch = "propose_project_work_batch";
+    // Disabled on 2026-10-20: the agent never reads or patches CodeMaster source code.
+    // The names stay as a record of the removed tools; nothing registers them any more.
     public const string InspectCodeMasterSource = "inspect_codemaster_source";
     public const string ApplyTestSourceRepair = "apply_test_source_repair";
 
@@ -52,10 +55,9 @@ public static class CodeMasterAgentToolCatalog
         Func<UpsertAiProjectWorkPlanRequest, Task<string>>? upsertProjectWorkPlan = null,
         bool includeWorkBatch = false,
         Func<ProposeAiProjectWorkBatchRequest, Task<string>>? proposeProjectWorkBatch = null,
-        bool includeSourceRepair = false,
-        Func<AiProjectSourceInspectionRequest, Task<string>>? inspectCodeMasterSource = null,
-        Func<AiProjectSourceRepairRequest, Task<string>>? applyTestSourceRepair = null,
-        Func<SupersedeAiProjectWorkPlanRequest, Task<string>>? supersedeProjectWorkPlan = null)
+        Func<SupersedeAiProjectWorkPlanRequest, Task<string>>? supersedeProjectWorkPlan = null,
+        bool includeSubmitBusinessPlan = false,
+        Func<BusinessPlanDefinition, Task<string>>? submitBusinessPlan = null)
     {
         var tools = new List<AITool>();
         if (includeProjectSummary)
@@ -154,12 +156,12 @@ public static class CodeMasterAgentToolCatalog
             tools.Add(AIFunctionFactory.Create(
                 getProjectWorkPlan,
                 name: GetProjectWorkPlan,
-                description: "Read the authoritative standard-JSON project plan, including EntityFields, FieldControls, Relations, Views, ComplexPages, ConsistencyCheck, and GenerateCode stages, dependency locks, confirmation hash, checkpoints, and diagnostics."));
+                description: "Read the authoritative standard-JSON project plan, including EntityFields, FieldControls, Relations, Views, ComplexPages, and ConsistencyCheck stages, dependency locks, confirmation hash, checkpoints, and diagnostics."));
 
             tools.Add(new WorkPlanUpsertFunction(AIFunctionFactory.Create(
                 upsertProjectWorkPlan,
                 name: UpsertProjectWorkPlan,
-                description: "Create or update a complete executable task plan. CREATE: omit planId and expectedStructureVersion; the server assigns revision 1. UPDATE: use planId and the exact current integer structureVersion returned by get_project_work_plan (not projectStructureHash or contentHash). Preserve all task definitions when correcting parameters. Use the fixed stages EntityFields, FieldControls, Relations, Views, ComplexPages, ConsistencyCheck, and GenerateCode. Ordinary plan confirmation and metadata execution follow the conversation workflow, then one project generation, migration, complex-page generation, build, and test pipeline."), upsertProjectWorkPlan));
+                description: "Create or update a complete executable task plan. CREATE: omit planId and expectedStructureVersion; the server assigns revision 1. UPDATE: use planId and the exact current integer structureVersion returned by get_project_work_plan (not projectStructureHash or contentHash). Preserve all task definitions when correcting parameters. Use the fixed stages EntityFields, FieldControls, Relations, Views, ComplexPages, ConsistencyCheck; every stage is metadata-only with GenerationMode=None and the agent never generates code. Ordinary plan confirmation and metadata execution follow the conversation workflow; generating the source code is a separate manual action the user triggers from the project page."), upsertProjectWorkPlan));
 
             if (supersedeProjectWorkPlan != null)
             {
@@ -178,17 +180,12 @@ public static class CodeMasterAgentToolCatalog
                 description: "Legacy/manual recovery tool for grouping ready tasks. Use it only when the server workflow explicitly requests it; normal confirmed plans are advanced automatically. Do not call this while a plan is AwaitingConfirmation."));
         }
 
-        if (includeSourceRepair && inspectCodeMasterSource != null && applyTestSourceRepair != null)
+        if (includeSubmitBusinessPlan && submitBusinessPlan != null)
         {
             tools.Add(AIFunctionFactory.Create(
-                inspectCodeMasterSource,
-                name: InspectCodeMasterSource,
-                description: "In explicitly authorized Development/TestSourceRepair mode, read allowlisted CodeMaster source files with SHA-256 preimages for diagnosis. Generated output, secrets, configuration, binary files, and paths outside the configured workspace are rejected."));
-
-            tools.Add(AIFunctionFactory.Create(
-                applyTestSourceRepair,
-                name: ApplyTestSourceRepair,
-                description: "In the active disclosed test repair plan, apply a minimal unified patch to allowlisted CodeMaster source files only when every preimage hash still matches. The server runs one named validation profile, records hashes and redacted output, and never accepts arbitrary commands, generated files, secrets, or path traversal."));
+                submitBusinessPlan,
+                name: SubmitBusinessPlan,
+                description: "Submit a business-only plan definition (modules, entities, fields, relations, views, pages) using stable cross-block keys. The server compiles it into the six-stage executable work plan (EntityFields, Views, Relations, FieldControls, ComplexPages, ConsistencyCheck) and streams progress events. Use this on confirmation turns instead of authoring task definitions, dependency graphs, or task JSON."));
         }
 
         return tools;

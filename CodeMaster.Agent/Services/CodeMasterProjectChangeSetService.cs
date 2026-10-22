@@ -1,7 +1,9 @@
 using CodeMaster.Agent.Contracts;
 using CodeMaster.Application.Dtos.CodeGen;
+using CodeMaster.Core.Entities;
 using CodeMaster.Application.Services.CodeGen;
 using CodeMaster.Domain.Entities.CodeGen;
+using SqlSugar;
 
 namespace CodeMaster.Agent.Services;
 
@@ -9,6 +11,13 @@ public interface ICodeMasterProjectChangeSetService
 {
     Task<ProjectChangeSetValidationResult> ValidateAsync(long projectId, ProjectChangeSetProposal proposal);
     Task<ProjectChangeSetExecutionResult> ExecuteAsync(long projectId, ProjectChangeSetProposal proposal);
+
+    /// <summary>
+    /// Applies the deterministic fix-ups a model-authored change set needs before it can be
+    /// validated. Exposed as a service step so every entry point — the standalone approval tool and
+    /// the work-batch adapter alike — repairs the proposal the same way.
+    /// </summary>
+    Task<List<string>> RepairKnownIssuesAsync(long projectId, ProjectChangeSetProposal proposal);
 }
 
 internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChangeSetService
@@ -16,21 +25,52 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
     private readonly ICodeMasterProjectBlueprintService _blueprintService;
     private readonly IProjectModuleService _moduleService;
     private readonly IModuleEntityService _entityService;
+    private readonly IProjectService _projectService;
+    private readonly ISqlSugarClient _db;
 
     public CodeMasterProjectChangeSetService(
         ICodeMasterProjectBlueprintService blueprintService,
         IProjectModuleService moduleService,
-        IModuleEntityService entityService)
+        IModuleEntityService entityService,
+        IProjectService projectService,
+        ISqlSugarClient db)
     {
         _blueprintService = blueprintService;
         _moduleService = moduleService;
         _entityService = entityService;
+        _projectService = projectService;
+        _db = db;
     }
 
     public async Task<ProjectChangeSetValidationResult> ValidateAsync(long projectId, ProjectChangeSetProposal proposal)
     {
+        await ProjectChangeSetFieldCopyExpander.ExpandAsync(
+            proposal,
+            query => _blueprintService.GetEntityAsync(projectId, query.EntityId, query.EntityName));
         var blueprint = await _blueprintService.GetProjectAsync(projectId);
-        return CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        // Every entry point — the standalone proposal tool, the work-batch adapter's readiness
+        // check and the execution path itself — reaches the rules through here, so resolving the
+        // module references before validating is the only place the repair cannot be missed.
+        ProjectChangeSetIssueRepairs.ResolveIdlessModuleUpdates(proposal, blueprint.Modules);
+        ProjectChangeSetIssueRepairs.AssignSingleCandidateModule(proposal, blueprint.Modules);
+
+        // Module names become namespace segments in the generated project, so one that reuses the
+        // project name has to be refused here rather than repaired after generation.
+        var project = await _projectService.GetByIdAsync(projectId);
+        return CodeMasterProjectChangeSetRules.Validate(blueprint, proposal, project?.ProjectName);
+    }
+
+    public async Task<List<string>> RepairKnownIssuesAsync(long projectId, ProjectChangeSetProposal proposal)
+    {
+        var repairs = ProjectChangeSetIssueRepairs.NormalizeOneToManyRelations(proposal);
+        var blueprint = await _blueprintService.GetProjectAsync(projectId);
+        repairs.AddRange(ProjectChangeSetIssueRepairs.ResolveIdlessModuleUpdates(proposal, blueprint.Modules));
+        repairs.AddRange(ProjectChangeSetIssueRepairs.AssignSingleCandidateModule(proposal, blueprint.Modules));
+        repairs.AddRange(ProjectChangeSetIssueRepairs.DeferUnresolvedRelatedTargets(
+            proposal,
+            blueprint.Modules.SelectMany(module => module.Entities).Select(entity => entity.Name)));
+        return repairs;
     }
 
     public async Task<ProjectChangeSetExecutionResult> ExecuteAsync(long projectId, ProjectChangeSetProposal proposal)
@@ -39,17 +79,55 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
         if (!validation.IsValid)
             throw new InvalidOperationException("The project change set is invalid: " + string.Join(" ", validation.Errors));
 
+        var ownsTransaction = _db.Ado.Transaction == null;
+        if (ownsTransaction)
+            _db.Ado.BeginTran();
+
+        try
+        {
         var result = new ProjectChangeSetExecutionResult
         {
             ProjectId = projectId,
             Summary = proposal.Summary.Trim()
         };
 
-        var modules = await _moduleService.GetByProjectIdAsync(projectId);
+        // A previous run can leave a field pointing at an entity that no longer exists. Saving an
+        // entity re-validates every field it already owns, so one stale link aborts the whole change
+        // set with "Related entity 'X' does not exist." before anything is written.
+        result.AutomaticRepairs.AddRange(await RepairDanglingFieldLinksAsync(projectId, null));
+        result.AutomaticRepairs.AddRange(await RepairDanglingOneToManyRelationsAsync(projectId));
+
+        // Soft-deleted rows are included on purpose. Resetting a project soft-deletes its modules,
+        // and the module-name unique index does not cover IsDeleted, so a deleted module keeps
+        // blocking a re-creation of the same name. The global soft-delete query filter hides those
+        // rows, which would make the reuse branch below miss them and trip the unique constraint.
+        var modules = await QueryModulesIncludingDeletedAsync(projectId);
+        var deletedModuleIds = modules.Where(x => x.IsDeleted).Select(x => x.Id).ToHashSet();
         var moduleIdsByName = modules.ToDictionary(x => x.ModuleName, x => x.Id, StringComparer.OrdinalIgnoreCase);
         foreach (var module in proposal.Modules)
         {
             var name = module.ModuleName.Trim();
+
+            // A plan is compiled against the blueprint as it looked at compile time, so a module it
+            // intends to create can already exist by the time the batch runs — an earlier attempt
+            // created it before failing later in the same change set, or the model created it
+            // directly. Creating it again trips the module-name unique constraint and rolls the
+            // whole change set back, so reuse the existing module instead.
+            if (moduleIdsByName.TryGetValue(name, out var adoptedId))
+            {
+                // A soft-deleted module still holds the name. Bring it back instead of leaving the
+                // project with a module that nothing can see.
+                if (deletedModuleIds.Contains(adoptedId))
+                {
+                    await RestoreModuleAsync(adoptedId, module);
+                    deletedModuleIds.Remove(adoptedId);
+                }
+
+                // Reported alongside created ones: this change set guarantees these modules exist.
+                result.CreatedModules.Add(new ProjectChangeCreatedItem { Id = adoptedId, Name = name });
+                continue;
+            }
+
             var id = await _moduleService.CreateAsync(new CreateProjectModuleDto
             {
                 ProjectId = projectId,
@@ -90,17 +168,89 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
             PageNum = 1,
             PageSize = 10000
         });
-        var entityIdsByName = existingEntities.ToDictionary(x => x.Name, x => x.Id, StringComparer.OrdinalIgnoreCase);
+        // Same soft-delete reasoning as the modules above: a deleted entity still owns its name in
+        // the unique index while staying invisible to the default query filter.
+        var allEntities = await QueryEntitiesIncludingDeletedAsync(projectId);
+        var deletedEntityIds = allEntities.Where(x => x.IsDeleted).Select(x => x.Id).ToHashSet();
+        var entityIdsByName = allEntities.ToDictionary(x => x.Name, x => x.Id, StringComparer.OrdinalIgnoreCase);
+        // Every module that is either alive or has just been brought back. Anything outside this set
+        // is still deleted, and entities filed under it stay invisible to the blueprint.
+        var liveModuleIds = moduleIdsByName.Values.Where(id => !deletedModuleIds.Contains(id)).ToHashSet();
 
         foreach (var entity in proposal.Entities)
         {
             var name = entity.Name.Trim();
+
+            // Same reasoning as the modules above: a plan is compiled against the blueprint as it
+            // looked at compile time, so an entity it intends to create can already exist by the
+            // time the batch runs — an earlier attempt created it before failing later in the same
+            // change set. Creating it again trips the entity-name unique constraint and rolls the
+            // whole change set back. Reroute it through the update path instead, which merges the
+            // description and adds only the fields the existing entity is still missing.
+            if (entityIdsByName.TryGetValue(name, out var adoptedEntityId))
+            {
+                // Bring a soft-deleted entity back before reloading it, otherwise the filtered read
+                // below returns null and the name looks free — and the insert then hits the unique
+                // constraint the deleted row is still holding.
+                if (deletedEntityIds.Contains(adoptedEntityId))
+                {
+                    await RestoreEntityAsync(projectId, adoptedEntityId);
+                    deletedEntityIds.Remove(adoptedEntityId);
+                }
+
+                var current = await _entityService.GetByIdAsync(adoptedEntityId);
+                if (current != null)
+                {
+                    // An adopted entity can still be filed under a module that a previous reset
+                    // deleted. The blueprint only walks live modules, so an entity whose module is
+                    // gone is invisible to every later verification even though the row is alive —
+                    // which reads as "reported success but metadata verification found missing
+                    // entities". Re-home it to the module this change set actually targets.
+                    var targetModuleId = ResolveModuleId(entity, moduleIdsByName);
+                    if (deletedModuleIds.Contains(targetModuleId))
+                    {
+                        await RestoreModuleAsync(targetModuleId, null);
+                        deletedModuleIds.Remove(targetModuleId);
+                    }
+                    if (current.ModuleId != targetModuleId && !liveModuleIds.Contains(current.ModuleId))
+                        await MoveEntityToModuleAsync(adoptedEntityId, targetModuleId);
+
+                    var existingFieldNames = current.Fields
+                        .Select(field => field.Name.Trim())
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    proposal.EntityUpdates.Add(new UpdateEntityProposal
+                    {
+                        EntityId = adoptedEntityId,
+                        Name = name,
+                        Description = entity.Description,
+                        BusinessDescription = entity.BusinessDescription,
+                        NewFields = entity.Fields
+                            .Where(field => !existingFieldNames.Contains(field.Name.Trim()))
+                            .ToList()
+                    });
+                    // Reported alongside created ones: this change set guarantees these entities exist.
+                    result.CreatedEntities.Add(new ProjectChangeCreatedItem { Id = adoptedEntityId, Name = name });
+                    continue;
+                }
+
+                // The id no longer resolves; treat the name as free and create fresh below.
+                entityIdsByName.Remove(name);
+            }
+
+            var moduleId = ResolveModuleId(entity, moduleIdsByName);
+            if (deletedModuleIds.Contains(moduleId))
+            {
+                await RestoreModuleAsync(moduleId, null);
+                deletedModuleIds.Remove(moduleId);
+            }
+
             var id = await _entityService.CreateAsync(new CreateModuleEntityDto
             {
                 ProjectId = projectId,
-                ModuleId = ResolveModuleId(entity, moduleIdsByName),
+                ModuleId = moduleId,
                 Name = name,
                 Description = entity.Description.Trim(),
+                BusinessDescription = NormalizeOptional(entity.BusinessDescription),
                 HasPrimaryKey = entity.HasPrimaryKey,
                 TableName = NormalizeOptional(entity.TableName),
                 IsTree = entity.IsTree,
@@ -123,7 +273,7 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
 
         foreach (var update in proposal.EntityUpdates.Where(x => !string.IsNullOrWhiteSpace(x.Name)))
         {
-            var current = existingEntities.First(x => x.Id == update.EntityId);
+            var current = allEntities.First(x => x.Id == update.EntityId);
             entityIdsByName.Remove(current.Name);
             entityIdsByName[update.Name!.Trim()] = current.Id;
         }
@@ -161,6 +311,33 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
             result.CreatedRelationCount += oneToManyRelations.Count + entityRelations.Count;
         }
 
+        // Dictionaries target the generated project's database and must run after
+        // entity metadata has been committed in the same ordered approval.
+        foreach (var dictionary in proposal.Dictionaries)
+        {
+            await _projectService.SaveProjectDictionaryAsync(projectId, new SaveProjectDictionaryDto
+            {
+                TenantId = dictionary.TenantId,
+                DictType = dictionary.DictType,
+                DictName = dictionary.DictName,
+                LangKey = dictionary.LangKey,
+                Status = dictionary.Status,
+                Sort = dictionary.Sort,
+                Remark = dictionary.Remark,
+                Items = dictionary.Items.Select(item => new SaveProjectDictionaryItemDto
+                {
+                    Label = item.Label,
+                    Value = item.Value,
+                    LangKey = item.LangKey,
+                    IsDefault = item.IsDefault,
+                    Status = item.Status,
+                    Sort = item.Sort,
+                    Remark = item.Remark
+                }).ToList()
+            });
+            result.CreatedDictionaryCount++;
+        }
+
         foreach (var entityId in proposal.DeleteEntityIds.Distinct())
         {
             await _entityService.DeleteAsync(entityId);
@@ -174,53 +351,43 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
         }
 
         AddClientActions(projectId, proposal, existingEntities, result);
+        if (ownsTransaction)
+            _db.Ado.CommitTran();
         return result;
+        }
+        catch
+        {
+            if (ownsTransaction)
+                _db.Ado.RollbackTran();
+            throw;
+        }
     }
 
+    /// <summary>
+    /// Intentionally adds nothing. The agent only writes metadata: code generation, build, and
+    /// tests are manual actions the user triggers from the project page, so a change set never
+    /// queues generation client actions any more.
+    /// </summary>
     internal static void AddClientActions(
         long projectId,
         ProjectChangeSetProposal proposal,
         IReadOnlyCollection<ModuleEntityDto> existingEntities,
         ProjectChangeSetExecutionResult result)
     {
-        if (string.Equals(proposal.GenerationMode, "None", StringComparison.OrdinalIgnoreCase))
-            return;
+        _ = projectId;
+        _ = proposal;
+        _ = existingEntities;
+        _ = result;
+    }
 
-        var deletedIds = proposal.DeleteEntityIds.ToHashSet();
-        var targetIds = new HashSet<long>(proposal.GenerationEntityIds.Where(x => !deletedIds.Contains(x)));
-        foreach (var entity in result.CreatedEntities)
-            targetIds.Add(entity.Id);
-        foreach (var entity in result.UpdatedEntities)
-            targetIds.Add(entity.Id);
-
-        var isFull = string.Equals(proposal.GenerationMode, "Full", StringComparison.OrdinalIgnoreCase);
-        if (isFull && proposal.GenerationEntityIds.Count == 0)
-        {
-            foreach (var entity in existingEntities.Where(x => !deletedIds.Contains(x.Id)))
-                targetIds.Add(entity.Id);
-        }
-
-        var generationQueued = isFull || targetIds.Count > 0;
-        if (generationQueued)
-        {
-            result.ClientActions.Add(new AiClientActionDto
-            {
-                Action = isFull ? "generateProjectCode" : "generateProjectIncrementalCode",
-                ProjectId = projectId,
-                EntityIds = isFull && proposal.GenerationEntityIds.Count == 0
-                    ? new List<long>()
-                    : targetIds.OrderBy(x => x).ToList()
-            });
-        }
-
-        if (generationQueued || proposal.BuildAfterGeneration)
-        {
-            result.ClientActions.Add(new AiClientActionDto
-            {
-                Action = "buildProject",
-                ProjectId = projectId
-            });
-        }
+    /// <summary>
+    /// Always false: no client-side build action is ever queued by the agent, so the change set
+    /// never needs the build permission.
+    /// </summary>
+    internal static bool RequiresBuildPermission(ProjectChangeSetProposal proposal)
+    {
+        _ = proposal;
+        return false;
     }
 
     private static long ResolveModuleId(CreateEntityProposal entity, IReadOnlyDictionary<string, long> moduleIdsByName)
@@ -234,12 +401,285 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
         throw new InvalidOperationException($"Unable to resolve module for entity '{entity.Name}'.");
     }
 
+    /// <summary>
+    /// Reads every module of the project, soft-deleted ones included. The global soft-delete query
+    /// filter has to be lifted for the read because a deleted module still owns its name in the
+    /// unique index and therefore still decides whether the name is free.
+    /// </summary>
+    private async Task<List<ProjectModule>> QueryModulesIncludingDeletedAsync(long projectId)
+    {
+        _db.QueryFilter.ClearAndBackup<ISoftDelete>();
+        try
+        {
+            return await _db.Queryable<ProjectModule>()
+                .Where(module => module.ProjectId == projectId)
+                .ToListAsync();
+        }
+        finally
+        {
+            _db.QueryFilter.Restore();
+        }
+    }
+
+    /// <summary>
+    /// Reads every entity of the project, soft-deleted ones included. See
+    /// <see cref="QueryModulesIncludingDeletedAsync"/> for why the filter is lifted.
+    /// </summary>
+    private async Task<List<ModuleEntity>> QueryEntitiesIncludingDeletedAsync(long projectId)
+    {
+        _db.QueryFilter.ClearAndBackup<ISoftDelete>();
+        try
+        {
+            return await _db.Queryable<ModuleEntity>()
+                .Where(entity => entity.ProjectId == projectId)
+                .ToListAsync();
+        }
+        finally
+        {
+            _db.QueryFilter.Restore();
+        }
+    }
+
+    /// <summary>
+    /// Clears the soft-delete mark left on a module by an earlier reset so the change set can reuse
+    /// it. <paramref name="module"/> is optional: when supplied its metadata is applied as well,
+    /// otherwise only the deletion state is cleared.
+    /// </summary>
+    private async Task RestoreModuleAsync(long moduleId, CreateModuleProposal? module)
+    {
+        var updatable = _db.Updateable<ProjectModule>()
+            .SetColumns(item => item.IsDeleted == false)
+            .SetColumns(item => item.DeleteTime == (DateTime?)null)
+            .SetColumns(item => item.DeleteBy == (string?)null)
+            .SetColumns(item => item.DeleteUserId == (long?)null)
+            .SetColumns(item => item.UpdateTime == DateTime.UtcNow);
+
+        if (module != null)
+        {
+            var description = module.ModuleDescription.Trim();
+            var icon = NormalizeOptional(module.Icon);
+            var routePath = NormalizeOptional(module.RoutePath);
+            var remark = NormalizeOptional(module.Remark);
+            updatable = updatable
+                .SetColumns(item => item.ModuleDescription == description)
+                .SetColumns(item => item.Icon == icon)
+                .SetColumns(item => item.OrderNum == module.OrderNum)
+                .SetColumns(item => item.RoutePath == routePath)
+                .SetColumns(item => item.Remark == remark);
+        }
+
+        await updatable.Where(item => item.Id == moduleId).ExecuteCommandAsync();
+    }
+
+    /// <summary>
+    /// Files an adopted entity under the module this change set targets. Entities left under a
+    /// module that an earlier reset deleted never show up in the project blueprint.
+    /// </summary>
+    private async Task MoveEntityToModuleAsync(long entityId, long moduleId)
+    {
+        await _db.Updateable<ModuleEntity>()
+            .SetColumns(item => item.ModuleId == moduleId)
+            .SetColumns(item => item.UpdateTime == DateTime.UtcNow)
+            .Where(item => item.Id == entityId)
+            .ExecuteCommandAsync();
+    }
+
+    /// <summary>
+    /// Clears the soft-delete mark left on an entity by an earlier reset so the change set can reuse
+    /// it instead of failing on the entity-name unique constraint.
+    /// </summary>
+    private async Task RestoreEntityAsync(long projectId, long entityId)
+    {
+        await _db.Updateable<ModuleEntity>()
+            .SetColumns(item => item.IsDeleted == false)
+            .SetColumns(item => item.DeleteTime == (DateTime?)null)
+            .SetColumns(item => item.DeleteBy == (string?)null)
+            .SetColumns(item => item.DeleteUserId == (long?)null)
+            .SetColumns(item => item.UpdateTime == DateTime.UtcNow)
+            .Where(item => item.Id == entityId)
+            .ExecuteCommandAsync();
+
+        // The row is live again, so its old field metadata is live again too — and that metadata
+        // belongs to the run that created it, which may have referenced an entity that has since
+        // disappeared. Repair it before anything validates the entity.
+        await RepairDanglingFieldLinksAsync(projectId, new[] { entityId });
+    }
+
+    /// <summary>
+    /// Downgrades fields whose related-entity link points at something the project no longer has.
+    /// </summary>
+    /// <remarks>
+    /// Saving an entity re-validates every field it already owns, not just the ones the change set
+    /// adds. A field left behind by an earlier run can therefore block a change set that never
+    /// mentions it: the validation walks the stored fields, hits a <c>RelatedEntityName</c> that no
+    /// longer resolves, and throws "Related entity 'X' does not exist." — which fails the whole
+    /// batch and, because a reset only soft-deletes, keeps failing every later run on the same
+    /// project. That is what made the pipeline look randomly flaky: a clean project passes, a
+    /// project carrying one stale link never does.
+    /// </remarks>
+    private async Task<List<string>> RepairDanglingFieldLinksAsync(long projectId, IEnumerable<long>? entityIds)
+    {
+        var scopedIds = entityIds?.ToList();
+        var names = await _db.Queryable<ModuleEntity>()
+            .Where(item => item.ProjectId == projectId)
+            .Select(item => new { item.Id, item.Name })
+            .ToListAsync();
+        if (names.Count == 0)
+            return new List<string>();
+
+        var allowed = names.Select(item => item.Id).ToHashSet();
+        var targetIds = scopedIds == null ? allowed.ToList() : scopedIds.Where(allowed.Contains).ToList();
+        if (targetIds.Count == 0)
+            return new List<string>();
+
+        var knownEntityNames = names.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fields = await _db.Queryable<EntityField>()
+            .Where(field => targetIds.Contains(field.ModuleEntityId))
+            .Where(field => field.RelatedEntityName != null && field.RelatedEntityName != "")
+            .ToListAsync();
+
+        var repairs = new List<string>();
+        var stale = fields.Where(field =>
+                !string.IsNullOrWhiteSpace(field.RelatedEntityName) &&
+                !knownEntityNames.Contains(field.RelatedEntityName.Trim()) &&
+                !SystemReferenceEntityCatalog.TryGet(field.RelatedEntityName.Trim(), out _))
+            .ToList();
+        if (stale.Count == 0)
+            return repairs;
+
+        var fieldNames = (await _db.Queryable<EntityField>()
+                .Where(field => targetIds.Contains(field.ModuleEntityId))
+                .Select(field => new { field.Id, field.Name })
+                .ToListAsync())
+            .ToDictionary(item => item.Id, item => item.Name);
+
+        foreach (var field in stale)
+        {
+            var target = field.RelatedEntityName!.Trim();
+            await _db.Updateable<EntityField>()
+                .SetColumns(item => item.RelatedEntityName == null)
+                .SetColumns(item => item.RelatedEntityIdField == null)
+                .SetColumns(item => item.RelatedEntityDisplayFields == null)
+                .SetColumns(item => item.SelectDataSource == null)
+                .SetColumns(item => item.SelectOptions == null)
+                .SetColumns(item => item.IsMultiple == false)
+                .SetColumns(item => item.FormControlType == "input")
+                .Where(item => item.Id == field.Id)
+                .ExecuteCommandAsync();
+
+            var owner = fieldNames.TryGetValue(field.Id, out var ownerName) ? ownerName : field.ModuleEntityId.ToString();
+            repairs.Add(
+                $"Cleared the stale '{owner}' link to '{target}': that entity no longer exists, so the control fell back to a plain input.");
+        }
+
+        return repairs;
+    }
+
+    /// <summary>
+    /// Brings the project's one-to-many relations back to a state the generator can consume:
+    /// stale children are re-pointed or dropped, and duplicate parent-child pairs collapse to one row.
+    /// </summary>
+    /// <remarks>
+    /// Deleting a module or an entity leaves the one-to-many rows that reference it behind. The row
+    /// keeps the child entity name next to its id, so a stale id can usually be repaired by name;
+    /// when the name is gone as well the row is dropped. Without this, code generation keeps walking
+    /// a child that does not exist and every later generation request for the project fails with
+    /// "One-to-many child entity does not exist".
+    ///
+    /// Two live rows for the same parent and child are just as fatal, only later: the entity
+    /// template emits one navigation property per relation, so the child type ends up declared twice
+    /// and the generated project fails to compile with CS0102. Collapsing them here keeps the fix at
+    /// the data level instead of teaching the generator to silently drop a property.
+    /// </remarks>
+    private async Task<List<string>> RepairDanglingOneToManyRelationsAsync(long projectId)
+    {
+        var entities = await _db.Queryable<ModuleEntity>()
+            .Where(item => item.ProjectId == projectId)
+            .Select(item => new { item.Id, item.Name })
+            .ToListAsync();
+        if (entities.Count == 0)
+            return new List<string>();
+
+        var liveIds = entities.Select(item => item.Id).ToHashSet();
+        var idByName = entities
+            .GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Id, StringComparer.OrdinalIgnoreCase);
+
+        // 按 Id 排序，保证“保留最早那条、删掉后来的”是确定的。
+        var relations = await _db.Queryable<OneToManyRelation>()
+            .Where(item => liveIds.Contains(item.ModuleEntityId))
+            .OrderBy(item => item.Id)
+            .ToListAsync();
+
+        // 已经成立的父子对。重指之前必须查这张表，否则会把一条旧关系改到已经有有效关系的
+        // 子实体上，同一对父子出现两条关系，生成的实体就会输出两个同名导航属性（CS0102）。
+        var livePairs = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var existing in relations)
+        {
+            if (liveIds.Contains(existing.ChildEntityId))
+                livePairs.Add(existing.ModuleEntityId + ":" + existing.ChildEntityId);
+        }
+
+        var repairs = new List<string>();
+
+        // 先把“父子都还在、但同一对出现了多次”的关系收敛成一条。
+        var keptPairs = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var relation in relations)
+        {
+            if (!liveIds.Contains(relation.ChildEntityId))
+                continue;
+            if (keptPairs.Add(relation.ModuleEntityId + ":" + relation.ChildEntityId))
+                continue;
+
+            await SoftDeleteRelationAsync(relation.Id);
+            repairs.Add(
+                $"Removed a duplicate one-to-many relation to '{relation.ChildEntityName}', which the parent already declares once.");
+        }
+
+        foreach (var relation in relations)
+        {
+            if (liveIds.Contains(relation.ChildEntityId))
+                continue;
+
+            var childName = relation.ChildEntityName?.Trim() ?? string.Empty;
+            if (childName.Length > 0 && idByName.TryGetValue(childName, out var resolvedId) &&
+                livePairs.Add(relation.ModuleEntityId + ":" + resolvedId))
+            {
+                await _db.Updateable<OneToManyRelation>()
+                    .SetColumns(item => item.ChildEntityId == resolvedId)
+                    .Where(item => item.Id == relation.Id)
+                    .ExecuteCommandAsync();
+                repairs.Add(
+                    $"Re-pointed the child table of a one-to-many relation to '{childName}', which now holds a different id than the relation recorded.");
+                continue;
+            }
+
+            await SoftDeleteRelationAsync(relation.Id);
+            repairs.Add(
+                childName.Length > 0 && idByName.ContainsKey(childName)
+                    ? $"Removed a duplicate one-to-many relation to '{childName}', which is already reachable through an existing relation."
+                    : $"Removed a one-to-many relation whose child entity '{childName}' no longer exists in the project.");
+        }
+
+        return repairs;
+    }
+
+    private async Task SoftDeleteRelationAsync(long relationId)
+    {
+        await _db.Updateable<OneToManyRelation>()
+            .SetColumns(item => item.IsDeleted == true)
+            .SetColumns(item => item.DeleteTime == DateTime.UtcNow)
+            .Where(item => item.Id == relationId)
+            .ExecuteCommandAsync();
+    }
+
     private static CreateEntityFieldDto MapField(CreateEntityFieldProposal field)
     {
         return new CreateEntityFieldDto
         {
             Name = field.Name.Trim(),
             Description = field.Description.Trim(),
+            BusinessDescription = NormalizeOptional(field.BusinessDescription),
             DataType = CSharpDataTypeNormalizer.Normalize(field.DataType),
             IsNullable = field.IsNullable,
             MaxLength = field.MaxLength,
@@ -314,6 +754,7 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
             Id = current.Id,
             Name = MergeRequired(update.Name, current.Name),
             Description = MergeRequired(update.Description, current.Description),
+            BusinessDescription = update.BusinessDescription ?? current.BusinessDescription,
             DataType = CSharpDataTypeNormalizer.Normalize(MergeRequired(update.DataType, current.DataType)),
             IsNullable = update.IsNullable ?? current.IsNullable,
             MaxLength = update.ClearMaxLength ? null : update.MaxLength ?? current.MaxLength,
@@ -440,6 +881,7 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
         {
             Name = MergeRequired(update.Name, current.Name),
             Description = MergeRequired(update.Description, current.Description),
+            BusinessDescription = update.BusinessDescription ?? current.BusinessDescription,
             HasPrimaryKey = update.HasPrimaryKey ?? current.HasPrimaryKey,
             TableName = MergeOptional(update.TableName, current.TableName),
             IsTree = update.IsTree ?? current.IsTree,
@@ -483,6 +925,7 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
         {
             Name = entity.Name,
             Description = entity.Description,
+            BusinessDescription = entity.BusinessDescription,
             HasPrimaryKey = entity.HasPrimaryKey,
             TableName = entity.TableName,
             IsTree = entity.IsTree,

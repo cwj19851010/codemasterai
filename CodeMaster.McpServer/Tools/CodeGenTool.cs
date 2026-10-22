@@ -26,7 +26,7 @@ public sealed class CodeGenTool
     public static McpTool Definition => new()
     {
         Name = "generate_code",
-        Description = "Generate CodeMaster code locally from a metadata bundle downloaded through CodeMaster WebApi. Supports one entity, one module, or a whole project in full or incremental mode.",
+        Description = "Safely generate CodeMaster code locally from a metadata bundle downloaded through CodeMaster WebApi. The unified strategy bootstraps missing output and incrementally updates existing output for one entity, one module, or a whole project.",
         InputType = typeof(CodeGenInput),
         InputSchema = JsonSerializer.SerializeToNode(new
         {
@@ -37,7 +37,7 @@ public sealed class CodeGenTool
                 entityName = new { type = "string", description = "Entity name, for example Order. Use with projectId when entityId is unknown." },
                 projectId = new { oneOf = new object[] { new { type = "integer" }, new { type = "string" } }, description = "Project id." },
                 moduleId = new { oneOf = new object[] { new { type = "integer" }, new { type = "string" } }, description = "Optional module id." },
-                mode = new { type = "string", description = "full or incremental. Defaults to full." },
+                mode = new { type = "string", description = "Deprecated compatibility field. Smart generation is always used." },
                 validateBuild = new { type = "boolean", description = "Run dotnet build after generation. Defaults to true." },
                 validateFrontendBuild = new { type = "boolean", description = "Run npm run build after generation. Defaults to false." },
                 validateTests = new { type = "boolean", description = "Run dotnet test on the generated test project if one exists. Defaults to false." },
@@ -60,10 +60,8 @@ public sealed class CodeGenTool
             return new { success = false, message = target.Error };
 
         var session = await _apiClient.ResolveSessionAsync(args.WorkspacePath);
-        var mode = string.Equals(args.Mode, "incremental", StringComparison.OrdinalIgnoreCase)
-            ? "incremental"
-            : "full";
-        var action = mode == "incremental" ? "generateProjectIncrementalCode" : "generateProjectCode";
+        const string mode = "smart";
+        const string action = "generateProjectSmartCode";
         var isProjectWide = args.EntityId <= 0 && string.IsNullOrWhiteSpace(args.EntityName) && args.ModuleId <= 0;
         var requestedEntityIds = isProjectWide
             ? new List<long>()

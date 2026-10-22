@@ -54,8 +54,7 @@
         </el-form-item>
 
         <el-form-item :label="t('connection_string')" prop="connectionString">
-          <el-input v-model="form.connectionString" type="textarea" :rows="2" :placeholder="t2('please_input', 'connection_string')" />
-          <div class="form-tip">{{ t('connection_string_tip') }}</div>
+          <DbConnectionEditor v-model="form.connectionString" :database-type="form.databaseType" />
         </el-form-item>
 
         <el-form-item :label="t('project_path')" prop="projectPath">
@@ -89,6 +88,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getById, update } from '@/api/codegen/project'
+import DbConnectionEditor from './components/DbConnectionEditor.vue'
 import { useI18n } from 'vue-i18n'
 import { t2 } from '@/i18n'
 

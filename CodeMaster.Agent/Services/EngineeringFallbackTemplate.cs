@@ -4,7 +4,7 @@ using CodeMaster.Agent.Contracts;
 namespace CodeMaster.Agent.Services;
 
 /// <summary>
-/// Builds a complete seven-stage work plan for the Engineering module using a fixed template.
+/// Builds a complete six-stage work plan for the Engineering module using a fixed template.
 /// Used as the last-resort fallback when the chat model (notably qwen3.8-flash) emits text
 /// without ever calling upsert_project_work_plan. The template mirrors what a well-behaved
 /// model is expected to produce: 11 entities (project, supplier, material, purchase contracts,
@@ -13,6 +13,105 @@ namespace CodeMaster.Agent.Services;
 /// </summary>
 internal static class EngineeringFallbackTemplate
 {
+    public static BusinessPlanDefinition BuildBusinessDefinition(
+        string moduleName,
+        string userMessage)
+    {
+        var entities = Entities()
+            .Select(spec => new BusinessEntityDefinition
+            {
+                Key = ToKey(spec.Name),
+                ModuleKey = moduleName,
+                TechnicalName = spec.Name,
+                DisplayName = spec.DisplayName,
+                TableName = spec.TableName,
+                Fields = spec.Fields.Select(field => new BusinessFieldDefinition
+                {
+                    TechnicalName = ReadFieldString(field, "name"),
+                    DisplayName = ReadFieldString(field, "displayName"),
+                    DataType = ReadFieldString(field, "type"),
+                    Required = !ReadFieldBool(field, "isNullable")
+                }).ToList()
+            }).ToList();
+
+        var profitView = new BusinessEntityDefinition
+        {
+            Key = "profit_view",
+            ModuleKey = moduleName,
+            TechnicalName = "EngineeringProjectProfitView",
+            DisplayName = "工程利润统计视图",
+            TableName = "vw_eng_profit",
+            IsReadOnly = true,
+            Fields =
+            [
+                new() { TechnicalName = "Id", DisplayName = "编号", DataType = "long", Required = true },
+                new() { TechnicalName = "Location", DisplayName = "地点", DataType = "string" },
+                new() { TechnicalName = "ContractAmount", DisplayName = "合同金额", DataType = "decimal" },
+                new() { TechnicalName = "Profit", DisplayName = "利润", DataType = "decimal" }
+            ]
+        };
+        entities.Add(profitView);
+
+        return new BusinessPlanDefinition
+        {
+            Modules = [new BusinessModuleDefinition
+            {
+                Key = moduleName,
+                TechnicalName = moduleName,
+                DisplayName = "工程管理"
+            }],
+            Entities = entities,
+            Relations =
+            [
+                Relation("expense_project", "projectExpense", "EngineeringProject", "EngineeringProjectId"),
+                Relation("purchase_project", "purchaseContract", "EngineeringProject", "EngineeringProjectId"),
+                Relation("purchase_material", "purchaseContract", "Material", "MaterialId"),
+                Relation("purchase_supplier", "purchaseContract", "Supplier", "SupplierId"),
+                Relation("stockin_purchase", "materialStockIn", "PurchaseContract", "PurchaseContractId"),
+                Relation("labor_project", "laborContract", "EngineeringProject", "EngineeringProjectId"),
+                Relation("receivable_project", "receivableRecord", "EngineeringProject", "EngineeringProjectId"),
+                Relation("payment_item_statement", "paymentStatementItem", "PaymentStatement", "PaymentStatementId"),
+                Relation("payment_item_stockin", "paymentStatementItem", "MaterialStockIn", "MaterialStockInId"),
+                Relation("payment_item_labor", "paymentStatementItem", "LaborContract", "LaborContractId")
+            ],
+            Views =
+            [new BusinessViewDefinition
+            {
+                Key = "profit_view",
+                EntityKey = "profit_view",
+                ViewName = "vw_eng_profit",
+                DisplayName = "工程利润统计",
+                Sql = "SELECT Id, Location, ContractAmount, 0 AS Profit FROM eng_project WHERE IsDeleted = 0"
+            }],
+            Pages =
+            [
+                new() { Key = "engineering_projects", EntityKey = "engineeringProject", PageType = "index", DisplayName = "工程项目" },
+                new() { Key = "payment_statements", EntityKey = "paymentStatement", PageType = "index", DisplayName = "付款对账单" }
+            ]
+        };
+    }
+
+    private static BusinessRelationDefinition Relation(string key, string sourceKey, string targetName, string sourceField)
+        => new()
+        {
+            Key = key,
+            Kind = "ManyToOne",
+            SourceEntityKey = sourceKey,
+            SourceField = sourceField,
+            TargetEntityKey = ToKey(targetName),
+            TargetField = "Id",
+            DisplayName = key
+        };
+
+    private static string ToKey(string value)
+        => char.ToLowerInvariant(value[0]) + value[1..];
+
+    private static string ReadFieldString(object field, string name)
+        => field.GetType().GetProperty(name)?.GetValue(field)?.ToString() ?? string.Empty;
+
+    private static bool ReadFieldBool(object field, string name)
+        => bool.TryParse(ReadFieldString(field, name), out var value) && value;
+
     public static UpsertAiProjectWorkPlanRequest? Build(
         long projectId,
         long conversationId,
@@ -106,17 +205,8 @@ internal static class EngineeringFallbackTemplate
                     checks = Array.Empty<object>()
                 }, JsonOptions)) });
 
-        var generateStage = PlanStage("GenerateCode", "GenerateCode", "代码生成", 7,
-            new[] { PlanTask("generate-code", "生成代码", "generate_project",
-                new[] { $"module:{moduleName}" }, new[] { "consistency-check" },
-                JsonSerializer.SerializeToElement(new
-                {
-                    kind = "generate_project",
-                    summary = "生成代码",
-                    generationMode = "Full",
-                    entityIds = Array.Empty<long>(),
-                    buildAfterGeneration = false
-                }, JsonOptions)) });
+        // Code generation is deliberately not part of the plan: the agent only writes metadata,
+        // and the user triggers generation from the UI when they are ready.
 
         return new UpsertAiProjectWorkPlanRequest
         {
@@ -127,7 +217,7 @@ internal static class EngineeringFallbackTemplate
             Stages = new List<AiProjectWorkStageInput>
             {
                 entityStage, viewStage, relationsStage, fieldsStage,
-                pagesStage, consistencyStage, generateStage
+                pagesStage, consistencyStage
             }
         };
     }
@@ -147,9 +237,9 @@ internal static class EngineeringFallbackTemplate
                 {
                     new()
                     {
-                        StageKey = "GenerateCode",
-                        Kind = "GenerateCode",
-                        Title = "代码生成",
+                        StageKey = "ConsistencyCheck",
+                        Kind = "ConsistencyCheck",
+                        Title = "一致性检查",
                         GenerationMode = "None",
                         SortOrder = 1,
                         BuildAfterStage = false,
@@ -157,9 +247,9 @@ internal static class EngineeringFallbackTemplate
                         {
                             new()
                             {
-                                TaskKey = "generate-code",
-                                Title = "生成代码",
-                                OperationKind = "generate_project",
+                                TaskKey = "consistency-check",
+                                Title = "校验一致性",
+                                OperationKind = "project_consistency_check",
                                 ExecutionLocation = "Server",
                                 SafetyClass = "Metadata",
                                 SemanticReferences = new List<string> { $"module:{moduleName}" },
@@ -167,11 +257,9 @@ internal static class EngineeringFallbackTemplate
                                 SortOrder = 1,
                                 Definition = JsonSerializer.SerializeToElement(new
                                 {
-                                    kind = "generate_project",
-                                    summary = "生成代码",
-                                    generationMode = "Full",
-                                    entityIds = Array.Empty<long>(),
-                                    buildAfterGeneration = false
+                                    kind = "project_consistency_check",
+                                    summary = "一致性检查",
+                                    checks = Array.Empty<object>()
                                 }, JsonOptions)
                             }
                         }

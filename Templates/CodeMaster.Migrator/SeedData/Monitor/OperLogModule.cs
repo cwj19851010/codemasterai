@@ -20,7 +20,7 @@ public class OperLogModule : ISeedModule
     {
         // 查找监控管理目录
         var monitorMenu = await dbContext.Set<Domain.Entities.System.SysMenu>()
-            .FirstOrDefaultAsync(m => m.Path == "/monitor" && m.MenuType == "M");
+            .FirstOrDefaultAsync(m => m.Path == "monitor" && m.MenuType == "M");
 
         if (monitorMenu == null)
         {

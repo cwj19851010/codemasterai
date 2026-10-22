@@ -11,7 +11,7 @@ namespace CodeMaster.LocalAgent.Services;
 public class CodeMasterServerClient
 {
     private readonly HttpClient _httpClient;
-    private readonly JsonSerializerOptions _jsonOptions = new()
+    private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
         NumberHandling = JsonNumberHandling.AllowReadingFromString
@@ -89,6 +89,9 @@ public class CodeMasterServerClient
             input,
             token);
     }
+
+    public Task<bool> FailLocalAiChatAsync(string serverBaseUrl, FailLocalAiChatRequest input, string? token)
+        => PostApiDataAsync<FailLocalAiChatRequest, bool>(serverBaseUrl, "/api/agent/local/chat/fail", input, token);
 
     public async Task<(string FileName, byte[] Content)> DownloadTemplateAsync(string serverBaseUrl, string? token)
     {
@@ -201,6 +204,9 @@ public class CodeMasterServerClient
 
     private static Uri BuildUri(string serverBaseUrl, string path)
     {
+        if (string.IsNullOrWhiteSpace(serverBaseUrl))
+            throw new InvalidOperationException("Server base URL is required.");
+
         return new Uri($"{serverBaseUrl.TrimEnd('/')}/{path.TrimStart('/')}");
     }
 

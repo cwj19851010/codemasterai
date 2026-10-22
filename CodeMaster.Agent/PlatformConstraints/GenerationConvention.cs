@@ -67,8 +67,8 @@ public sealed record GenerationConvention
         RelationsPipeline = "INSERT/UPDATE sys_one_to_many_relation and child entity references. The Relations stage finalizes types after Views so consumer foreign keys are correct.",
         FieldControlsPipeline = "INSERT/UPDATE per-field control configuration (FormControlType, RelatedEntity*, SelectOptions, etc.).",
         ComplexPagesPipeline = "INSERT/UPDATE sys_project_page + sys_page_component_binding + sys_page_data_source + sys_page_entity_dependency.",
-        GenerateCodePipeline = "Call ModuleEntityService.GenerateCodeAsync / GenerateProjectSmartCodeAsync. Writes .cs/.vue/.json to ProjectPath.",
-        BuildPipeline = "After GenerateCode the WebApi runs `dotnet build <ProjectName>.sln` and `cd <ProjectName>.Vue && npm run dev`. Build failures surface as a tool_failed event.",
+        GenerateCodePipeline = "NOT performed by the agent. The agent's job ends when the metadata rows are written. Code generation is a manual action: the user triggers it from the UI, and the generator diffs the metadata to edit the existing source in place.",
+        BuildPipeline = "NOT performed by the agent. Building and starting the generated project also happens on user request, after generation.",
         FinalMigrationTrigger = "Triggered by the user clicking Confirm; the Agent must NOT run EF migrations, start the WebApi, or boot the Vue dev server from inside the plan."
     };
 

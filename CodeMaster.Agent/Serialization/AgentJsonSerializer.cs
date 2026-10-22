@@ -9,7 +9,10 @@ public static class AgentJsonSerializer
 
     private static JsonSerializerOptions CreateOptions()
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
         options.Converters.Add(new LongAsStringConverter());
         options.Converters.Add(new NullableLongAsStringConverter());
         return options;
@@ -21,10 +24,10 @@ public static class AgentJsonSerializer
         {
             if (reader.TokenType == JsonTokenType.String && long.TryParse(reader.GetString(), out var value))
                 return value;
-            if (reader.TokenType == JsonTokenType.Number)
-                return reader.GetInt64();
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt64(out value))
+                return value;
 
-            throw new JsonException($"Unable to convert the JSON value to {typeToConvert}.");
+            throw new JsonException("Expected an Int64 integer or decimal integer string; fractions, exponents and out-of-range values are not supported.");
         }
 
         public override void Write(Utf8JsonWriter writer, long value, JsonSerializerOptions options) =>
@@ -39,10 +42,10 @@ public static class AgentJsonSerializer
                 return null;
             if (reader.TokenType == JsonTokenType.String && long.TryParse(reader.GetString(), out var value))
                 return value;
-            if (reader.TokenType == JsonTokenType.Number)
-                return reader.GetInt64();
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt64(out value))
+                return value;
 
-            throw new JsonException($"Unable to convert the JSON value to {typeToConvert}.");
+            throw new JsonException("Expected an Int64 integer, decimal integer string, or null; fractions, exponents and out-of-range values are not supported.");
         }
 
         public override void Write(Utf8JsonWriter writer, long? value, JsonSerializerOptions options)

@@ -27,14 +27,14 @@ public sealed class ProjectOperationTool
     public static McpTool Definition => new()
     {
         Name = "run_project_operation",
-        Description = "Run initialization, migration, build, start, stop, status, project menu sync, or project language sync on the local generated project. Metadata and templates are downloaded from CodeMaster WebApi; the CodeMaster database is never opened by MCP.",
+        Description = "Run initialization, migration, printing runtime distribution, build, start, stop, status, project menu sync, project language sync, or database configuration sync on the local generated project. Metadata and templates are downloaded from CodeMaster WebApi; the CodeMaster database is never opened by MCP.",
         InputType = typeof(ProjectOperationInput),
         InputSchema = JsonSerializer.SerializeToNode(new
         {
             type = "object",
             properties = new
             {
-                operation = new { type = "string", description = "initialize, initialize_step, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, test, sync_menus, or sync_languages." },
+                operation = new { type = "string", description = "initialize, initialize_step, printing, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, test, sync_menus, sync_languages, or sync_database_config." },
                 projectId = new { oneOf = new object[] { new { type = "integer" }, new { type = "string" } }, description = "Target project id." },
                 targetPath = new { type = "string", description = "Optional local initialization target path." },
                 step = new { type = "integer", description = "Step number 1-11 when operation=initialize_step." },
@@ -55,30 +55,36 @@ public sealed class ProjectOperationTool
         if (args.ProjectId <= 0)
             return new { success = false, message = "projectId is required." };
 
-        return args.Operation switch
-        {
-            "initialize" => await ExecuteAsync("initializeProject", args),
-            "initialize_step" when args.Step is >= 1 and <= 11 =>
-                await ExecuteAsync($"initializeStep{args.Step}", args),
-            "start_frontend" => await ExecuteAsync("startFrontend", args),
-            "start_backend" => await ExecuteAsync("startBackend", args),
-            "start_all" => await ExecuteAsync("startProject", args),
-            "stop_frontend" => await ExecuteAsync("stopFrontend", args),
-            "stop_backend" => await ExecuteAsync("stopBackend", args),
-            "stop_all" => await ExecuteAsync("stopProject", args),
-            "status" => await ExecuteAsync("getProjectStatus", args),
-            "migrate_database" => await ExecuteAsync("migrateDatabase", args),
-            "build" => await ExecuteAsync("buildProject", args),
-            "test" => await ExecuteAsync("testProject", args),
-            "sync_menus" => await ExecuteAsync("syncProjectMenus", args),
-            "sync_languages" => await ExecuteAsync("syncProjectLanguages", args),
-            _ => new
+        var action = ResolveAction(args.Operation, args.Step);
+        return action == null
+            ? new
             {
                 success = false,
-                message = "operation must be one of: initialize, initialize_step, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, test, sync_menus, sync_languages."
+                message = "operation must be one of: initialize, initialize_step, printing, start_frontend, start_backend, start_all, stop_frontend, stop_backend, stop_all, status, migrate_database, build, test, sync_menus, sync_languages, sync_database_config."
             }
-        };
+            : await ExecuteAsync(action, args);
     }
+
+    internal static string? ResolveAction(string operation, int step) => operation switch
+    {
+        "initialize" => "initializeProject",
+        "initialize_step" when step is >= 1 and <= 11 => $"initializeStep{step}",
+        "start_frontend" => "startFrontend",
+        "start_backend" => "startBackend",
+        "start_all" => "startProject",
+        "stop_frontend" => "stopFrontend",
+        "stop_backend" => "stopBackend",
+        "stop_all" => "stopProject",
+        "status" => "getProjectStatus",
+        "migrate_database" => "migrateDatabase",
+        "printing" => "distributePrintingRuntime",
+        "build" => "buildProject",
+        "test" => "testProject",
+        "sync_menus" => "syncProjectMenus",
+        "sync_languages" => "syncProjectLanguages",
+        "sync_database_config" => "syncDatabaseConfig",
+        _ => null
+    };
 
     private async Task<object> ExecuteAsync(string action, ProjectOperationInput args)
     {

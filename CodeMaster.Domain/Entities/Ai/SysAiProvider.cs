@@ -21,6 +21,9 @@ public class SysAiProvider : EntityBaseWithTenant
     [SugarColumn(ColumnName = "execution_mode", Length = 20, IsNullable = false)]
     public string ExecutionMode { get; set; } = "Server";
 
+    [SugarColumn(ColumnName = "compatibility_mode", Length = 40, IsNullable = false, DefaultValue = "Standard")]
+    public string CompatibilityMode { get; set; } = "Standard";
+
     [SugarColumn(ColumnName = "base_url", Length = 500, IsNullable = true)]
     public string? BaseUrl { get; set; }
 

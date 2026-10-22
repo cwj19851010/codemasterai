@@ -90,12 +90,26 @@
     <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
   </Target>
 
+  <Target Name="ValidatePrintingMigratorModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\Printing.Migrator\CodeMaster.Printing.Migrator.csproj')">
+    <Error Text="CodeMaster Full edition requires the Printing migrator module." />
+  </Target>
+
   <Target Name="BuildUiCompositionMigratorModule"
           BeforeTargets="Publish"
           Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
     <MSBuild Projects="..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);DbProvider=$(DbProvider);SkipUiCompositionWebApiCopy=true" />
+  </Target>
+
+  <Target Name="BuildPrintingMigratorModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\Printing.Migrator\CodeMaster.Printing.Migrator.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\Printing.Migrator\CodeMaster.Printing.Migrator.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);DbProvider=$(DbProvider)" />
   </Target>
 
   <Target Name="PublishUiCompositionMigratorModule"
@@ -110,6 +124,17 @@
     </ItemGroup>
     <MakeDir Directories="$(PublishDir)modules" />
     <Copy SourceFiles="@(UiCompositionMigratorFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
+
+  <Target Name="PublishFullEditionMigratorModuleDirectory"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('$(TargetDir)modules')">
+    <ItemGroup>
+      <FullEditionMigratorModuleFiles Include="$(TargetDir)modules\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FullEditionMigratorModuleFiles)"
+          DestinationFiles="@(FullEditionMigratorModuleFiles->'$(PublishDir)modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

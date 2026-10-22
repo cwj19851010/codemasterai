@@ -60,6 +60,14 @@ public class ProjectContextInfo
 
     public int BackendPort { get; set; }
 
+    public int AiSupportVersion { get; set; }
+
+    public string? AgentInstructionsPath { get; set; }
+
+    public string? SkillPath { get; set; }
+
+    public string? McpConfigExamplePath { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public string? ContextPath { get; set; }

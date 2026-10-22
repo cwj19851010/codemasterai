@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace CodeMaster.Application.Dtos.CodeGen;
 
 /// <summary>
@@ -14,6 +16,8 @@ public class LocalExecutionCompleteDto
     public long? ModuleId { get; set; }
 
     public List<long> EntityIds { get; set; } = new();
+
+    public Dictionary<string, JsonElement> Extensions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public DateTime CompletedAt { get; set; } = DateTime.UtcNow;
 }

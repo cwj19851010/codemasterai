@@ -40,6 +40,13 @@ export const constantRoutes = [
         component: () => import('@/views/profile/mcpToken/index.vue'),
         meta: { title: 'MCP Token', hidden: true, noCache: true }
       },
+      // 通用打印报表运行页（任务 5.5）：所有模板共用，按 templateId + 参数加载
+      {
+        path: 'print-preview/:templateId',
+        name: 'PrintPreview',
+        component: () => import('@/views/codegen/print/preview.vue'),
+        meta: { title: '打印预览', hidden: true, noCache: true }
+      },
       // EntityDesigner 路由由菜单数据库动态加载
     ]
   }

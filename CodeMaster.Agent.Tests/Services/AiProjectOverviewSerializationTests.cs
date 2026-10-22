@@ -16,7 +16,7 @@ public class AiProjectOverviewSerializationTests
 
         var first = CodeMasterProjectBlueprintService.ComputeStructureVersion(overview);
         var second = CodeMasterProjectBlueprintService.ComputeStructureVersion(overview);
-        overview.Modules[0].Entities[0].Fields[0].Description = "Changed field";
+        overview.Modules[0].Entities[0].Fields[0].BusinessDescription = "Changed business semantics";
         var changed = CodeMasterProjectBlueprintService.ComputeStructureVersion(overview);
 
         Assert.Equal(64, first.Length);
@@ -42,6 +42,12 @@ public class AiProjectOverviewSerializationTests
         Assert.Contains("\"notModified\":true", cached.Output);
         Assert.True(cached.Output.Length < full.Output.Length);
         Assert.DoesNotContain("ControlTestMaster", cached.Output);
+        using var fullJson = JsonDocument.Parse(full.Output);
+        using var cachedJson = JsonDocument.Parse(cached.Output);
+        Assert.Equal(overview.StructureVersion, fullJson.RootElement.GetProperty("projectStructureHash").GetString());
+        Assert.False(fullJson.RootElement.TryGetProperty("structureVersion", out _));
+        Assert.Equal(overview.StructureVersion, cachedJson.RootElement.GetProperty("projectStructureHash").GetString());
+        Assert.False(cachedJson.RootElement.TryGetProperty("structureVersion", out _));
     }
 
     [Fact]
@@ -61,6 +67,19 @@ public class AiProjectOverviewSerializationTests
     }
 
     [Fact]
+    public void Compact_overview_includes_entity_and_field_business_semantics()
+    {
+        var overview = CreateOverview();
+        overview.Modules[0].Entities[0].BusinessDescription = "用于验证项目级业务流程完整性。";
+        overview.Modules[0].Entities[0].Fields[0].BusinessDescription = "业务编码，在当前租户内唯一。";
+
+        var json = JsonSerializer.Serialize(overview, AgentJsonSerializer.Options);
+
+        Assert.Contains("businessDescription", json);
+        Assert.Contains("\\u7528\\u4E8E\\u9A8C\\u8BC1", json);
+    }
+
+    [Fact]
     public void Full_structure_version_changes_for_metadata_omitted_from_compact_overview()
     {
         var project = new AiProjectSummaryDto { Id = 1, ProjectName = "RegressionTesting" };
@@ -76,6 +95,7 @@ public class AiProjectOverviewSerializationTests
                 {
                     Id = 4,
                     Name = "Code",
+                    ColumnName = "business_code",
                     DataType = "string",
                     MaxLength = 64,
                     FormControlType = "input"
@@ -93,6 +113,38 @@ public class AiProjectOverviewSerializationTests
         var changed = CodeMasterProjectBlueprintService.ComputeStructureVersion(project, modules);
 
         Assert.NotEqual(first, changed);
+
+        var json = JsonSerializer.Serialize(entity, AgentJsonSerializer.Options);
+        Assert.Contains("business_code", json);
+    }
+
+    [Fact]
+    public void Chat_stream_final_event_uses_web_names_and_string_long_ids()
+    {
+        var streamEvent = new AiChatStreamEvent
+        {
+            Event = "final",
+            RequestId = "request-1",
+            Sequence = 7,
+            Phase = "completed",
+            Result = new AiChatResult
+            {
+                Message = new AiMessageDto
+                {
+                    Id = 9_223_372_036_854_775_000,
+                    RequestId = "request-1",
+                    Role = "assistant",
+                    Content = "done"
+                }
+            }
+        };
+
+        var json = JsonSerializer.Serialize(streamEvent, AgentJsonSerializer.Options);
+
+        Assert.Contains("\"event\":\"final\"", json);
+        Assert.Contains("\"requestId\":\"request-1\"", json);
+        Assert.Contains("\"sequence\":7", json);
+        Assert.Contains("\"id\":\"9223372036854775000\"", json);
     }
 
     private static AiProjectOverviewDto CreateOverview(int fieldCount = 1)

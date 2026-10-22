@@ -6,6 +6,70 @@ namespace CodeMaster.Agent.Tests.Services;
 public class CodeMasterProjectChangeSetRulesTests
 {
     [Fact]
+    public void Validate_RejectsExplicitSelfRelationForTreeEntity()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create product category tree",
+            Entities =
+            {
+                new CreateEntityProposal
+                {
+                    Name = "ProductCategory",
+                    Description = "Product category",
+                    IsTree = true,
+                    Fields = { Field("Name", "Category name") },
+                    Relations =
+                    {
+                        new CreateEntityRelationProposal
+                        {
+                            TargetEntityName = "ProductCategory",
+                            RelationName = "Parent",
+                            SourceField = "Id",
+                            TargetField = "Id",
+                            Cardinality = "ManyToOne",
+                            Ownership = "Reference",
+                            DeleteBehavior = "Restrict"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("IsTree=true", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_AllowsDictionaryInsideChangeSet()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create order status dictionary",
+            Dictionaries =
+            {
+                new ProjectDictionaryChangeProposal
+                {
+                    Summary = "Order status",
+                    DictType = "order_status",
+                    DictName = "Order status",
+                    Items =
+                    {
+                        new ProjectDictionaryItemProposal { Label = "Pending", Value = "Pending" }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Equal(1, result.DictionaryCount);
+    }
+
+    [Fact]
     public void Validate_AllowsNewModuleEntitiesAndRelationInOneChangeSet()
     {
         var blueprint = CreateBlueprint();
@@ -73,6 +137,54 @@ public class CodeMasterProjectChangeSetRulesTests
         Assert.Equal(2, result.EntityCount);
         Assert.Equal(3, result.FieldCount);
         Assert.Equal(1, result.RelationCount);
+    }
+
+    [Fact]
+    public void Validate_WarnsWhenAgentUsesReservedModuleMenuOrder()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create order module",
+            Modules =
+            {
+                new CreateModuleProposal
+                {
+                    ModuleName = "OrderManagement",
+                    ModuleDescription = "订单管理",
+                    OrderNum = 1
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("3..9998", StringComparison.Ordinal) &&
+            warning.Contains("OrderManagement", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ReservesTerminalOrderForReportsModule()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Create reports module",
+            Modules =
+            {
+                new CreateModuleProposal
+                {
+                    ModuleName = "Reporting",
+                    ModuleDescription = "报表管理",
+                    OrderNum = 6
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
+        Assert.Contains(result.Warnings, warning => warning.Contains("9999", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -541,12 +653,12 @@ public class CodeMasterProjectChangeSetRulesTests
     }
 
     [Fact]
-    public void Validate_AllowsFieldUpdateReorderAndIncrementalGeneration()
+    public void Validate_AllowsFieldUpdateReorderInMetadataOnlyMode()
     {
         var proposal = new ProjectChangeSetProposal
         {
             Summary = "Move customer name and make it searchable",
-            GenerationMode = "Incremental",
+            GenerationMode = "None",
             EntityUpdates =
             {
                 new UpdateEntityProposal
@@ -570,6 +682,64 @@ public class CodeMasterProjectChangeSetRulesTests
 
         Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
         Assert.Equal(1, result.UpdatedEntityCount);
+    }
+
+    [Fact]
+    public void Validate_RejectsModuleNamedLikeTheProject()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Add a module that shadows the project root namespace",
+            Modules =
+            {
+                new CreateModuleProposal { ModuleName = "TestProject", ModuleDescription = "Same as the project" }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal, "TestProject");
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Contains("cannot reuse the project name", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_RejectsRenamingModuleToTheProjectName()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Rename an existing module onto the project root namespace",
+            ModuleUpdates =
+            {
+                // CreateBlueprint() 里唯一的模块 Id 是 10（20 是 Customer 实体的 Id）。
+                // 写成 20 会先命中"模块不存在"，校验直接 continue，永远走不到改名判断。
+                new UpdateModuleProposal { ModuleId = 10, ModuleName = "TestProject", ModuleDescription = "Renamed" }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal, "TestProject");
+
+        Assert.False(result.IsValid);
+        // 重命名走的是 ValidateProjectRootNamespaceReuse 的"改名"分支，文案与"新建"分支不同：
+        // 新建 → "cannot reuse the project name"，改名 → "cannot be renamed to ..., which reuses ..."。
+        Assert.Contains(result.Errors, x => x.Contains("cannot be renamed to 'TestProject'", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.Contains("reuses the project name", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_AllowsModuleNamedDifferentlyFromTheProject()
+    {
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Add a normally named module",
+            Modules =
+            {
+                new CreateModuleProposal { ModuleName = "Engineering", ModuleDescription = "Engineering" }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(CreateBlueprint(), proposal, "TestProject");
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Errors));
     }
 
     [Fact]
@@ -662,6 +832,81 @@ public class CodeMasterProjectChangeSetRulesTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.Contains("Duplicate entity update id", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_DropsNewRelationEquivalentToLegacyOneToMany()
+    {
+        var blueprint = CreateBlueprint();
+        var customer = blueprint.Modules[0].Entities[0];
+        customer.Fields.Add(new AiFieldBlueprintDto
+        {
+            Id = 22,
+            Name = "Id",
+            Description = "Id",
+            DataType = "long",
+            IsPrimaryKey = true,
+            FormControlType = "input"
+        });
+        blueprint.Modules[0].Entities.Add(new AiEntityBlueprintDto
+        {
+            Id = 30,
+            ModuleId = 10,
+            Name = "Contact",
+            Description = "Contact",
+            Fields =
+            {
+                new AiFieldBlueprintDto
+                {
+                    Id = 31,
+                    Name = "CustomerId",
+                    Description = "Customer id",
+                    DataType = "long",
+                    FormControlType = "input"
+                }
+            }
+        });
+        customer.LegacyOneToManyRelations.Add(new AiLegacyOneToManyBlueprintDto
+        {
+            Id = 40,
+            MasterField = "Id",
+            ChildEntityId = 30,
+            ChildEntityName = "Contact",
+            ChildForeignKey = "CustomerId"
+        });
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Add duplicate aggregate relation",
+            EntityUpdates =
+            {
+                new UpdateEntityProposal
+                {
+                    EntityId = customer.Id,
+                    NewRelations =
+                    {
+                        new CreateEntityRelationProposal
+                        {
+                            TargetEntityId = 30,
+                            RelationName = "Contacts",
+                            SourceField = "id",
+                            TargetField = "customerid",
+                            Cardinality = "OneToMany",
+                            Ownership = "Owned",
+                            DeleteBehavior = "Delete"
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
+        // 等价关系不再判整批无效：从提案里摘掉并给出告警。
+        // 一条重复关系作废整个变更集，会让它后面排队的任务全部阻塞，代价远大于收益。
+        Assert.True(result.IsValid);
+        Assert.Empty(proposal.EntityUpdates[0].NewRelations);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("already exists as the legacy one-to-many relation", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

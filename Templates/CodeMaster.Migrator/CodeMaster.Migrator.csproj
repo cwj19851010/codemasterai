@@ -84,4 +84,30 @@
     </None>
   </ItemGroup>
 
+  <!-- Keep the same optional runtime modules available to the Migrator. The
+       printing migration module is discovered from bin/.../modules. -->
+  <Target Name="CopyGeneratedModulesToMigratorOutput"
+          AfterTargets="Build"
+          Condition="'$(SkipPrintingWebApiCopy)' != 'true' and Exists('..\modules')">
+    <ItemGroup>
+      <GeneratedModuleFiles Include="..\modules\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(TargetDir)modules" />
+    <Copy SourceFiles="@(GeneratedModuleFiles)"
+          DestinationFiles="@(GeneratedModuleFiles->'$(TargetDir)modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyGeneratedModulesToMigratorPublish"
+          AfterTargets="Publish"
+          Condition="'$(SkipPrintingWebApiCopy)' != 'true' and Exists('..\modules')">
+    <ItemGroup>
+      <GeneratedModulePublishFiles Include="..\modules\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(GeneratedModulePublishFiles)"
+          DestinationFiles="@(GeneratedModulePublishFiles->'$(PublishDir)modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

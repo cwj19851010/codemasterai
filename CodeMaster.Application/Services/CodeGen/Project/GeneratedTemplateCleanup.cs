@@ -88,7 +88,13 @@ internal static class GeneratedTemplateCleanup
 
         result = Regex.Replace(
             result,
-            @"(?ms)^onMounted\(\(\)\s*=>\s*\{.*?^\}\)[ \t]*(?:\r?\n)?",
+            @"(?ms)^(?<indent>[ \t]*)onMounted\(\s*(?:async\s+)?\(\)\s*=>\s*\{.*?^\k<indent>\}\)[ \t]*;?[ \t]*(?:\r?\n)?",
+            string.Empty,
+            RegexOptions.Singleline | RegexOptions.Multiline);
+
+        result = Regex.Replace(
+            result,
+            @"(?ms)^(?<indent>[ \t]*)if\s*\(\s*isClientLogin\s*&&\s*defaultServerBaseUrl\s*\)\s*\{.*?^\k<indent>\}[ \t]*(?:\r?\n)?",
             string.Empty,
             RegexOptions.Singleline | RegexOptions.Multiline);
 

@@ -1,4 +1,6 @@
 using Mapster;
+using {{ entity.project_name }}.Core.Exceptions;
+using {{ entity.project_name }}.Core.DynamicApi;
 using {{ entity.project_name }}.Core.Dtos;
 using {{ entity.project_name }}.Core.Repositories;
 using {{ entity.project_name }}.Core.Services;
@@ -25,9 +27,9 @@ public class {{ entity.name }}Service : QueryApplicationService<GeneratedEntity,
     private readonly ISqlSugarClient _remoteDb;
 {{~ end ~}}
 {{~ if entity.is_tree ~}}
-    public {{ entity.name }}Service(IReadOnlyRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, db, excelService, cacheService)
+    public {{ entity.name }}Service(IReadOnlyRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, global::{{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, db, excelService, cacheService)
 {{~ else ~}}
-    public {{ entity.name }}Service(IReadOnlyRepository<GeneratedEntity> repository{{ if entity.has_remote_select }}, ISqlSugarClient db{{ end }}, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IReadOnlyRepository<GeneratedEntity> repository{{ if entity.has_remote_select }}, ISqlSugarClient db{{ end }}, IExcelService? excelService = null, global::{{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ end ~}}
     {
 {{~ if entity.has_remote_select ~}}
@@ -83,7 +85,7 @@ public class {{ entity.name }}Service : TreeApplicationService<GeneratedEntity, 
 {{~ if entity.has_remote_select ~}}
     private readonly ISqlSugarClient _remoteDb;
 {{~ end ~}}
-    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, db, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, global::{{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, db, cacheService)
     {
 {{~ if entity.has_remote_select ~}}
         _remoteDb = db;
@@ -130,16 +132,16 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
 {
 {{~ if entity.has_aggregate_relations ~}}
     private readonly ISqlSugarClient _db;
-    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, global::{{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
     {
         _db = db;
     }
 {{~ else ~}}
 {{~ if entity.has_remote_select ~}}
     private readonly ISqlSugarClient _remoteDb;
-    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, ISqlSugarClient db, IExcelService? excelService = null, global::{{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ else ~}}
-    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, IExcelService? excelService = null, {{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+    public {{ entity.name }}Service(IRepository<GeneratedEntity> repository, IExcelService? excelService = null, global::{{ entity.project_name }}.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
 {{~ end ~}}
     {
 {{~ if entity.has_remote_select ~}}
@@ -190,6 +192,22 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
     }
 {{~ end ~}}
 
+{{~ if entity.has_remote_select && !entity.has_aggregate_relations ~}}
+    public override async Task<long> CreateAsync(Create{{ entity.name }}Dto input)
+    {
+        var entity = input.Adapt<GeneratedEntity>();
+        await ValidateRemoteReferencesAsync(entity);
+        return await base.CreateAsync(input);
+    }
+
+    public override async Task<int> UpdateAsync(long id, Update{{ entity.name }}Dto input)
+    {
+        var entity = input.Adapt<GeneratedEntity>();
+        await ValidateRemoteReferencesAsync(entity);
+        return await base.UpdateAsync(id, input);
+    }
+{{~ end ~}}
+
 {{~ if entity.has_aggregate_relations ~}}
     /// <summary>
     /// 获取详情（含子表数据）
@@ -207,7 +225,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
             throw new Exception("数据不存在");
 
 {{~ for relation in entity.owned_one_relations ~}}
-        entity.{{ relation.relation_name }} = await _db.Queryable<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
+        entity.{{ relation.relation_name }} = await _db.Queryable<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
             .Where(item => item.{{ relation.target_field }} == entity.{{ relation.source_field }})
             .FirstAsync();
 {{~ end ~}}
@@ -240,7 +258,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
             .Select(item => item.{{ relation.source_field }})
             .Distinct()
             .ToList();
-        var {{ relation.relation_name_lower }}Rows = await _db.Queryable<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
+        var {{ relation.relation_name_lower }}Rows = await _db.Queryable<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
             .Where(item => {{ relation.relation_name_lower }}SourceValues.Contains(item.{{ relation.target_field }}))
             .ToListAsync();
         var {{ relation.relation_name_lower }}Map = {{ relation.relation_name_lower }}Rows
@@ -249,7 +267,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
         foreach (var item in items)
         {
             if ({{ relation.relation_name_lower }}Map.TryGetValue(item.{{ relation.source_field }}, out var owned))
-                item.{{ relation.relation_name }} = owned.Adapt<{{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.{{ relation.target_entity_name }}Dto>();
+                item.{{ relation.relation_name }} = owned.Adapt<global::{{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.{{ relation.target_entity_name }}Dto>();
         }
 {{~ end ~}}
     }
@@ -268,6 +286,9 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
 {{~ end ~}}
         var entity = new GeneratedEntity();
         input.Adapt(entity);
+{{~ if entity.has_remote_select ~}}
+        await ValidateRemoteReferencesAsync(entity);
+{{~ end ~}}
 {{~ for relation in entity.one_to_many_relations ~}}
         entity.{{ relation.child_entity_name }}s = null!;
 {{~ end ~}}
@@ -280,7 +301,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
         {
             foreach (var item in input.{{ relation.child_entity_name }}s)
             {
-                var child = item.Adapt<{{ relation.child_entity_name }}>();
+                var child = item.Adapt<global::{{ entity.project_name }}.Domain.Entities.{{ relation.child_module_name }}.{{ relation.child_entity_name }}>();
                 child.{{ relation.child_foreign_key }} = id;
                 await _db.Insertable(child).ExecuteReturnSnowflakeIdAsync();
             }
@@ -289,7 +310,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
 {{~ for relation in entity.owned_one_relations ~}}
         if (input.{{ relation.relation_name }} != null)
         {
-            var owned{{ relation.relation_name }} = input.{{ relation.relation_name }}.Adapt<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>();
+            var owned{{ relation.relation_name }} = input.{{ relation.relation_name }}.Adapt<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>();
             owned{{ relation.relation_name }}.{{ relation.target_field }} = {{ relation.create_source_expression }};
             await _db.Insertable(owned{{ relation.relation_name }}).ExecuteReturnSnowflakeIdAsync();
         }
@@ -326,6 +347,9 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
 {{~ end ~}}
         var entity = new GeneratedEntity();
         input.Adapt(entity);
+{{~ if entity.has_remote_select ~}}
+        await ValidateRemoteReferencesAsync(entity);
+{{~ end ~}}
 {{~ for relation in entity.one_to_many_relations ~}}
         entity.{{ relation.child_entity_name }}s = null!;
 {{~ end ~}}
@@ -357,22 +381,22 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
     }
 
 {{~ for relation in entity.one_to_many_relations ~}}
-    private async Task Save{{ relation.child_entity_name }}sAsync(long masterId, List<Update{{ relation.child_entity_name }}Dto> items)
+    private async Task Save{{ relation.child_entity_name }}sAsync(long masterId, List<global::{{ entity.project_name }}.Application.Dtos.{{ relation.child_module_name }}.Update{{ relation.child_entity_name }}Dto> items)
     {
         foreach (var item in items)
         {
             switch (item.RowStatus)
             {
                 case RowStatus.Added:
-                    var newChild = item.Adapt<{{ relation.child_entity_name }}>();
+                    var newChild = item.Adapt<global::{{ entity.project_name }}.Domain.Entities.{{ relation.child_module_name }}.{{ relation.child_entity_name }}>();
                     newChild.{{ relation.child_foreign_key }} = masterId;
                     await _db.Insertable(newChild).ExecuteReturnSnowflakeIdAsync();
                     break;
                 case RowStatus.Modified:
-                    await _db.Updateable(item.Adapt<{{ relation.child_entity_name }}>()).ExecuteCommandAsync();
+                    await _db.Updateable(item.Adapt<global::{{ entity.project_name }}.Domain.Entities.{{ relation.child_module_name }}.{{ relation.child_entity_name }}>()).ExecuteCommandAsync();
                     break;
                 case RowStatus.Deleted:
-                    await _db.Deleteable<{{ relation.child_entity_name }}>().Where(c => c.Id == item.Id).ExecuteCommandAsync();
+                    await _db.Deleteable<global::{{ entity.project_name }}.Domain.Entities.{{ relation.child_module_name }}.{{ relation.child_entity_name }}>().Where(c => c.Id == item.Id).ExecuteCommandAsync();
                     break;
             }
         }
@@ -381,7 +405,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
 {{~ for relation in entity.owned_one_relations ~}}
     private async Task Save{{ relation.relation_name }}Async(
         {{ relation.source_data_type }} sourceValue,
-        {{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.Update{{ relation.target_entity_name }}Dto? input)
+        global::{{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.Update{{ relation.target_entity_name }}Dto? input)
     {
         if (input == null)
         {
@@ -389,13 +413,13 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
             throw new InvalidOperationException("{{ relation.target_entity_description }}不能为空");
 {{~ else if relation.delete_when_null ~}}
 {{~ if relation.target_has_soft_delete ~}}
-            await _db.Updateable<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
+            await _db.Updateable<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
                 .SetColumns(item => item.IsDeleted == true)
                 .SetColumns(item => item.DeleteTime == DateTime.UtcNow)
                 .Where(item => item.{{ relation.target_field }} == sourceValue)
                 .ExecuteCommandAsync();
 {{~ else ~}}
-            await _db.Deleteable<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
+            await _db.Deleteable<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
                 .Where(item => item.{{ relation.target_field }} == sourceValue)
                 .ExecuteCommandAsync();
 {{~ end ~}}
@@ -403,10 +427,10 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
             return;
         }
 
-        var existing = await _db.Queryable<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
+        var existing = await _db.Queryable<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>()
             .Where(item => item.{{ relation.target_field }} == sourceValue)
             .FirstAsync();
-        var owned = input.Adapt<{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>();
+        var owned = input.Adapt<global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}>();
         owned.{{ relation.target_field }} = sourceValue;
         if (existing == null)
         {
@@ -416,6 +440,46 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
 
         owned.Id = existing.Id;
         await _db.Updateable(owned).ExecuteCommandAsync();
+    }
+
+{{~ end ~}}
+{{~ end ~}}
+{{~ if entity.has_remote_select && !entity.is_read_only ~}}
+    private async Task ValidateRemoteReferencesAsync(GeneratedEntity entity)
+    {
+{{~ for field in entity.remote_select_fields ~}}
+        await Validate{{ field.name }}ReferenceAsync(entity.{{ field.name }});
+{{~ end ~}}
+        await Task.CompletedTask;
+    }
+
+{{~ for field in entity.remote_select_fields ~}}
+    private async Task Validate{{ field.name }}ReferenceAsync(object? rawValue)
+    {
+        var text = Convert.ToString(rawValue);
+        if (string.IsNullOrWhiteSpace(text) || string.Equals(text, "0", StringComparison.Ordinal))
+            return;
+
+        foreach (var rawItem in text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (string.Equals(rawItem, "0", StringComparison.Ordinal))
+                continue;
+
+            {{ field.source_value_type }} value;
+            try
+            {
+                value = ({{ field.source_value_type }})Convert.ChangeType(rawItem, typeof({{ field.source_value_type }}));
+            }
+            catch (Exception)
+            {
+                throw new BusinessException(400, "{{ field.name }} has an invalid reference value.");
+            }
+
+            var exists = await {{ entity.remote_db_variable }}.Queryable<{{ field.source_namespace }}>()
+                .AnyAsync(item => item.{{ field.source_value_field }} == value{{ if field.source_has_soft_delete }} && !item.IsDeleted{{ end }});
+            if (!exists)
+                throw new BusinessException(400, "{{ field.name }} references a missing {{ field.source_entity_name }} record.");
+        }
     }
 
 {{~ end ~}}
@@ -444,6 +508,7 @@ public class {{ entity.name }}Service : CrudApplicationService<GeneratedEntity, 
     }
 
     /// <summary>Batch-resolves labels for values already present in a list or detail response.</summary>
+    [DynamicApi(HttpMethod = "POST")]
     public async Task<Dictionary<string, string>> {{ field.labels_method_name }}(List<string> values)
     {
         if (values == null || values.Count == 0)

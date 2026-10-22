@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeMaster.Agent.Contracts;
 
 namespace CodeMaster.LocalAgent.Models;
 
@@ -67,9 +68,37 @@ public class StdioLocalExecutionResponse : LocalExecutionResult
     public string Id { get; set; } = string.Empty;
 }
 
+public sealed class LocalExecutionProgress
+{
+    public string Event { get; set; } = string.Empty;
+
+    public string? Phase { get; set; }
+
+    public string? Text { get; set; }
+
+    public string? ToolName { get; set; }
+}
+
+public sealed class StdioLocalExecutionProgress
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string FrameType { get; set; } = "progress";
+
+    public string Event { get; set; } = string.Empty;
+
+    public string? Phase { get; set; }
+
+    public string? Text { get; set; }
+
+    public string? ToolName { get; set; }
+}
+
 public class LocalAgentOptions
 {
     public string MetadataRoot { get; set; } = string.Empty;
+
+    public string LogRoot { get; set; } = string.Empty;
 
     public int Port { get; set; } = 39721;
 
@@ -82,6 +111,7 @@ public sealed class SaveLocalAiProviderRequest
 {
     public long ProviderId { get; set; }
     public string ProviderType { get; set; } = string.Empty;
+    public string CompatibilityMode { get; set; } = AiProviderCompatibilityModes.Standard;
     public string? BaseUrl { get; set; }
     public string ModelName { get; set; } = string.Empty;
     public string? ApiKey { get; set; }
@@ -94,6 +124,7 @@ public sealed class LocalAiProviderRecord
     public string ServerBaseUrl { get; set; } = string.Empty;
     public long ProviderId { get; set; }
     public string ProviderType { get; set; } = string.Empty;
+    public string CompatibilityMode { get; set; } = AiProviderCompatibilityModes.Standard;
     public string? BaseUrl { get; set; }
     public string ModelName { get; set; } = string.Empty;
     public string? ProtectedApiKey { get; set; }

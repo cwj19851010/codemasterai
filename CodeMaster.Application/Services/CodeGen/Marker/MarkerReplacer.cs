@@ -45,6 +45,8 @@ public static class MarkerReplacer
                 "moduleNameLower" => ctx.ModuleNameLower,
                 "moduleNameAllLower" => ctx.ModuleNameAllLower,
                 "tableName" => ctx.TableName,
+                "projectId" => ctx.ProjectId,
+                "moduleId" => ctx.ModuleId,
                 "addColumns" => ctx.ColumnHtml.GetValueOrDefault("add", string.Empty),
                 "editColumns" => ctx.ColumnHtml.GetValueOrDefault("edit", string.Empty),
                 "searchColumns" => ctx.ColumnHtml.GetValueOrDefault("search", string.Empty),

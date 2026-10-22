@@ -267,6 +267,14 @@ public class CodeGeneratorService
         relations = OneToManyRelationDeduplicator.Deduplicate(relations);
         var baseClassName = CalculateBaseClassName(entity);
         var interfaceList = CalculateInterfaceList(entity);
+        // Registered database views are the read-only, non-audited full-stack entities.
+        // Carry an explicit marker into generated code so EF maps them with ToView.
+        if (entity.GenerationMode == EntityGenerationMode.FullStack &&
+            entity.IsReadOnly && !entity.HasAudit && !entity.HasSoftDelete &&
+            !string.IsNullOrWhiteSpace(entity.TableName))
+        {
+            interfaceList += ", IViewEntity";
+        }
         var dtoInterfaceList = string.Empty;
         var createUpdateDtoInterfaceList = string.Empty;
 
@@ -349,7 +357,16 @@ public class CodeGeneratorService
 
         foreach (var r in relations)
         {
+            // A one-to-many row outlives the child entity it points at: deleting a module or entity
+            // does not remove the relations that reference it, and the rows stay in the project for
+            // good. Generation is a read path, so a child that no longer resolves contributes no
+            // child table instead of aborting the whole run — the change-set repair sweep is where
+            // that metadata gets cleaned up. Throwing here meant one invisible stale row could stop
+            // every later generation request for the project.
             var childEntity = _db.Queryable<ModuleEntity>().Where(e => e.Id == r.ChildEntityId).First();
+            if (childEntity == null)
+                continue;
+            var childModule = _db.Queryable<ProjectModule>().Where(m => m.Id == childEntity.ModuleId).First();
             var childAllFields = _db.Queryable<EntityField>().Where(f => f.ModuleEntityId == r.ChildEntityId).OrderBy(f => f.OrderNum).ToList();
             var childFields = childAllFields
                 .Where(f => !IsInterfaceField(f.Name, childEntity) && f.Name != r.ChildForeignKey)
@@ -487,6 +504,7 @@ public class CodeGeneratorService
                 ["master_field"] = r.MasterField,
                 ["child_entity_id"] = r.ChildEntityId,
                 ["child_entity_name"] = r.ChildEntityName,
+                ["child_module_name"] = childModule?.ModuleName ?? moduleName,
                 ["child_entity_name_lower"] = ToCamelCase(r.ChildEntityName),
                 ["child_entity_name_all_lower"] = CodeGenNaming.ToPathSegment(r.ChildEntityName),
                 ["child_entity_description"] = childEntity?.Description ?? r.ChildEntityName,
@@ -708,7 +726,7 @@ public class CodeGeneratorService
                 ["module_name"] = moduleName,
                 ["module_name_lower"] = ToCamelCase(moduleName),
                 ["module_name_all_lower"] = CodeGenNaming.ToPathSegment(moduleName),
-                ["table_name"] = ResolveTableName(entity.Name, entity.TableName),
+                ["table_name"] = ResolveTableName(entity.Name, entity.TableName, entity.IsReadOnly),
                 ["base_class_name"] = baseClassName,
                 ["has_primary_key"] = entity.HasPrimaryKey,
                 ["is_tree"] = entity.IsTree,
@@ -820,12 +838,17 @@ public class CodeGeneratorService
             {
                 ["name"] = field.Name,
                 ["name_lower"] = ToCamelCase(field.Name),
+                ["show_in_add_form"] = field.ShowInAddForm,
+                ["show_in_edit_form"] = field.ShowInEditForm,
+                ["is_multiple"] = field.IsMultiple,
                 ["source_entity_name"] = source.Name,
                 ["source_module_name"] = sourceModule?.ModuleName ?? moduleName,
                 ["source_namespace"] = $"{projectName}.Domain.Entities.{sourceModule?.ModuleName ?? moduleName}.{source.Name}",
                 ["source_value_field"] = valueMeta.Name,
                 ["source_label_field"] = labelMeta.Name,
                 ["source_value_type"] = sourceValueType,
+                ["source_has_tenant"] = source.HasTenant,
+                ["source_has_soft_delete"] = source.HasSoftDelete,
                 ["source_parent_field"] = definition.ParentValueField,
                 ["source_parent_type"] = sourceParentType,
                 ["has_parent"] = definition.HasParent,
@@ -1101,15 +1124,57 @@ public class CodeGeneratorService
         return result.ToLowerInvariant();
     }
 
-    private static string ResolveTableName(string entityName, string? configuredTableName)
+    /// <summary>
+    /// 解析实体的**物理**表名，写进 <c>[SugarTable]</c>。
+    ///
+    /// 生成项目的表由 EF 迁移创建：DbContext 会对 <c>ToTable(...)</c> 的名字再跑一遍
+    /// 逐字符 snake_case（大写前补下划线），所以 <c>MaterialManagement_Supplier</c>
+    /// 落库是 <c>material_management__supplier</c>（双下划线）。
+    /// 而 SqlSugar 的 <c>EntityNameService</c> 对带 <c>[SugarTable]</c> 的实体**原样使用**，
+    /// 不做任何转换 —— 于是两边名字不一致，所有业务接口报 `no such table`。
+    ///
+    /// 这里直接产出 EF 最终会用的那个名字，两边就对齐了；
+    /// 全小写字符串再被 EF 转换一次也是幂等的。
+    /// 视图实体在 DbContext 里被跳过（不转 snake），所以保持原样。
+    /// </summary>
+    public static string ResolveTableName(string entityName, string? configuredTableName, bool isView)
     {
         if (!string.IsNullOrWhiteSpace(configuredTableName))
-            return configuredTableName.Trim();
+        {
+            var configured = configuredTableName.Trim();
+            return isView ? configured : ToEfSnakeCase(configured);
+        }
 
         var tableName = ToSnakeCase(entityName);
         return tableName.EndsWith("s", StringComparison.OrdinalIgnoreCase)
             ? tableName
             : tableName + "s";
+    }
+
+    /// <summary>
+    /// 与生成项目 <c>CodeMasterDbContext.ToSnakeCase</c> 完全一致的逐字符转换：
+    /// 每个大写字母前补一个下划线，再整体小写。已有下划线会保留，
+    /// 因此 <c>MaterialManagement_Supplier</c> 得到 <c>material_management__supplier</c>。
+    /// </summary>
+    private static string ToEfSnakeCase(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return input;
+
+        var result = new global::System.Text.StringBuilder(input.Length + 8);
+        result.Append(char.ToLowerInvariant(input[0]));
+        for (var i = 1; i < input.Length; i++)
+        {
+            if (char.IsUpper(input[i]))
+            {
+                result.Append('_');
+                result.Append(char.ToLowerInvariant(input[i]));
+            }
+            else
+            {
+                result.Append(input[i]);
+            }
+        }
+        return result.ToString();
     }
 
     /// <summary>

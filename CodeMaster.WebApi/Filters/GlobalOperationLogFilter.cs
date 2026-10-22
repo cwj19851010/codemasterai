@@ -18,6 +18,8 @@ namespace CodeMaster.WebApi.Filters;
 /// </summary>
 public class GlobalOperationLogFilter : IAsyncActionFilter
 {
+    // SSE responses have already sent HTTP 200 when the application later fails.
+    public static readonly object HandledFailureKey = new();
     private static readonly string[] SensitiveKeyFragments =
     [
         "password",
@@ -91,7 +93,8 @@ public class GlobalOperationLogFilter : IAsyncActionFilter
             }
 
             var statusCode = GetResultStatusCode(executedContext.Result) ?? context.HttpContext.Response.StatusCode;
-            operLog.Status = executedContext.Exception == null && statusCode < 400 ? 0 : 1;
+            var handledFailure = context.HttpContext.Items[HandledFailureKey] as string;
+            operLog.Status = executedContext.Exception == null && statusCode < 400 && handledFailure == null ? 0 : 1;
             if (executedContext.Exception != null)
             {
                 operLog.ErrorMsg = Truncate(executedContext.Exception.Message, 4000);
@@ -99,6 +102,10 @@ public class GlobalOperationLogFilter : IAsyncActionFilter
             else if (statusCode >= 400)
             {
                 operLog.ErrorMsg = $"HTTP {statusCode}";
+            }
+            else if (handledFailure != null)
+            {
+                operLog.ErrorMsg = Truncate(handledFailure, 4000);
             }
         }
         catch (Exception ex)

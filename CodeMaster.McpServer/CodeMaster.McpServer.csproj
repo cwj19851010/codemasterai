@@ -39,12 +39,26 @@
     <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
   </Target>
 
+  <Target Name="ValidatePrintingLocalAgentMcpModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj')">
+    <Error Text="CodeMaster Full edition requires the printing LocalAgent module." />
+  </Target>
+
   <Target Name="BuildUiCompositionMcpModule"
           BeforeTargets="Publish"
           Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
     <MSBuild Projects="..\CodeMaster.Private\UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
+  </Target>
+
+  <Target Name="BuildPrintingLocalAgentMcpModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);SkipPrintingLocalAgentCopy=true" />
   </Target>
 
   <Target Name="PublishUiCompositionMcpModule"
@@ -60,6 +74,21 @@
     </ItemGroup>
     <MakeDir Directories="$(PublishDir)modules" />
     <Copy SourceFiles="@(UiCompositionMcpFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
+
+  <Target Name="PublishPrintingLocalAgentMcpModule"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj')">
+    <ItemGroup>
+      <PrintingLocalAgentMcpFiles Include="..\CodeMaster.Private\Printing.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.Printing.LocalAgent.dll" />
+      <PrintingRuntimeMcpFiles Include="$(TargetDir)modules\CodeMaster.PrintingRuntime\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(PrintingLocalAgentMcpFiles)" DestinationFolder="$(PublishDir)modules" />
+    <MakeDir Directories="$(PublishDir)modules\CodeMaster.PrintingRuntime" />
+    <Copy SourceFiles="@(PrintingRuntimeMcpFiles)"
+          DestinationFiles="@(PrintingRuntimeMcpFiles->'$(PublishDir)modules\CodeMaster.PrintingRuntime\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

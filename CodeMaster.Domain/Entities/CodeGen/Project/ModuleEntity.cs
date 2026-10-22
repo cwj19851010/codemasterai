@@ -28,10 +28,16 @@ public class ModuleEntity : EntityBaseWithTenant
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 实体描述（中文，如"系统用户"）
+    /// 实体显示名称（建议中文，如"系统用户"，用于菜单和页面标题）
     /// </summary>
     [SugarColumn(ColumnName = "description", Length = 200, IsNullable = false)]
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 实体业务说明（供 Agent、文档和完整性分析使用，不用于界面标题）
+    /// </summary>
+    [SugarColumn(ColumnName = "business_description", Length = 2000, IsNullable = true)]
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// Controls whether this record is a normal generated entity or external-contract metadata only.

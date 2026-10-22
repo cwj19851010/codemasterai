@@ -10,9 +10,9 @@ public static class AiProjectPlanTurn
     public const int MaximumContinuationAttempts = 2;
     public const string UnfulfilledMessage = "本次未能保存可执行的任务计划，业务生成尚未开始。模型尚未成功提交计划。";
 
-    private static readonly string[] BroadScope = ["系统", "平台", "软件", "多模块", "跨模块", "全套", "整个项目", "完整项目", "类似jira"];
-    private static readonly string[] Execution = ["创建", "生成", "实现", "开发", "搭建", "开始做", "直接做", "完成"];
-    private static readonly string[] Confirmations = ["开始吧", "开始做", "开始实现", "开始开发", "开始生成", "开始执行", "按你的", "按上述", "按以上", "按这个", "按需求", "按方案", "确认实施", "确认执行", "继续吧", "那就继续", "那你继续", "继续执行", "继续完成"];
+    private static readonly string[] BroadScope = ["系统", "平台", "软件", "多模块", "跨模块", "全套", "整个项目", "完整项目", "类似jira", "工程管理"];
+    private static readonly string[] Execution = ["创建", "生成", "实现", "开发", "搭建", "开始做", "直接做", "完成", "包括", "要做", "想要", "需要"];
+    private static readonly string[] Confirmations = ["开始吧", "开始做", "开始实现", "开始开发", "开始生成", "开始执行", "按你的", "按上述", "按以上", "按这个", "按需求", "按方案", "确认实施", "确认执行", "继续吧", "那就继续", "那你继续", "继续执行", "继续完成", "确认"];
 
     public static bool RequiresPlan(string? content, IEnumerable<AiMessageDto>? priorMessages = null)
     {
@@ -63,9 +63,12 @@ public static class AiProjectPlanTurn
 
         // Longer clarifications generally describe choices or business rules;
         // an independent implementation request contains an explicit action.
+        // Substantial scope-only statements (e.g. "工程管理平台") without any
+        // Execution keyword are still broad-scope requirements and must NOT be
+        // treated as clarification answers.
         return text.Length > 120 &&
                !ContainsAny(text,
-               ["创建", "生成", "实现", "开发", "搭建", "修改", "调整", "新增", "删除", "增加", "设计", "做一个", "做一套"]);
+               ["创建", "生成", "实现", "开发", "搭建", "修改", "调整", "新增", "删除", "增加", "设计", "包括", "要做", "想要", "需要"]);
     }
 
     public static bool IsDiscussionOnly(string? content)
@@ -96,36 +99,79 @@ public static class AiProjectPlanTurn
     public static void EnsureCapability(IEnumerable<string> toolNames, bool supportsTools = true)
     {
         if (!supportsTools)
-            throw new InvalidOperationException("当前模型配置未启用工具调用，无法创建任务计划。请启用工具调用或选择支持工具调用的模型配置。");
-        if (!toolNames.Contains(CodeMasterAgentToolCatalog.UpsertProjectWorkPlan, StringComparer.Ordinal))
+        {
+            // SupportsTools is the cached result of the last connection test. It is stored false
+            // either because the test failed, or because the connection settings changed since
+            // the test and the previous pass no longer applies. Either way the user needs to
+            // re-run the test, so say that instead of only stating the capability is off.
+            throw new InvalidOperationException(
+                "当前模型配置未启用工具调用，无法创建任务计划。" +
+                "该状态来自上一次连接测试：可能是测试未通过，也可能是连接配置（API 地址 / 模型名 / 密钥）变更后已失效。" +
+                "请到「模型设置」中对该配置点一次「测试」，通过后即会自动开启工具调用能力；" +
+                "或切换到其它已通过测试的支持工具调用的模型配置。");
+        }
+
+        var available = toolNames is ICollection<string> collection ? new HashSet<string>(collection, StringComparer.Ordinal) : new HashSet<string>(toolNames, StringComparer.Ordinal);
+        if (!available.Contains(CodeMasterAgentToolCatalog.UpsertProjectWorkPlan)
+            && !available.Contains(CodeMasterAgentToolCatalog.SubmitBusinessPlan))
             throw new InvalidOperationException("当前执行环境未提供项目方案写入能力，无法开始生成。请检查当前账号权限和 Agent 服务版本。");
     }
 
     public static async Task<AiProjectPlanTurnResult> EnsureSavedAsync(
         Func<CancellationToken, Task<AiProjectWorkPlanDto?>> readPlan,
         Func<string, CancellationToken, Task> continueRun,
+        Func<long, long, CancellationToken, Task<AiProjectWorkPlanDto?>>? directUpsertAsync,
         Func<int, CancellationToken, Task>? reportContinuation = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? fallbackProjectId = null,
+        long? fallbackConversationId = null)
     {
         for (var attempt = 0; ; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var plan = await readPlan(cancellationToken);
-            if (plan is { TotalTasks: > 0 } || attempt >= MaximumContinuationAttempts)
+            if (plan is { TotalTasks: > 0 })
+                return new(plan, attempt);
+
+            if (attempt >= MaximumContinuationAttempts)
+            {
+                if (directUpsertAsync != null)
+                {
+                    // The fallback delegate receives the actual project and
+                    // conversation ids from the caller. The retry counter is
+                    // only a local control value and must never be passed as
+                    // an identifier.
+                    var fallback = await directUpsertAsync(
+                        fallbackProjectId ?? 0,
+                        fallbackConversationId ?? 0,
+                        cancellationToken);
+                    if (fallback is { TotalTasks: > 0 })
+                        return new(fallback, attempt);
+                }
                 return new(plan is { TotalTasks: > 0 } ? plan : null, attempt);
+            }
 
             if (reportContinuation != null)
                 await reportContinuation(attempt + 1, cancellationToken);
-            await continueRun(
-                "The user has explicitly authorized implementation of the requirements already discussed in this conversation. " +
-                "The server has checked persisted state: no project plan with tasks has been saved. " +
-                "Continue the same request now using upsert_project_work_plan, which is available in this run. " +
-                "Submit executable task definitions for the agreed scope using the existing seven-stage workflow. " +
-                "If a draft already exists, update that plan by its id rather than creating a duplicate. " +
-                "If the previous submission returned success=false, correct its diagnostic and resubmit. " +
-                "Do not end with a promise to start later or invent missing capabilities. Do not expand the agreed scope. " +
-                "The existing workflow handles confirmation and execution after the plan is saved.",
-                cancellationToken);
+            try
+            {
+                await continueRun(
+                    "The user has explicitly authorized implementation of the requirements already discussed in this conversation. " +
+                    "The server has checked persisted state: no project plan with tasks has been saved. " +
+                    "Continue the same request now using submit_business_plan, which is available in this run. " +
+                    "Pass a BusinessPlanDefinition JSON (modules, entities, fields, relations, views, pages) with stable cross-block keys. " +
+                    "The server compiles the six-stage executable plan from your business definition. " +
+                    "If a draft already exists, the server will update that plan by its id rather than creating a duplicate. " +
+                    "If the previous submission returned success=false, correct its diagnostic and resubmit. " +
+                    "Do not end with a promise to start later or invent missing capabilities. Do not expand the agreed scope. " +
+                    "The existing workflow handles confirmation and execution after the plan is saved.",
+                    cancellationToken);
+            }
+            catch (Exception)
+            {
+                // continueRun failures (timeout, HTTP 400, parse errors) must NOT abort the loop.
+                // The fallback path is invoked below once we exhaust the attempt budget.
+            }
         }
     }
 
@@ -165,4 +211,46 @@ public static class AiToolStageResolver
         CodeMasterAgentToolCatalog.GetProjectStructure or CodeMasterAgentToolCatalog.GetCodegenCatalog => "EntityFields",
         _ => "Workflow"
     };
+
+    /// <summary>
+    /// 工具名判不出具体阶段时，用失败文案反推。
+    /// </summary>
+    /// <remarks>
+    /// <c>propose_project_change_set</c> 是唯一真正写元数据的工具，实体、关系、控件全走它，
+    /// 光看工具名只能落到 "Workflow"。而 <c>ValidateFieldControlsAsync</c> 和
+    /// <c>EntityRelationGraph</c> 的报错文案是固定的，足以区分是控件阶段还是关系阶段出的问题——
+    /// 红色横条上写"字段控件阶段失败"比写"工作流阶段失败"有用得多。
+    /// </remarks>
+    public static string? RefineFromMessage(string? stage, string? message)
+    {
+        // 已经能定位到具体阶段的，不动。
+        if (!string.IsNullOrWhiteSpace(stage) &&
+            !string.Equals(stage, "Workflow", StringComparison.Ordinal))
+        {
+            return stage;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+            return stage;
+
+        if (message.Contains("Relation field types must match", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("references missing target field", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("references missing source field", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Relations";
+        }
+
+        if (message.Contains("must have bool data type", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("must have a numeric data type", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("must have DateTime, DateOnly, or DateTimeOffset", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("must have string or text data type", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("must enable multiple selection", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("cannot enable multiple selection", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("must store its comma-separated values", StringComparison.OrdinalIgnoreCase))
+        {
+            return "FieldControls";
+        }
+
+        return stage;
+    }
 }

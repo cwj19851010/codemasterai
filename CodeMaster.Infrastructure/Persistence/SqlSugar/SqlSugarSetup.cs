@@ -154,7 +154,9 @@ public static class SqlSugarSetup
             {
                 if (logger != null)
                 {
-                    logger.LogError(exp.Sql, $"[SqlSugar Error] SQL: {exp.Sql}");
+                    // SQL text can contain JSON braces (for example page event references).
+                    // Keep it as a structured argument so logging never parses it as a format string.
+                    logger.LogError("[SqlSugar Error] SQL: {Sql}", exp.Sql);
                 }
                 else
                 {

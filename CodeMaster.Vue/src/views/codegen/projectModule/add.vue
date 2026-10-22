@@ -26,8 +26,13 @@
         </el-form-item>
 
         <el-form-item label="模块名称" prop="moduleName">
-          <el-input v-model="form.moduleName" placeholder="请输入模块名称（英文）" />
-          <div class="form-tip">用于权限规则和国际化，如：sales、order</div>
+          <el-input v-model="form.moduleName" placeholder="请输入技术名称(英文 PascalCase)" />
+          <div class="form-tip">
+            用于权限规则、命名空间和代码生成目录。必须是英文 PascalCase,例如
+            <el-tag size="small" type="info">Engineering</el-tag>
+            <el-tag size="small" type="info">ProjectManagement</el-tag>
+            。中文显示名请填写到模块描述。
+          </div>
         </el-form-item>
 
         <el-form-item label="模块描述" prop="moduleDescription">
@@ -40,7 +45,12 @@
         </el-form-item>
 
         <el-form-item label="排序" prop="orderNum">
-          <el-input-number v-model="form.orderNum" :min="0" />
+          <el-input-number
+            v-model="form.orderNum"
+            :min="isReportsModule ? 9999 : 3"
+            :max="isReportsModule ? 9999 : 9998"
+          />
+          <div class="form-tip">普通模块使用 3–9998；Reporting/报表管理固定使用 9999</div>
         </el-form-item>
 
         <el-form-item>
@@ -53,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, watch } from 'vue'
 import { resetReactiveForm, resetFormValidation } from '@/utils/pageLifecycle'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -71,14 +81,30 @@ const form = reactive({
   moduleName: '',
   moduleDescription: '',
   icon: '',
-  orderNum: 0
+  orderNum: 3
 })
 
 const initialForm = JSON.parse(JSON.stringify(form))
 
+const isReportsModule = computed(() => {
+  const name = String(form.moduleName || '').trim().toLowerCase()
+  return name === 'reporting' || name === 'reports' || String(form.moduleDescription || '').trim() === '报表管理'
+})
+
+watch(isReportsModule, value => {
+  form.orderNum = value ? 9999 : (form.orderNum === 9999 ? 3 : form.orderNum)
+})
+
 const rules = {
   projectId: [{ required: true, message: t2('please_select', 'project'), trigger: 'change' }],
-  moduleName: [{ required: true, message: t2('please_input', 'module_name'), trigger: 'blur' }],
+  moduleName: [
+    { required: true, message: t2('please_input', 'module_name'), trigger: 'blur' },
+    {
+      pattern: /^[A-Z][A-Za-z0-9]*$/,
+      message: '技术名称必须是 ASCII PascalCase,以大写字母开头,不含空格或下划线。示例:Engineering',
+      trigger: 'blur'
+    }
+  ],
   moduleDescription: [{ required: true, message: t2('please_input', 'module_description'), trigger: 'blur' }]
 }
 

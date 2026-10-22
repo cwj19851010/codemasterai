@@ -7,6 +7,8 @@ using CodeMaster.Infrastructure.Persistence.Repositories;
 using CodeMaster.Infrastructure.Persistence.SqlSugar;
 using CodeMaster.Infrastructure.Services;
 using CodeMaster.LocalAgent.Models;
+using CodeMaster.LocalAgent.Extensibility;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using SqlSugar;
 
@@ -15,10 +17,20 @@ namespace CodeMaster.LocalAgent.Services;
 public class LocalMetadataStore
 {
     private readonly LocalAgentOptions _options;
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly IReadOnlyCollection<ILocalMetadataBundleContributor> _contributors;
+    private readonly ILogger? _logger;
 
-    public LocalMetadataStore(IOptions<LocalAgentOptions> options)
+    public LocalMetadataStore(
+        IOptions<LocalAgentOptions> options,
+        IServiceScopeFactory? scopeFactory = null,
+        IEnumerable<ILocalMetadataBundleContributor>? contributors = null,
+        ILogger<LocalMetadataStore>? logger = null)
     {
         _options = options.Value;
+        _scopeFactory = scopeFactory;
+        _contributors = contributors?.ToArray() ?? Array.Empty<ILocalMetadataBundleContributor>();
+        _logger = logger;
     }
 
     public async Task<LocalMetadataContext> CreateAsync(GenerationBundleDto bundle, string? projectPathOverride = null)
@@ -29,9 +41,15 @@ public class LocalMetadataStore
         CleanupOldMetadataFiles(metadataRoot, bundle.Project.Id);
 
         var dbPath = Path.Combine(metadataRoot, $"{bundle.Project.Id}.{Guid.NewGuid():N}.metadata.db");
-        var db = SqlSugarSetup.CreateSqlSugarClient($"Data Source={dbPath}", dbType: DbType.Sqlite);
+        var db = SqlSugarSetup.CreateSqlSugarClient($"Data Source={dbPath}", dbType: DbType.Sqlite, logger: _logger);
         db.DbMaintenance.CreateDatabase();
-        db.CodeFirst.InitTables(
+        using var extensionScope = _scopeFactory?.CreateScope();
+        var metadataContributors = _contributors.Count > 0
+            ? _contributors
+            : extensionScope?.ServiceProvider.GetServices<ILocalMetadataBundleContributor>().ToArray()
+              ?? Array.Empty<ILocalMetadataBundleContributor>();
+        var entityTypes = new List<Type>
+        {
             typeof(Project),
             typeof(ProjectModule),
             typeof(ModuleEntity),
@@ -40,7 +58,10 @@ public class LocalMetadataStore
             typeof(EntityRelation),
             typeof(SysPageTemplate),
             typeof(SysFieldControlTemplate),
-            typeof(SysChildTemplate));
+            typeof(SysChildTemplate)
+        };
+        entityTypes.AddRange(metadataContributors.SelectMany(contributor => contributor.EntityTypes));
+        db.CodeFirst.InitTables(entityTypes.Distinct().ToArray());
 
         var project = bundle.Project;
         if (!string.IsNullOrWhiteSpace(projectPathOverride))
@@ -75,6 +96,8 @@ public class LocalMetadataStore
             await db.Insertable(bundle.FieldControlTemplates).ExecuteCommandAsync();
         if (bundle.ChildTemplates.Count > 0)
             await db.Insertable(bundle.ChildTemplates).ExecuteCommandAsync();
+        foreach (var contributor in metadataContributors)
+            await contributor.RestoreAsync(bundle, db);
 
         return new LocalMetadataContext(db, dbPath);
     }
@@ -206,6 +229,7 @@ public sealed class LocalMetadataContext : IDisposable
             excelService,
             new Repository<Project>(_db),
             _db);
+
     }
 
     public ISqlSugarClient Db => _db;

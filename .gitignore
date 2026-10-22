@@ -117,6 +117,47 @@ docs/public-portal-auth-community.md
 /CodeMaster.Private/
 CodeMaster.Private.sln
 
+# Private front end: the complex-page designer and the print designer.
+# Their back ends are modules under CodeMaster.Private/, so the UI goes with them.
+# viewModules.public.js already excludes projectPage from the public build.
+CodeMaster.Vue/src/views/codegen/projectPage/
+CodeMaster.Vue/src/views/codegen/print/
+CodeMaster.Vue/src/views/codegen/printTemplate/
+CodeMaster.Vue/src/components/PrintDesigner/
+CodeMaster.Vue/src/api/codegen/printTemplate.js
+CodeMaster.Vue/src/utils/printReport.js
+Templates/CodeMaster.Vue/src/views/codegen/print/
+Templates/CodeMaster.Vue/src/views/codegen/printTemplate/
+Templates/CodeMaster.Vue/src/api/codegen/printTemplate.js
+Templates/CodeMaster.Vue/src/utils/printReport.js
+Templates/CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs
+
+# Docs that describe the private features
+docs/print-template-schema.md
+docs/agent-printing-review-20260916.md
+docs/miniapp-control-map.md
+CODEGEN_ARCHITECTURE.md
+
+# Front-end tests for the private print feature
+CodeMaster.Vue/tests/generatedPrintTemplateSfc.test.mjs
+CodeMaster.Vue/tests/printDesignerLayout.test.mjs
+CodeMaster.Vue/tests/printPreviewRuntime.test.mjs
+CodeMaster.Vue/tests/printTemplateApi.test.mjs
+
+# Local agent scratch state and build output
+.workbuddy-ai/
+.workbuddy/
+.tauri/
+CodeMaster.WebApi/wwwroot/downloads/
+CodeMaster.Vue/vite.config.js.timestamp-*
+
+# Mini-app template (closed-source selling point).
+# The generator itself now lives in CodeMaster.Private/MiniApp (ignored wholesale above);
+# only the template stays at the repo root, so it needs its own entry.
+# These were previously untracked only by accident, which meant a single `git add -A`
+# would have published the whole feature. Commit with `git add -f` if this ever becomes public.
+/CodeMaster.MiniApp/
+
 # Local publish and generated smoke-test output
 artifacts/
 /publish/

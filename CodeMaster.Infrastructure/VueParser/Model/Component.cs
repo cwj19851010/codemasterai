@@ -1,5 +1,13 @@
 namespace CodeMaster.Infrastructure.VueParser.Model;
 
+public enum ComponentOriginKind
+{
+    Generated = 1,
+    User = 2,
+    External = 3,
+    Unbound = 4
+}
+
 /// <summary>
 /// Vue 模板解析后的组件节点（DOM 树节点）
 /// 支持按 data-gen-id 属性做增量查找和替换
@@ -10,6 +18,13 @@ public class Component
     public string Tag { get; set; } = string.Empty;
     public string? Ref { get; set; }
     public string? GenId { get; set; }
+    /// <summary>Complex-page semantic data source binding id.</summary>
+    public long? DataSourceId { get; set; }
+    /// <summary>Complex-page semantic component binding id.</summary>
+    public string? BindingId { get; set; }
+    /// <summary>Stable entity field id; field names are only display metadata.</summary>
+    public long? FieldId { get; set; }
+    public ComponentOriginKind Origin { get; set; } = ComponentOriginKind.Generated;
     /// <summary>所属表名: 空=主表, "OrderItem"=子表</summary>
     public string? EntityTable { get; set; }
     /// <summary>所属字段名</summary>

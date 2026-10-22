@@ -1,3 +1,4 @@
+using CodeMaster.Agent.Contracts;
 using CodeMaster.Agent.PlatformConstraints;
 using CodeMaster.Agent.Services;
 using CodeMaster.Agent.Tools;
@@ -14,6 +15,7 @@ public static class AgentServiceCollectionExtensions
         var repairOptions = services.AddOptions<AiProjectRepairOptions>();
         if (configuration != null)
             repairOptions.Bind(configuration.GetSection("Agent:Repair"));
+
         services.AddDataProtection();
         services.AddScoped<IAiCurrentUser, AiCurrentUser>();
         services.AddScoped<IAiAuthorizationService, AiAuthorizationService>();
@@ -29,7 +31,8 @@ public static class AgentServiceCollectionExtensions
         services.AddScoped<ICodeMasterAgentBatchOperationAdapter, GenerateProjectBatchOperationAdapter>();
         services.AddScoped<IAiProjectWorkPlanService, AiProjectWorkPlanService>();
         services.TryAddSingleton<IAiProjectValidationRunner, AiProjectValidationRunner>();
-        services.AddScoped<IAiProjectSourceRepairExecutor, AiProjectSourceRepairExecutor>();
+        // Source repair is disabled (2026-10-20): the agent never reads or patches
+        // CodeMaster source code, so the executor is no longer registered.
         services.AddScoped<IAgentEventStore, SqlAgentEventStore>();
         services.TryAddSingleton<AiConversationReadCacheManager>();
         services.AddScoped<ICodeMasterAgentToolFactory, CodeMasterAgentToolFactory>();

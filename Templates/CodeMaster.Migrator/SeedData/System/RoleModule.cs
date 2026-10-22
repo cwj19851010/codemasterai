@@ -20,7 +20,7 @@ public class RoleModule : ISeedModule
     {
         // 查找系统管理目录
         var systemMenu = await dbContext.Set<Domain.Entities.System.SysMenu>()
-            .FirstOrDefaultAsync(m => m.Path == "/system" && m.MenuType == "M");
+            .FirstOrDefaultAsync(m => m.Path == "system" && m.MenuType == "M");
 
         if (systemMenu == null)
         {

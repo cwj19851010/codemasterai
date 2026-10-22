@@ -28,7 +28,7 @@ public class CodeGenerationIntegrationTests : IDisposable
     {
         YitIdHelper.SetIdGenerator(new IdGeneratorOptions { WorkerId = 1 });
 
-        _tempProjectPath = Path.Combine(Path.GetTempPath(), "CodeMaster_TestProj_" + Guid.NewGuid().ToString("N"));
+        _tempProjectPath = Path.Combine(CodeMasterTestPaths.Root, "CodeMaster_TestProj_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempProjectPath);
 
         _sqliteFile = Path.Combine(_tempProjectPath, "test_codemaster.db");
@@ -362,6 +362,22 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.True(await service.GenerateProjectCodeAsync(fullInput));
         Assert.Equal(new[] { first.Id, second.Id }, fullInput.EntityIds.OrderBy(id => id));
 
+        var frontendApiRoot = Path.Combine(
+            _tempProjectPath,
+            $"{project.ProjectName}.Vue",
+            "src",
+            "api",
+            "batch");
+        Assert.True(File.Exists(Path.Combine(frontendApiRoot, "firstbatchentity.js")));
+        Assert.True(File.Exists(Path.Combine(frontendApiRoot, "secondbatchentity.js")));
+        Assert.False(Directory.Exists(Path.Combine(
+            _tempProjectPath,
+            $"{project.ProjectName}.Vue",
+            "src",
+            "views",
+            "batch",
+            "firstbatchentity")));
+
         var generatedFirst = _db.Queryable<ModuleEntity>().Where(entity => entity.Id == first.Id).First();
         secondField.UpdateTime = generatedFirst.LastGeneratedTime!.Value.AddSeconds(1);
         _db.Updateable(secondField).UpdateColumns(field => new { field.UpdateTime }).ExecuteCommand();
@@ -369,6 +385,34 @@ public class CodeGenerationIntegrationTests : IDisposable
         var incrementalInput = new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id };
         Assert.True(await service.GenerateProjectIncrementalCodeAsync(incrementalInput));
         Assert.Equal(new[] { second.Id }, incrementalInput.EntityIds);
+
+        var generatedSecond = _db.Queryable<ModuleEntity>().Where(entity => entity.Id == second.Id).First();
+        secondField.UpdateTime = generatedSecond.LastGeneratedTime!.Value.AddTicks(-1);
+        _db.Updateable(secondField).UpdateColumns(field => new { field.UpdateTime }).ExecuteCommand();
+
+        var missingDtoPath = Path.Combine(
+            _tempProjectPath,
+            $"{project.ProjectName}.Application",
+            "Dtos",
+            module.ModuleName,
+            $"{first.Name}Dto.cs");
+        Assert.True(File.Exists(missingDtoPath));
+        File.Delete(missingDtoPath);
+
+        var secondRequiredPaths = new[]
+        {
+            Path.Combine(_tempProjectPath, $"{project.ProjectName}.Domain", "Entities", module.ModuleName, $"{second.Name}.auto.cs"),
+            Path.Combine(_tempProjectPath, $"{project.ProjectName}.Domain", "Entities", module.ModuleName, $"{second.Name}.cs"),
+            Path.Combine(_tempProjectPath, $"{project.ProjectName}.Application", "Dtos", module.ModuleName, $"{second.Name}Dto.cs"),
+            Path.Combine(_tempProjectPath, $"{project.ProjectName}.Application", "Services", module.ModuleName, $"I{second.Name}Service.cs"),
+            Path.Combine(_tempProjectPath, $"{project.ProjectName}.Application", "Services", module.ModuleName, $"{second.Name}Service.cs")
+        };
+        Assert.True(secondRequiredPaths.All(File.Exists), string.Join(Environment.NewLine, secondRequiredPaths.Where(path => !File.Exists(path))));
+
+        var smartInput = new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id };
+        Assert.True(await service.GenerateProjectSmartCodeAsync(smartInput));
+        Assert.Equal(new[] { first.Id }, smartInput.EntityIds);
+        Assert.True(File.Exists(missingDtoPath));
     }
 
     [Fact]
@@ -662,7 +706,7 @@ public class CodeGenerationIntegrationTests : IDisposable
             ProjectId = project.Id,
             ModuleName = "MasterData",
             ModuleDescription = "Master data",
-            Icon = "folder",
+            Icon = "Collection",
             RoutePath = "/masterdata",
             LastSyncTime = DateTime.UtcNow,
             Remark = string.Empty,
@@ -676,6 +720,7 @@ public class CodeGenerationIntegrationTests : IDisposable
             ModuleId = module.Id,
             Name = "DeviceBinding",
             Description = "Device binding",
+            MenuIcon = "Connection",
             HasPrimaryKey = true,
             IsReadOnly = false,
             GenerateFrontend = true,
@@ -719,7 +764,9 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.Single(pageMenus);
         Assert.Equal("devicebinding", pageMenus[0].Path);
         Assert.Equal("masterdata/devicebinding/index", pageMenus[0].Component);
+        Assert.Equal("Connection", pageMenus[0].Icon);
         Assert.Single(targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == null && menu.MenuType == "M").ToList());
+        Assert.Equal("Collection", targetDb.Queryable<SysMenu>().Single(menu => menu.ParentId == null && menu.MenuType == "M").Icon);
 
         var childMenus = targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == pageId && menu.MenuType == "C").ToList();
         Assert.Equal(3, childMenus.Count);
@@ -1777,11 +1824,23 @@ public class CodeGenerationIntegrationTests : IDisposable
             TableName = "test_field_entity",
             NewFields = new List<CodeMaster.Application.Dtos.CodeGen.CreateEntityFieldDto>
             {
-                new() { Name = "NewAutoGeneratedField", DataType = "long", IsSystemField = true }
+                new()
+                {
+                    Name = "NewAutoGeneratedField",
+                    Description = "New auto-generated field",
+                    DataType = "long",
+                    IsSystemField = true
+                }
             },
             UpdatedFields = new List<CodeMaster.Application.Dtos.CodeGen.UpdateEntityFieldWithIdDto>
             {
-                new() { Id = existingField.Id, Name = "OldFieldRenamed", DataType = "string" }
+                new()
+                {
+                    Id = existingField.Id,
+                    Name = "OldFieldRenamed",
+                    Description = "Renamed old field",
+                    DataType = "string"
+                }
             },
             DeletedFieldIds = new List<long> { existingField.Id }
         };

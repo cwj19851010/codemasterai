@@ -14,14 +14,17 @@ namespace CodeMaster.Application.Services.CodeGen;
 public class EntityFieldService : CrudApplicationService<EntityField, EntityFieldDto, EntityFieldDto, EntityFieldQueryDto, CreateEntityFieldDto, UpdateEntityFieldDto>, IEntityFieldService
 {
     private readonly ISqlSugarClient _db;
+    private readonly IReadOnlyCollection<ICodeGenerationMetadataObserver> _metadataObservers;
 
     public EntityFieldService(
         IRepository<EntityField> repository,
         IExcelService excelService,
         ISqlSugarClient db,
-        CodeMaster.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+        CodeMaster.Core.Services.ICacheService? cacheService = null,
+        IEnumerable<ICodeGenerationMetadataObserver>? metadataObservers = null) : base(repository, excelService, cacheService)
     {
         _db = db;
+        _metadataObservers = metadataObservers?.ToArray() ?? Array.Empty<ICodeGenerationMetadataObserver>();
     }
 
     /// <summary>
@@ -39,8 +42,11 @@ public class EntityFieldService : CrudApplicationService<EntityField, EntityFiel
 
     public override async Task<long> CreateAsync(CreateEntityFieldDto input)
     {
+        NormalizeDescriptions(input);
         input.DataType = CSharpDataTypeNormalizer.Normalize(input.DataType);
-        return await base.CreateAsync(input);
+        var id = await base.CreateAsync(input);
+        await NotifyMetadataObserversAsync(input.ModuleEntityId);
+        return id;
     }
 
     /// <summary>
@@ -48,6 +54,8 @@ public class EntityFieldService : CrudApplicationService<EntityField, EntityFiel
     /// </summary>
     public async Task<List<long>> CreateBatchAsync(List<CreateEntityFieldDto> inputs)
     {
+        foreach (var input in inputs)
+            NormalizeDescriptions(input);
         var entities = inputs.Adapt<List<EntityField>>();
         var ids = new List<long>();
 
@@ -59,6 +67,8 @@ public class EntityFieldService : CrudApplicationService<EntityField, EntityFiel
             ids.Add(id);
         }
 
+        foreach (var entityId in entities.Select(item => item.ModuleEntityId).Distinct())
+            await NotifyMetadataObserversAsync(entityId);
         return ids;
     }
 
@@ -70,10 +80,18 @@ public class EntityFieldService : CrudApplicationService<EntityField, EntityFiel
             throw new Exception($"Entity with id {id} not found");
         }
 
+        var businessDescriptionSpecified = input.BusinessDescription != null;
+        NormalizeDescriptions(input);
         input.DataType = CSharpDataTypeNormalizer.Normalize(input.DataType);
+        var finalBusinessDescription = businessDescriptionSpecified
+            ? input.BusinessDescription
+            : entity.BusinessDescription;
         input.Adapt(entity);
+        entity.BusinessDescription = finalBusinessDescription;
         entity.UpdateTime = DateTime.UtcNow;
-        return await Repository.UpdateAsync(entity);
+        var count = await Repository.UpdateAsync(entity);
+        if (count > 0) await NotifyMetadataObserversAsync(entity.ModuleEntityId);
+        return count;
     }
 
     public override async Task<int> DeleteAsync(long id)
@@ -86,7 +104,9 @@ public class EntityFieldService : CrudApplicationService<EntityField, EntityFiel
 
         entity.IsDeleted = true;
         entity.DeleteTime = DateTime.UtcNow;
-        return await Repository.UpdateAsync(entity);
+        var count = await Repository.UpdateAsync(entity);
+        if (count > 0) await NotifyMetadataObserversAsync(entity.ModuleEntityId);
+        return count;
     }
 
     public override async Task<int> DeleteBatchAsync(List<long> ids)
@@ -108,19 +128,48 @@ public class EntityFieldService : CrudApplicationService<EntityField, EntityFiel
     public async Task<int> UpdateBatchAsync(List<EntityFieldDto> fields)
     {
         var count = 0;
+        var affectedEntityIds = new HashSet<long>();
         foreach (var field in fields)
         {
+            var businessDescriptionSpecified = field.BusinessDescription != null;
+            field.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(field.Description, "字段");
+            field.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(field.BusinessDescription, "字段");
             var entity = await Repository.GetByIdAsync(field.Id);
             if (entity != null)
             {
+                var finalBusinessDescription = businessDescriptionSpecified
+                    ? field.BusinessDescription
+                    : entity.BusinessDescription;
                 field.DataType = CSharpDataTypeNormalizer.Normalize(field.DataType);
                 field.Adapt(entity);
+                entity.BusinessDescription = finalBusinessDescription;
                 entity.UpdateTime = DateTime.UtcNow;
                 await Repository.UpdateAsync(entity);
+                affectedEntityIds.Add(entity.ModuleEntityId);
                 count++;
             }
         }
+        foreach (var entityId in affectedEntityIds)
+            await NotifyMetadataObserversAsync(entityId);
         return count;
+    }
+
+    private static void NormalizeDescriptions(CreateEntityFieldDto input)
+    {
+        input.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(input.Description, "字段");
+        input.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(input.BusinessDescription, "字段");
+    }
+
+    private static void NormalizeDescriptions(UpdateEntityFieldDto input)
+    {
+        input.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(input.Description, "字段");
+        input.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(input.BusinessDescription, "字段");
+    }
+
+    private async Task NotifyMetadataObserversAsync(long entityId)
+    {
+        foreach (var observer in _metadataObservers)
+            await observer.EntityChangedAsync(entityId);
     }
 
     /// <summary>

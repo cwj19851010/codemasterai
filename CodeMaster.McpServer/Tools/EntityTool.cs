@@ -40,7 +40,8 @@ public class EntityTool
                 moduleOrderNum = new { type = "integer", description = "Module sort order." },
                 entityId = new { oneOf = new object[] { new { type = "integer" }, new { type = "string" } }, description = "Optional existing entity id." },
                 entityName = new { type = "string", description = "Entity name in PascalCase, for example Order or OrderItem." },
-                description = new { type = "string", description = "Human-readable entity title." },
+                description = new { type = "string", maxLength = 50, description = "Short display title used by menus and page headings. Prefer Chinese for a Chinese-language project." },
+                businessDescription = new { type = "string", maxLength = 2000, description = "Long-form business semantics for Agent analysis and documentation. Not used as a UI title." },
                 tableName = new { type = "string", description = "Optional custom physical table name. Leave empty for CodeMaster's default plural snake_case name without a prefix. Never invent a prefix unless the user explicitly requests one." },
                 hasPrimaryKey = new { type = "boolean", description = "Generate the standard long Id primary key and enable keyed services/migration. Defaults to true for new entities." },
                 isTree = new { type = "boolean", description = "Generate a tree entity." },
@@ -68,7 +69,8 @@ public class EntityTool
                             id = new { oneOf = new object[] { new { type = "integer" }, new { type = "string" } }, description = "Existing field id for updates." },
                             name = new { type = "string", description = "Field name in PascalCase." },
                             dataType = new { type = "string", description = "C# data type: string, long, int, decimal, DateTime, bool, Guid, enum, or text." },
-                            description = new { type = "string", description = "Human-readable field title." },
+                            description = new { type = "string", maxLength = 50, description = "Short field label used by generated forms and tables. Prefer Chinese for a Chinese-language project." },
+                            businessDescription = new { type = "string", maxLength = 2000, description = "Long-form business meaning, units, value rules, relations, and constraints. Not used as a field label." },
                             maxLength = new { type = "integer", description = "String max length." },
                             minLength = new { type = "integer", description = "Alias for minValue." },
                             minValue = new { type = "string", description = "Minimum validation value." },
@@ -261,6 +263,7 @@ public class EntityTool
             Name = args.EntityName,
             TableName = args.TableName,
             Description = args.Description ?? args.EntityName,
+            BusinessDescription = args.BusinessDescription,
             IsTree = args.IsTree ?? false,
             HasPrimaryKey = args.HasPrimaryKey ?? true,
             IsReadOnly = args.IsReadOnly ?? false,
@@ -343,6 +346,7 @@ public class EntityTool
         {
             Name = args.EntityName ?? entity.Name,
             Description = args.Description ?? entity.Description,
+            BusinessDescription = args.BusinessDescription ?? entity.BusinessDescription,
             HasPrimaryKey = args.HasPrimaryKey ?? entity.HasPrimaryKey,
             TableName = args.TableName ?? entity.TableName,
             IsTree = args.IsTree ?? entity.IsTree,
@@ -408,6 +412,7 @@ public class EntityTool
         {
             Name = field.Name ?? string.Empty,
             Description = field.Description ?? field.Name ?? string.Empty,
+            BusinessDescription = field.BusinessDescription,
             DataType = normalized.DataType,
             MaxLength = normalized.MaxLength,
             Precision = normalized.Precision,
@@ -454,6 +459,7 @@ public class EntityTool
             Id = existing.Id,
             Name = string.IsNullOrWhiteSpace(field.Name) ? existing.Name : field.Name!,
             Description = field.Description ?? existing.Description,
+            BusinessDescription = field.BusinessDescription ?? existing.BusinessDescription,
             DataType = normalized.DataType,
             MaxLength = normalized.MaxLength,
             Precision = normalized.Precision,
@@ -766,6 +772,7 @@ public class EntityToolInput
     public long EntityId { get; set; }
     public string? EntityName { get; set; }
     public string? Description { get; set; }
+    public string? BusinessDescription { get; set; }
     public string? TableName { get; set; }
     public bool? HasPrimaryKey { get; set; }
     public bool? IsTree { get; set; }
@@ -792,6 +799,7 @@ public class FieldInput
     public string? Name { get; set; }
     public string? DataType { get; set; }
     public string? Description { get; set; }
+    public string? BusinessDescription { get; set; }
     public int? MaxLength { get; set; }
     public int? MinLength { get; set; }
     public string? MinValue { get; set; }

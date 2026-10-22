@@ -28,6 +28,23 @@ using Microsoft.Extensions.FileProviders;
 using CodeMaster.Agent.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddSimpleConsole();
+
+// Kestrel tuning: keep Agent SSE streams alive during long LLM thinking
+// pauses. The Codex desktop SSE client and any reverse proxy in front of
+// the WebApi must see fresh socket bytes within their idle timeouts, or
+// they reconnect mid-stream and surface "stream disconnected before
+// completion" / "reconnecting 5/5" errors to the user. KeepAliveTimeout
+// sends a TCP keep-alive; MinRequestBodyDataRate=null prevents Kestrel from
+// closing the request because the client body rate is "too low" while we
+// are reading an SSE reply.
+builder.WebHost.ConfigureKestrel((context, options) =>
+{
+    options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(5);
+    options.Limits.MinRequestBodyDataRate = null;
+    options.Limits.MinResponseDataRate = null;
+});
 
 Console.WriteLine($"[Config] Environment: {builder.Environment.EnvironmentName}");
 Console.WriteLine($"[Config] ContentRoot: {builder.Environment.ContentRootPath}");
@@ -45,7 +62,7 @@ builder.Services.AddSingleton<IDataFilter, DataFilter>();
 builder.Services.AddHttpContextAccessor();
 
 // Register the built-in CodeMaster Agent runtime and provider adapters.
-builder.Services.AddCodeMasterAgent();
+builder.Services.AddCodeMasterAgent(builder.Configuration);
 
 // 注册数据权限上下文（Scoped）
 builder.Services.AddScoped<IDataPermissionContext, DataPermissionContext>();
@@ -372,6 +389,8 @@ app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(webRootPath)
 });
+
+app.UseBusinessExceptionHandling();
 
 // HTTP请求日志中间件
 app.UseRequestLogging();

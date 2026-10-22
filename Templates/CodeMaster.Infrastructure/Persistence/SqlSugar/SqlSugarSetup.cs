@@ -59,10 +59,16 @@ public static class SqlSugarSetup
                 EntityService = (property, column) =>
                 {
                     // 自动转换：UserName -> user_name
-                    column.DbColumnName = ToSnakeCase(property.Name);
+                    var sugarColumn = property.GetCustomAttributes(typeof(SugarColumn), false)
+                        .FirstOrDefault() as SugarColumn;
+                    column.DbColumnName = !string.IsNullOrWhiteSpace(sugarColumn?.ColumnName)
+                        ? sugarColumn.ColumnName
+                        : ToSnakeCase(property.Name);
 
                     // 自动映射数据库类型
-                    column.DataType = GetDatabaseType(property.PropertyType, dbType);
+                    column.DataType = !string.IsNullOrWhiteSpace(sugarColumn?.ColumnDataType)
+                        ? sugarColumn.ColumnDataType
+                        : GetDatabaseType(property.PropertyType, dbType);
                 }
             }
         });

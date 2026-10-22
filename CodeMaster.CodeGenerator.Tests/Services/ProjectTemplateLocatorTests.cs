@@ -68,6 +68,55 @@ public class ProjectTemplateLocatorTests
         }
     }
 
+    [Theory]
+    [InlineData("import { modules } from '@view-modules'")]
+    [InlineData("const modules = import.meta.glob('@/views/**/*.vue')")]
+    [InlineData("const modules = import.meta.glob('/src/views/**/*.vue')")]
+    public void ValidateTemplateZip_RejectsNonPortableFrontendViewLoaders(string routerContent)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var templatePath = Path.Combine(root, "CodeMaster_Template_nonportable_router.zip");
+            CreateTemplateZip(
+                templatePath,
+                includeMigration: false,
+                frontendRouterContent: routerContent);
+
+            var error = Assert.Throws<Exception>(() =>
+                ProjectTemplateLocator.ValidateTemplateZip(templatePath));
+
+            Assert.Contains("non-portable frontend view module loader", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ValidateTemplateZip_AcceptsPortableRelativeFrontendViewLoader()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var templatePath = Path.Combine(root, "CodeMaster_Template_portable_router.zip");
+            CreateTemplateZip(
+                templatePath,
+                includeMigration: false,
+                frontendRouterContent:
+                "const modules = import.meta.glob('../views/**/*.vue'); " +
+                "let componentPath = `../views/${view}.vue`; " +
+                "const matchedModule = modules[componentPath]");
+
+            ProjectTemplateLocator.ValidateTemplateZip(templatePath);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     [Fact]
     public void ValidateTemplateZip_RejectsDanglingFrontendAgentReferences()
     {
@@ -114,6 +163,29 @@ public class ProjectTemplateLocatorTests
     }
 
     [Fact]
+    public void ValidateTemplateZip_RejectsViewFrameworkWithoutEfViewMapping()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var templatePath = Path.Combine(root, "CodeMaster_Template_old_view_support.zip");
+            CreateTemplateZip(
+                templatePath,
+                includeMigration: false,
+                sourceGeneratorContent: "builder.ToTable(\"demo\");");
+
+            var error = Assert.Throws<Exception>(() =>
+                ProjectTemplateLocator.ValidateTemplateZip(templatePath));
+
+            Assert.Contains("database-view entities", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void ValidateTemplateZip_RejectsAgentDbContextReferences()
     {
         var root = CreateTempDirectory();
@@ -126,6 +198,26 @@ public class ProjectTemplateLocatorTests
                 ProjectTemplateLocator.ValidateTemplateZip(templatePath));
 
             Assert.Contains("Agent entity references", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ValidateTemplateZip_RejectsCodeGenDbContextReferences()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var templatePath = Path.Combine(root, "CodeMaster_Template_codegen.zip");
+            CreateTemplateZip(templatePath, includeMigration: false, includeCodeGenDbContextReference: true);
+
+            var error = Assert.Throws<Exception>(() =>
+                ProjectTemplateLocator.ValidateTemplateZip(templatePath));
+
+            Assert.Contains("CodeGen entity references", error.Message);
         }
         finally
         {
@@ -235,7 +327,7 @@ public class ProjectTemplateLocatorTests
 
     private static string CreateTempDirectory()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"codemaster-template-tests-{Guid.NewGuid():N}");
+        var path = Path.Combine(CodeMasterTestPaths.Root, $"codemaster-template-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
     }
@@ -247,9 +339,12 @@ public class ProjectTemplateLocatorTests
         bool includeFrontendMcpReference = false,
         bool includeRequiredFrameworkFiles = true,
         bool includeAgentDbContextReference = false,
+        bool includeCodeGenDbContextReference = false,
         bool includeMissingSolutionProject = false,
         bool includeMissingProjectReference = false,
-        bool includeFrontendAgentReference = false)
+        bool includeFrontendAgentReference = false,
+        string? sourceGeneratorContent = null,
+        string? frontendRouterContent = null)
     {
         using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
         WriteEntry(
@@ -276,17 +371,35 @@ public class ProjectTemplateLocatorTests
             "CodeMaster.Migrator/Persistence/EfCore/CodeMasterDbContext.cs",
             includeAgentDbContextReference
                 ? "using CodeMaster.Domain.Entities.Ai; modelBuilder.Entity<AiMessage>();"
-                : "using CodeMaster.Domain.Entities.System;");
+                : includeCodeGenDbContextReference
+                    ? "using CodeMaster.Domain.Entities.CodeGen; modelBuilder.Entity<ProjectModule>();"
+                    : "using CodeMaster.Domain.Entities.System;");
         if (includeRequiredFrameworkFiles)
         {
+            WriteEntry(archive, "CodeMaster.Core/Extensibility/ICodeMasterExtension.cs");
+            WriteEntry(archive, "CodeMaster.Core/DynamicApi/ApplicationServiceCapabilityCatalog.cs");
             WriteEntry(archive, "CodeMaster.Core/Entities/ITree.cs");
+            WriteEntry(archive, "CodeMaster.Core/Entities/IViewEntity.cs");
             WriteEntry(archive, "CodeMaster.Core/Services/IQueryApplicationService.cs");
             WriteEntry(archive, "CodeMaster.Core/Services/IReadOnlyTreeApplicationService.cs");
             WriteEntry(archive, "CodeMaster.Application/Services/QueryApplicationService.cs");
             WriteEntry(archive, "CodeMaster.Application/Services/ReadOnlyTreeApplicationService.cs");
+            WriteEntry(archive, "CodeMaster.Infrastructure/DynamicApi/ApplicationServiceCapabilityCatalog.cs");
+            WriteEntry(archive, "CodeMaster.Infrastructure/DynamicApi/CodeMasterModuleAssemblyLoader.cs");
+            WriteEntry(
+                archive,
+                "CodeMaster.SourceGenerator/DbContextGenerator.cs",
+                sourceGeneratorContent ??
+                "var isView = typeSymbol.AllInterfaces.Any(i => i.Name == \"IViewEntity\"); builder.ToView(\"demo\");");
+            WriteEntry(archive, "CodeMaster.Migrator/Persistence/EfCore/MigrationModuleCatalog.cs");
+            WriteEntry(archive, "CodeMaster.Migrator/Program.cs", "await ApplyModuleMigrationsAsync(dbProvider, connectionString);");
         }
 
-        if (includeFrontendMcpReference)
+        if (frontendRouterContent != null)
+        {
+            WriteEntry(archive, "CodeMaster.Vue/src/router/index.js", frontendRouterContent);
+        }
+        else if (includeFrontendMcpReference)
         {
             WriteEntry(
                 archive,

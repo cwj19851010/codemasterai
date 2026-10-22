@@ -11,7 +11,7 @@ public class LocalAiProviderStoreTests
     [Fact]
     public async Task SaveAsync_encrypts_api_key_and_scopes_provider_to_server()
     {
-        var root = Path.Combine(Path.GetTempPath(), "CodeMaster.LocalAgent.Tests", Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(CodeMasterTestPaths.Root, "CodeMaster.LocalAgent.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
         try

@@ -39,8 +39,9 @@
               @click="agentVisible = true"
             />
           </el-tooltip>
-          <theme-picker class="header-item" />
+<theme-picker class="header-item" />
           <language-switcher class="header-item" />
+          <update-checker v-if="isClient" class="header-item" />
 
           <el-dropdown class="header-item">
             <span class="user-info">
@@ -90,7 +91,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTagsViewStore } from '@/stores/tagsView'
 import { useI18n } from 'vue-i18n'
 import defaultAvatarImg from '@/assets/images/default-avatar.svg'
+import { isTauriRuntime } from '@/utils/tauriBridge'
 import AgentDrawer from '@/components/AgentAssistant/AgentDrawer.vue'
+import UpdateChecker from '@/components/UpdateChecker.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -103,6 +106,7 @@ const { t } = useI18n()
 const isCollapse = ref(false)
 const agentVisible = ref(false)
 const defaultAvatar = defaultAvatarImg
+const isClient = isTauriRuntime()
 
 const userInfo = computed(() => userStore.userInfo)
 

@@ -43,22 +43,13 @@
       <div class="toolbar mb-20">
         <el-button type="primary" icon="Plus" @click="handleAdd">新增</el-button>
         <el-button
-          type="danger"
-          plain
-          :icon="RefreshRight"
-          :disabled="!queryParams.projectId"
-          @click="handleRegenerateAll"
-        >
-          全部重新生成
-        </el-button>
-        <el-button
           type="success"
           plain
           :icon="MagicStick"
           :disabled="!queryParams.projectId"
-          @click="handleGenerateAllChanges"
+          @click="handleGenerateAll"
         >
-          生成全部变更
+          生成代码
         </el-button>
         <el-button
           type="warning"
@@ -93,7 +84,8 @@
           </template>
         </el-table-column>
         <el-table-column label="实体名称" prop="name" width="150" />
-        <el-table-column label="实体描述" prop="description" />
+        <el-table-column label="显示名称" prop="description" width="150" />
+        <el-table-column label="业务说明" prop="businessDescription" min-width="220" show-overflow-tooltip />
         <el-table-column label="类型" width="130">
           <template #default="{ row }">
             <el-tag v-if="isMetadataOnly(row)" type="info">API 元数据</el-tag>
@@ -150,7 +142,7 @@
           </template>
         </el-table-column>
         <el-table-column label="排序" prop="orderNum" width="80" />
-        <el-table-column label="操作" width="660" fixed="right">
+        <el-table-column label="操作" width="590" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link @click="handleView(row)">详情</el-button>
             <el-button type="primary" link @click="handleUpdate(row)">编辑</el-button>
@@ -167,8 +159,7 @@
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
-            <el-button v-if="!isMetadataOnly(row)" type="primary" link @click="handleGenerateIncrementalCode(row)">增量生成</el-button>
-            <el-button v-if="!isMetadataOnly(row)" type="success" link @click="handleGenerateCode(row)">生成代码</el-button>
+            <el-button v-if="!isMetadataOnly(row)" type="success" link @click="handleGenerateSmartCode(row)">生成代码</el-button>
             <el-button v-if="!isMetadataOnly(row)" type="warning" link @click="handleSyncMenu(row)">更新到菜单</el-button>
             <el-button v-if="!isMetadataOnly(row)" type="warning" link @click="handleSyncLanguage(row)">更新到多语言</el-button>
             <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
@@ -195,14 +186,12 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { refreshOnReactivated } from '@/utils/pageLifecycle'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Connection, MagicStick, Menu, RefreshRight } from '@element-plus/icons-vue'
+import { ArrowDown, Connection, MagicStick, Menu } from '@element-plus/icons-vue'
 import {
   getPagedList as getEntityList,
   deleteById,
-  generateCode,
-  generateIncrementalCode,
-  generateProjectCode,
-  generateProjectIncrementalCode,
+  generateSmartCode,
+  generateProjectSmartCode,
   syncMenu,
   syncLanguage,
   syncProjectMenus,
@@ -394,24 +383,13 @@ async function runProjectBatchAction({
   }
 }
 
-function handleRegenerateAll() {
+function handleGenerateAll() {
   return runProjectBatchAction({
-    title: '全部重新生成',
-    message: `确定重新生成项目“${selectedProjectName.value}”的全部常规实体吗？API 元数据模型不会参与生成。`,
-    loadingMessage: '正在重新生成项目全部实体，请稍候...',
-    successMessage: '项目全部实体重新生成完成',
-    action: projectId => generateProjectCode(projectId),
-    validateBuild: true
-  })
-}
-
-function handleGenerateAllChanges() {
-  return runProjectBatchAction({
-    title: '生成全部变更',
-    message: `确定检查项目“${selectedProjectName.value}”的全部常规实体吗？API 元数据模型不会参与生成。`,
-    loadingMessage: '正在检查并增量生成全部变更，请稍候...',
-    successMessage: '项目变更检查和增量生成完成',
-    action: projectId => generateProjectIncrementalCode(projectId),
+    title: '生成代码',
+    message: `确定生成项目“${selectedProjectName.value}”的代码吗？系统会自动创建缺失文件，并安全更新已有代码；API 元数据模型不会参与后台生成。`,
+    loadingMessage: '正在检查并生成项目代码，请稍候...',
+    successMessage: '项目代码生成完成',
+    action: projectId => generateProjectSmartCode(projectId),
     validateBuild: true
   })
 }
@@ -469,11 +447,12 @@ async function handleDelete(row) {
   }
 }
 
-// 生成代码
-async function handleGenerateCode(row) {
+// 智能生成代码：首次生成、缺失文件修复和已有代码增量更新使用同一入口
+async function handleGenerateSmartCode(row) {
+  let loadingMessageInstance
   try {
     await ElMessageBox.confirm(
-      `确定要为实体 "${row.name}" 生成代码吗？这将生成后端实体、DTO、Service 和前端 API 文件。`,
+      `确定要为实体 "${row.name}" 生成代码吗？系统会自动创建缺失文件，并安全更新已有代码。`,
       '生成代码',
       {
         type: 'warning',
@@ -482,52 +461,22 @@ async function handleGenerateCode(row) {
       }
     )
 
-    const loading = ElMessage({
+    loadingMessageInstance = ElMessage({
       message: '正在生成代码，请稍候...',
       type: 'info',
       duration: 0
     })
 
-    await generateCode(row.id)
-    loading.close()
+    await generateSmartCode(row.id)
     ElMessage.success('代码生成成功！')
-    loadEntityList()
+    await loadEntityList()
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error('代码生成失败：' + (error.message || '未知错误'))
       console.error(error)
     }
-  }
-}
-
-// 增量生成代码
-async function handleGenerateIncrementalCode(row) {
-  try {
-    await ElMessageBox.confirm(
-      `确定要为实体 "${row.name}" 增量生成代码吗？这会按字段、排序和子表关系变更更新已生成页面。`,
-      '增量生成代码',
-      {
-        type: 'warning',
-        confirmButtonText: '确定增量生成',
-        cancelButtonText: '取消'
-      }
-    )
-
-    const loading = ElMessage({
-      message: '正在增量生成代码，请稍候...',
-      type: 'info',
-      duration: 0
-    })
-
-    await generateIncrementalCode(row.id)
-    loading.close()
-    ElMessage.success('增量生成成功！')
-    loadEntityList()
-  } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('增量生成失败：' + (error.message || '未知错误'))
-      console.error(error)
-    }
+  } finally {
+    loadingMessageInstance?.close()
   }
 }
 

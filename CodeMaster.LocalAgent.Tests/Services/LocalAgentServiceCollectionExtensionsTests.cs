@@ -13,7 +13,7 @@ public class LocalAgentServiceCollectionExtensionsTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["LocalAgent:MetadataRoot"] = Path.Combine(Path.GetTempPath(), "codemaster-local-agent-tests")
+                ["LocalAgent:MetadataRoot"] = Path.Combine(CodeMasterTestPaths.Root, "codemaster-local-agent-tests")
             })
             .Build();
         var services = new ServiceCollection();
@@ -22,6 +22,8 @@ public class LocalAgentServiceCollectionExtensionsTests
         services.AddCodeMasterLocalExecution(configuration);
 
         using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetRequiredService<LocalAgentDiagnosticLog>());
+        Assert.NotNull(provider.GetRequiredService<LocalAgentConversationSessionStore>());
         Assert.NotNull(provider.GetRequiredService<LocalAiProviderStore>());
         Assert.NotNull(provider.GetRequiredService<LocalAgentChatService>());
         Assert.NotNull(provider.GetRequiredService<LocalCodegenExecutionService>());

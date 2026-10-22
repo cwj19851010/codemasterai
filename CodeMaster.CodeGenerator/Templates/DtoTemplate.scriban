@@ -34,14 +34,14 @@ public class {{ entity.name }}Dto : IBaseEntity
     /// <summary>
     /// {{ relation.child_entity_name }}列表
     /// </summary>
-    public List<{{ relation.child_entity_name }}Dto>? {{ relation.child_entity_name }}s { get; set; }
+    public List<global::{{ entity.project_name }}.Application.Dtos.{{ relation.child_module_name }}.{{ relation.child_entity_name }}Dto>? {{ relation.child_entity_name }}s { get; set; }
 
 {{~ end ~}}
 {{~ for relation in entity.owned_one_relations ~}}
     /// <summary>
     /// {{ relation.target_entity_description }}
     /// </summary>
-    public {{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.{{ relation.target_entity_name }}Dto? {{ relation.relation_name }} { get; set; }
+    public global::{{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.{{ relation.target_entity_name }}Dto? {{ relation.relation_name }} { get; set; }
 
 {{~ end ~}}
 }
@@ -79,7 +79,7 @@ public class Create{{ entity.name }}Dto : IBaseEntity
     /// <summary>
     /// {{ relation.child_entity_name }}列表
     /// </summary>
-    public List<Create{{ relation.child_entity_name }}Dto>? {{ relation.child_entity_name }}s { get; set; }
+    public List<global::{{ entity.project_name }}.Application.Dtos.{{ relation.child_module_name }}.Create{{ relation.child_entity_name }}Dto>? {{ relation.child_entity_name }}s { get; set; }
 
 {{~ end ~}}
 {{~ for relation in entity.owned_one_relations ~}}
@@ -88,7 +88,7 @@ public class Create{{ entity.name }}Dto : IBaseEntity
     /// </summary>
 {{~ if relation.is_required ~}}    [Required(ErrorMessage = "请输入{{ relation.target_entity_description }}")]
 {{~ end ~}}
-    public {{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.Create{{ relation.target_entity_name }}Dto? {{ relation.relation_name }} { get; set; }
+    public global::{{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.Create{{ relation.target_entity_name }}Dto? {{ relation.relation_name }} { get; set; }
 
 {{~ end ~}}
 }
@@ -136,7 +136,7 @@ public class Update{{ entity.name }}Dto : IBaseEntity, IHasRowStatus
     /// <summary>
     /// {{ relation.child_entity_name }}列表
     /// </summary>
-    public List<Update{{ relation.child_entity_name }}Dto>? {{ relation.child_entity_name }}s { get; set; }
+    public List<global::{{ entity.project_name }}.Application.Dtos.{{ relation.child_module_name }}.Update{{ relation.child_entity_name }}Dto>? {{ relation.child_entity_name }}s { get; set; }
 
 {{~ end ~}}
 {{~ for relation in entity.owned_one_relations ~}}
@@ -145,7 +145,7 @@ public class Update{{ entity.name }}Dto : IBaseEntity, IHasRowStatus
     /// </summary>
 {{~ if relation.is_required ~}}    [Required(ErrorMessage = "请输入{{ relation.target_entity_description }}")]
 {{~ end ~}}
-    public {{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.Update{{ relation.target_entity_name }}Dto? {{ relation.relation_name }} { get; set; }
+    public global::{{ entity.project_name }}.Application.Dtos.{{ relation.target_module_name }}.Update{{ relation.target_entity_name }}Dto? {{ relation.relation_name }} { get; set; }
 
 {{~ end ~}}
 }

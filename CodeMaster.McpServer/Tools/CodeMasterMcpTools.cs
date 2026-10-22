@@ -43,6 +43,25 @@ public sealed class CodeMasterMcpTools
         }));
     }
 
+    [McpServerTool(Name = "get_print_templates")]
+    [Description("List CodeMaster print templates (name/paper/layout) for a project through the authenticated WebApi.")]
+    public static Task<object?> GetPrintTemplatesAsync(
+        Services.CodeMasterApiClient apiClient,
+        [Description("Optional project id. Omit to list all accessible templates.")] string? projectId = null,
+        string? workspacePath = null)
+    {
+        return SafeInvokeAsync(async () =>
+            (object?)await apiClient.GetJsonAsync(BuildPrintTemplateListPath(projectId), workspacePath));
+    }
+
+    /// <summary>
+    /// WebApi 路由统一带 /api 前缀；漏掉前缀会让工具在真实服务上返回 404。
+    /// </summary>
+    internal static string BuildPrintTemplateListPath(string? projectId)
+        => string.IsNullOrWhiteSpace(projectId)
+            ? "/api/codegen/printtemplate/getlist"
+            : $"/api/codegen/printtemplate/getlist?projectId={Uri.EscapeDataString(projectId)}";
+
     [McpServerTool(Name = "resolve_project_context")]
     [Description("Read .codemaster/project-context.json from the current or provided generated project directory.")]
     public static Task<object?> ResolveProjectContextAsync(AuthTool tool, string? workspacePath = null)
@@ -168,7 +187,10 @@ public sealed class CodeMasterMcpTools
         int? moduleOrderNum = null,
         string? entityId = null,
         string? entityName = null,
+        [Description("Short display title used by menus and page headings. Keep it within 50 characters and prefer Chinese for a Chinese-language project.")]
         string? description = null,
+        [Description("Long-form business semantics for Agent analysis and documentation. Not used as a UI title.")]
+        string? businessDescription = null,
         string? tableName = null,
         bool? hasPrimaryKey = null,
         bool? isTree = null,
@@ -199,6 +221,7 @@ public sealed class CodeMasterMcpTools
             EntityId = ParseId(entityId),
             EntityName = entityName,
             Description = description,
+            BusinessDescription = businessDescription,
             TableName = tableName,
             HasPrimaryKey = hasPrimaryKey,
             IsTree = isTree,
@@ -220,10 +243,65 @@ public sealed class CodeMasterMcpTools
         }));
     }
 
+    [McpServerTool(Name = "query_dictionaries")]
+    [Description("Read dictionary types and entries from a generated project's database through the authenticated CodeMaster WebApi.")]
+    public static Task<object?> QueryDictionariesAsync(
+        DictionaryTool tool,
+        string? projectId = null,
+        string? tenantId = null,
+        string? dictType = null,
+        string? keyword = null,
+        bool includeItems = true,
+        bool includeDisabled = true,
+        string? workspacePath = null)
+    {
+        return SafeInvokeAsync(() => tool.QueryAsync(new QueryDictionariesInput
+        {
+            ProjectId = ParseId(projectId),
+            TenantId = ParseId(tenantId),
+            DictType = dictType,
+            Keyword = keyword,
+            IncludeItems = includeItems,
+            IncludeDisabled = includeDisabled,
+            WorkspacePath = workspacePath
+        }));
+    }
+
+    [McpServerTool(Name = "save_dictionary")]
+    [Description("Idempotently create, restore, or update one dictionary and its entries in a generated project's database. Omitted entries are preserved.")]
+    public static Task<object?> SaveDictionaryAsync(
+        DictionaryTool tool,
+        string dictType,
+        string dictName,
+        string? projectId = null,
+        string? tenantId = null,
+        string? langKey = null,
+        int? status = null,
+        int? sort = null,
+        string? remark = null,
+        List<DictionaryItemInput>? items = null,
+        string? workspacePath = null)
+    {
+        return SafeInvokeAsync(() => tool.SaveAsync(new SaveDictionaryInput
+        {
+            ProjectId = ParseId(projectId),
+            TenantId = ParseId(tenantId),
+            DictType = dictType,
+            DictName = dictName,
+            LangKey = langKey,
+            Status = status,
+            Sort = sort,
+            Remark = remark,
+            Items = items ?? [],
+            WorkspacePath = workspacePath
+        }));
+    }
+
     [McpServerTool(Name = "run_project_operation")]
-    [Description("Run initialization, migration, build, start, stop, status, project menu sync, or project language sync on the local generated project.")]
+    [Description("Run initialization, migration, printing runtime distribution, build, start, stop, status, project menu sync, project language sync, or database configuration sync on the local generated project.")]
     public static Task<object?> RunProjectOperationAsync(
         ProjectOperationTool tool,
+        [Description("Operation name. Use printing to deliver the optional report runtime before running the generated project's Migrator.")]
         string operation,
         string? projectId = null,
         string? targetPath = null,
@@ -251,6 +329,7 @@ public sealed class CodeMasterMcpTools
         string? mode = null,
         bool validateBuild = true,
         bool validateFrontendBuild = false,
+        bool validateTests = false,
         int buildTimeoutSeconds = 300,
         string? workspacePath = null)
     {
@@ -263,6 +342,7 @@ public sealed class CodeMasterMcpTools
             Mode = mode,
             ValidateBuild = validateBuild,
             ValidateFrontendBuild = validateFrontendBuild,
+            ValidateTests = validateTests,
             BuildTimeoutSeconds = buildTimeoutSeconds,
             WorkspacePath = workspacePath
         }));

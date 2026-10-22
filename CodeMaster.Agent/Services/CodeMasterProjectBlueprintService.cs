@@ -1,4 +1,7 @@
 using CodeMaster.Agent.Contracts;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.Application.Services.CodeGen;
 
@@ -6,7 +9,10 @@ namespace CodeMaster.Agent.Services;
 
 public interface ICodeMasterProjectBlueprintService
 {
+    Task<AiProjectOverviewDto> GetProjectOverviewAsync(long projectId);
     Task<AiProjectBlueprintDto> GetProjectAsync(long projectId);
+    Task<AiProjectBlueprintDto> GetProjectAsync(long projectId, AiCodegenCatalogDto? catalog);
+    Task<AiCodegenCatalogDto> GetCatalogAsync();
     Task<AiEntityBlueprintDto> GetEntityAsync(long projectId, long? entityId, string? entityName);
     Task<AiUiPageBlueprintDto> GetUiPageAsync(long projectId, long? entityId, string? entityName, string pageType);
 }
@@ -28,6 +34,11 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
     }
 
     public async Task<AiProjectBlueprintDto> GetProjectAsync(long projectId)
+        => await GetProjectAsync(projectId, null);
+
+    public async Task<AiProjectBlueprintDto> GetProjectAsync(
+        long projectId,
+        AiCodegenCatalogDto? catalog)
     {
         var project = await _projectService.GetByIdAsync(projectId)
             ?? throw new KeyNotFoundException("The project was not found or is not accessible.");
@@ -58,9 +69,7 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
             });
         }
 
-        var controls = await _entityService.GetFieldControlTemplatesAsync();
-        var pageTemplates = await _entityService.GetPageTemplatesAsync();
-        var childTemplates = await _entityService.GetChildTemplatesAsync();
+        catalog ??= await GetCatalogAsync();
 
         return new AiProjectBlueprintDto
         {
@@ -78,6 +87,102 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
                 InitializedAt = project.InitializedAt
             },
             Modules = moduleBlueprints,
+            Controls = catalog.Controls,
+            PageTemplates = catalog.PageTemplates,
+            ChildTemplates = catalog.ChildTemplates
+        };
+    }
+
+    public async Task<AiProjectOverviewDto> GetProjectOverviewAsync(long projectId)
+    {
+        var project = await _projectService.GetByIdAsync(projectId)
+            ?? throw new KeyNotFoundException("The project was not found or is not accessible.");
+
+        var moduleOverviews = new List<AiModuleOverviewDto>();
+        var versionModules = new List<AiModuleBlueprintDto>();
+        var modules = await _moduleService.GetByProjectIdAsync(projectId);
+        foreach (var module in modules.OrderBy(x => x.OrderNum).ThenBy(x => x.ModuleName))
+        {
+            var entityOverviews = new List<AiEntityOverviewDto>();
+            var versionEntities = new List<AiEntityBlueprintDto>();
+            var entities = await _entityService.GetByModuleIdAsync(module.Id);
+            foreach (var entity in entities.OrderBy(x => x.OrderNum).ThenBy(x => x.Name))
+            {
+                var detail = await _entityService.GetByIdAsync(entity.Id)
+                    ?? throw new KeyNotFoundException($"Entity '{entity.Id}' disappeared while building the project overview.");
+                entityOverviews.Add(MapEntityOverview(detail));
+                versionEntities.Add(MapEntity(detail));
+            }
+
+            moduleOverviews.Add(new AiModuleOverviewDto
+            {
+                Id = module.Id,
+                ModuleName = module.ModuleName,
+                ModuleDescription = module.ModuleDescription,
+                OrderNum = module.OrderNum,
+                Entities = entityOverviews
+            });
+            versionModules.Add(new AiModuleBlueprintDto
+            {
+                Id = module.Id,
+                ModuleName = module.ModuleName,
+                ModuleDescription = module.ModuleDescription,
+                RoutePath = module.RoutePath,
+                Icon = module.Icon,
+                OrderNum = module.OrderNum,
+                IsSynced = module.IsSynced,
+                Entities = versionEntities
+            });
+        }
+
+        var projectSummary = MapProjectSummary(project);
+        var overview = new AiProjectOverviewDto
+        {
+            Project = projectSummary,
+            Totals = new AiProjectOverviewTotalsDto
+            {
+                ModuleCount = moduleOverviews.Count,
+                EntityCount = moduleOverviews.Sum(module => module.Entities.Count),
+                FieldCount = moduleOverviews.Sum(module => module.Entities.Sum(entity => entity.Fields.Count)),
+                RelationCount = moduleOverviews.Sum(module => module.Entities.Sum(entity => entity.Relations.Count))
+            },
+            Modules = moduleOverviews
+        };
+        overview.StructureVersion = ComputeStructureVersion(projectSummary, versionModules);
+        return overview;
+    }
+
+    internal static string ComputeStructureVersion(AiProjectOverviewDto overview)
+    {
+        var originalVersion = overview.StructureVersion;
+        overview.StructureVersion = string.Empty;
+        try
+        {
+            var json = JsonSerializer.Serialize(overview);
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+        }
+        finally
+        {
+            overview.StructureVersion = originalVersion;
+        }
+    }
+
+    internal static string ComputeStructureVersion(
+        AiProjectSummaryDto project,
+        IReadOnlyCollection<AiModuleBlueprintDto> modules)
+    {
+        var json = JsonSerializer.Serialize(new { project, modules });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+    }
+
+    public async Task<AiCodegenCatalogDto> GetCatalogAsync()
+    {
+        var controls = await _entityService.GetFieldControlTemplatesAsync();
+        var pageTemplates = await _entityService.GetPageTemplatesAsync();
+        var childTemplates = await _entityService.GetChildTemplatesAsync();
+
+        return new AiCodegenCatalogDto
+        {
             Controls = controls
                 .GroupBy(x => x.ControlType, StringComparer.OrdinalIgnoreCase)
                 .OrderBy(x => x.Key)
@@ -181,6 +286,7 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
             EntityId = entity.Id,
             EntityName = entity.Name,
             EntityDescription = entity.Description,
+            EntityBusinessDescription = entity.BusinessDescription,
             PageType = normalizedPageType,
             StableNodes = stableNodes,
             Fields = entity.Fields
@@ -190,6 +296,7 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
                     FieldId = field.Id,
                     FieldName = field.Name,
                     Description = field.Description,
+                    BusinessDescription = field.BusinessDescription,
                     ControlType = field.FormControlType,
                     GenIds = BuildFieldGenIds(field, normalizedPageType),
                     Visible = IsVisible(field, normalizedPageType),
@@ -237,6 +344,7 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
             ModuleId = entity.ModuleId,
             Name = entity.Name,
             Description = entity.Description,
+            BusinessDescription = entity.BusinessDescription,
             TableName = entity.TableName,
             HasPrimaryKey = entity.HasPrimaryKey,
             IsTree = entity.IsTree,
@@ -282,13 +390,104 @@ internal sealed class CodeMasterProjectBlueprintService : ICodeMasterProjectBlue
         };
     }
 
+    private static AiProjectSummaryDto MapProjectSummary(ProjectDto project)
+    {
+        return new AiProjectSummaryDto
+        {
+            Id = project.Id,
+            ProjectName = project.ProjectName,
+            DisplayName = project.DisplayName,
+            Description = project.Description,
+            DatabaseType = project.DatabaseType.ToString(),
+            ProjectType = project.ProjectType.ToString(),
+            Status = project.Status.ToString(),
+            FrontendPort = project.FrontendPort,
+            BackendPort = project.BackendPort,
+            InitializedAt = project.InitializedAt
+        };
+    }
+
+    private static AiEntityOverviewDto MapEntityOverview(ModuleEntityDto entity)
+    {
+        return new AiEntityOverviewDto
+        {
+            Id = entity.Id,
+            ModuleId = entity.ModuleId,
+            Name = entity.Name,
+            Description = entity.Description,
+            BusinessDescription = entity.BusinessDescription,
+            HasPrimaryKey = entity.HasPrimaryKey,
+            IsTree = entity.IsTree,
+            IsReadOnly = entity.IsReadOnly,
+            HasTenant = entity.HasTenant,
+            HasDataPermission = entity.HasDataPermission,
+            HasAudit = entity.HasAudit,
+            HasSoftDelete = entity.HasSoftDelete,
+            GenerateFrontend = entity.GenerateFrontend,
+            IsChildTable = entity.IsChildTable,
+            IsGenerated = entity.IsGenerated,
+            OrderNum = entity.OrderNum,
+            Fields = entity.Fields.OrderBy(field => field.OrderNum).Select(field => new AiFieldOverviewDto
+            {
+                Id = field.Id,
+                Name = field.Name,
+                Description = field.Description,
+                BusinessDescription = field.BusinessDescription,
+                DataType = field.DataType,
+                IsSystemField = field.IsSystemField,
+                IsRequired = field.IsRequired,
+                FormControlType = field.FormControlType,
+                FieldCategory = field.FieldCategory,
+                SelectDataSource = field.SelectDataSource,
+                RelatedEntityName = field.RelatedEntityName,
+                IsMultiple = field.IsMultiple,
+                PageUsage = BuildPageUsage(field),
+                OrderNum = field.OrderNum
+            }).ToList(),
+            Relations = entity.EntityRelations.OrderBy(relation => relation.OrderNum)
+                .Select(relation => new AiRelationOverviewDto
+                {
+                    Id = relation.Id,
+                    TargetEntityId = relation.TargetEntityId,
+                    TargetEntityName = relation.TargetEntityName,
+                    RelationName = relation.RelationName,
+                    Cardinality = relation.Cardinality.ToString(),
+                    Ownership = relation.Ownership.ToString()
+                })
+                .Concat(entity.OneToManyRelations.OrderBy(relation => relation.OrderNum)
+                    .Select(relation => new AiRelationOverviewDto
+                    {
+                        Id = relation.Id,
+                        TargetEntityId = relation.ChildEntityId,
+                        TargetEntityName = relation.ChildEntityName,
+                        RelationName = relation.ChildEntityName,
+                        Cardinality = "OneToMany",
+                        Ownership = "Legacy"
+                    }))
+                .ToList()
+        };
+    }
+
+    private static string BuildPageUsage(EntityFieldDto field)
+    {
+        var pages = new List<string>(5);
+        if (field.ShowInList) pages.Add("list");
+        if (field.ShowInDetail) pages.Add("detail");
+        if (field.ShowInAddForm) pages.Add("add");
+        if (field.ShowInEditForm) pages.Add("edit");
+        if (field.ShowInSearch) pages.Add("search");
+        return string.Join(',', pages);
+    }
+
     private static AiFieldBlueprintDto MapField(EntityFieldDto field)
     {
         return new AiFieldBlueprintDto
         {
             Id = field.Id,
             Name = field.Name,
+            ColumnName = field.ColumnName,
             Description = field.Description,
+            BusinessDescription = field.BusinessDescription,
             IsSystemField = field.IsSystemField,
             DataType = field.DataType,
             IsNullable = field.IsNullable,

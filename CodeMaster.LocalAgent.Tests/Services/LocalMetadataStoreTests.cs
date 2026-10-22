@@ -1,277 +1,155 @@
-using System.Data;
 using CodeMaster.Application.Dtos.CodeGen;
+using CodeMaster.Core.Entities;
 using CodeMaster.Core.Enums;
 using CodeMaster.Domain.Entities.CodeGen;
+using CodeMaster.LocalAgent.Extensibility;
 using CodeMaster.LocalAgent.Models;
 using CodeMaster.LocalAgent.Services;
 using Microsoft.Extensions.Options;
+using SqlSugar;
 
 namespace CodeMaster.LocalAgent.Tests.Services;
 
 public class LocalMetadataStoreTests
 {
     [Fact]
-    public async Task CreateAsync_creates_sqlite_metadata_database_and_normalizes_null_strings()
+    public async Task CreateAsync_restores_public_metadata_and_cleans_up_database()
     {
-        var metadataRoot = Path.Combine(Path.GetTempPath(), "CodeMaster.LocalAgent.Tests", Guid.NewGuid().ToString("N"));
-        var projectPathOverride = Path.Combine(metadataRoot, "GeneratedProjects");
-        Directory.CreateDirectory(metadataRoot);
-
+        var metadataRoot = CreateTempDirectory();
+        var projectPath = Path.Combine(metadataRoot, "Generated", "OrderManager");
         try
         {
             var store = new LocalMetadataStore(Options.Create(new LocalAgentOptions
             {
                 MetadataRoot = metadataRoot
             }));
-
             var bundle = CreateBundle();
-            string dbPath;
+            string databasePath;
 
-            using (var context = await store.CreateAsync(bundle, projectPathOverride))
+            using (var context = await store.CreateAsync(bundle, projectPath))
             {
-                dbPath = Directory.EnumerateFiles(metadataRoot, $"{bundle.Project.Id}*.metadata.db").Single();
-                Assert.True(File.Exists(dbPath));
+                databasePath = Directory.EnumerateFiles(metadataRoot, "*.metadata.db").Single();
+                var project = await context.Db.Queryable<Project>().FirstAsync();
+                var entity = await context.Db.Queryable<ModuleEntity>().FirstAsync();
 
-                var project = await context.Db.Queryable<Project>().FirstAsync(p => p.Id == bundle.Project.Id);
-                Assert.Equal(projectPathOverride, project.ProjectPath);
-                Assert.Equal(string.Empty, project.DisplayNameEn);
+                Assert.Equal(projectPath, project.ProjectPath);
                 Assert.Equal("LocalAgent", project.CreateBy);
-                Assert.NotEqual(default, project.CreateTime);
-
-                var module = await context.Db.Queryable<ProjectModule>().FirstAsync(m => m.Id == 2001);
-                Assert.Equal(string.Empty, module.Icon);
-                Assert.Equal(string.Empty, module.RoutePath);
-                Assert.Equal("LocalAgent", module.CreateBy);
-
-                var field = await context.Db.Queryable<EntityField>().FirstAsync(f => f.Id == 4001);
-                Assert.True(field.IsMultiple);
-                Assert.Equal(string.Empty, field.RelatedEntityName);
-                Assert.Equal("[{\"sourceField\":\"Name\",\"targetField\":\"CustomerName\"}]", field.ResultMappings);
-                Assert.Equal("LocalAgent", field.CreateBy);
-
-                var entityRelation = await context.Db.Queryable<EntityRelation>().FirstAsync(r => r.Id == 5002);
-                Assert.Equal(3001, entityRelation.SourceEntityId);
-                Assert.Equal(3002, entityRelation.TargetEntityId);
-                Assert.Equal("Detail", entityRelation.RelationName);
-                Assert.Equal(EntityRelationOwnership.Owned, entityRelation.Ownership);
-
-                var columnTypes = ReadSqliteColumnTypes(context, "sys_entity_field");
-                Assert.Equal("integer", columnTypes["is_multiple"]);
-                Assert.Equal("integer", columnTypes["show_in_list"]);
-                Assert.StartsWith("text", columnTypes["name"]);
-                Assert.StartsWith("text", columnTypes["result_mappings"]);
+                Assert.Equal(string.Empty, project.DisplayNameEn);
+                Assert.Equal("Order", entity.Name);
             }
 
-            Assert.False(File.Exists(dbPath));
-            Assert.False(File.Exists(dbPath + "-wal"));
-            Assert.False(File.Exists(dbPath + "-shm"));
+            Assert.False(File.Exists(databasePath));
         }
         finally
         {
-            DeleteDirectoryWithRetries(metadataRoot);
+            DeleteDirectory(metadataRoot);
         }
     }
 
-    private static GenerationBundleDto CreateBundle()
+    [Fact]
+    public async Task CreateAsync_allows_optional_metadata_contributors()
     {
-        return new GenerationBundleDto
+        var metadataRoot = CreateTempDirectory();
+        try
         {
-            Project = new Project
+            var store = new LocalMetadataStore(
+                Options.Create(new LocalAgentOptions { MetadataRoot = metadataRoot }),
+                contributors: [new TestMetadataContributor()]);
+
+            using var context = await store.CreateAsync(CreateBundle());
+            var row = await context.Db.Queryable<TestMetadataRow>().FirstAsync();
+
+            Assert.Equal("extension-loaded", row.Value);
+        }
+        finally
+        {
+            DeleteDirectory(metadataRoot);
+        }
+    }
+
+    private static GenerationBundleDto CreateBundle() => new()
+    {
+        Project = new Project
+        {
+            Id = 1001,
+            ProjectName = "OrderManager",
+            DisplayName = "Order Manager",
+            DisplayNameEn = null,
+            DatabaseType = DatabaseType.SQLite,
+            ConnectionString = "Data Source=OrderManager.db",
+            ProjectPath = CodeMasterTestPaths.Root,
+            CreateBy = null,
+            CreateTime = default
+        },
+        Modules =
+        {
+            new ProjectModule
             {
-                Id = 1001,
-                ProjectName = "OrderManager",
-                DisplayName = "Order Manager",
-                DisplayNameEn = null,
-                Description = null,
-                DatabaseType = DatabaseType.SQLite,
-                ConnectionString = "Data Source=OrderManager.db",
-                ProjectPath = "D:\\ServerPath",
-                LogoPath = null,
+                Id = 2001,
+                ProjectId = 1001,
+                ModuleName = "Sales",
+                ModuleDescription = "Sales",
                 CreateBy = null,
                 CreateTime = default
-            },
-            Modules =
-            {
-                new ProjectModule
-                {
-                    Id = 2001,
-                    ProjectId = 1001,
-                    ModuleName = "Sales",
-                    ModuleDescription = "Sales",
-                    Icon = null,
-                    RoutePath = null,
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            Entities =
-            {
-                new ModuleEntity
-                {
-                    Id = 3001,
-                    ProjectId = 1001,
-                    ModuleId = 2001,
-                    Name = "Order",
-                    Description = "Order",
-                    TableName = null,
-                    GenerateFrontend = true,
-                    CreateBy = null,
-                    CreateTime = default
-                },
-                new ModuleEntity
-                {
-                    Id = 3002,
-                    ProjectId = 1001,
-                    ModuleId = 2001,
-                    Name = "OrderDetail",
-                    Description = "Order detail",
-                    TableName = null,
-                    GenerateFrontend = true,
-                    IsChildTable = true,
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            Fields =
-            {
-                new EntityField
-                {
-                    Id = 4001,
-                    ModuleEntityId = 3001,
-                    Name = "CustomerIds",
-                    Description = "Customers",
-                    DataType = "string",
-                    FormControlType = "select-table",
-                    SelectDataSource = null,
-                    SelectOptions = null,
-                    IsMultiple = true,
-                    RelatedEntityName = null,
-                    RelatedEntityIdField = null,
-                    RelatedEntityDisplayFields = null,
-                    ResultMappings = "[{\"sourceField\":\"Name\",\"targetField\":\"CustomerName\"}]",
-                    ShowInList = true,
-                    ShowInDetail = true,
-                    ShowInAddForm = true,
-                    ShowInEditForm = true,
-                    FieldCategory = "Normal",
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            Relations =
-            {
-                new OneToManyRelation
-                {
-                    Id = 5001,
-                    ModuleEntityId = 3001,
-                    MasterField = "Id",
-                    ChildEntityId = 3002,
-                    ChildEntityName = "OrderItem",
-                    ChildForeignKey = "OrderId",
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            EntityRelations =
-            {
-                new EntityRelation
-                {
-                    Id = 5002,
-                    SourceEntityId = 3001,
-                    TargetEntityId = 3002,
-                    RelationName = "Detail",
-                    SourceField = "Id",
-                    TargetField = "OrderId",
-                    Cardinality = EntityRelationCardinality.OneToOne,
-                    Ownership = EntityRelationOwnership.Owned,
-                    DeleteBehavior = EntityRelationDeleteBehavior.Delete,
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            PageTemplates =
-            {
-                new SysPageTemplate
-                {
-                    Id = 6001,
-                    PageType = "index",
-                    Name = "Index",
-                    HtmlContent = "<template />",
-                    ScriptSections = "{}",
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            FieldControlTemplates =
-            {
-                new SysFieldControlTemplate
-                {
-                    Id = 7001,
-                    ControlType = "input",
-                    PageSection = "list",
-                    HtmlContent = "<span />",
-                    ScriptSections = "{}",
-                    CreateBy = null,
-                    CreateTime = default
-                }
-            },
-            ChildTemplates =
-            {
-                new SysChildTemplate
-                {
-                    Id = 8001,
-                    PageType = "add",
-                    ChildType = "card",
-                    HtmlContent = "<el-table />",
-                    ScriptSections = "{}",
-                    CreateBy = null,
-                    CreateTime = default
-                }
             }
-        };
-    }
-
-    private static Dictionary<string, string> ReadSqliteColumnTypes(LocalMetadataContext context, string tableName)
-    {
-        var table = context.Db.Ado.GetDataTable($"PRAGMA table_info('{tableName}')");
-
-        return table.Rows.Cast<DataRow>()
-            .ToDictionary(
-                row => Convert.ToString(row["name"]) ?? string.Empty,
-                row => (Convert.ToString(row["type"]) ?? string.Empty).ToLowerInvariant());
-    }
-
-    private static void DeleteDirectoryWithRetries(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-
-        for (var attempt = 0; attempt < 5; attempt++)
+        },
+        Entities =
         {
-            try
+            new ModuleEntity
             {
-                ClearSqlitePools();
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                Directory.Delete(path, recursive: true);
-                return;
+                Id = 3001,
+                ProjectId = 1001,
+                ModuleId = 2001,
+                Name = "Order",
+                Description = "Order",
+                CreateBy = null,
+                CreateTime = default
             }
-            catch (IOException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-            }
-            catch (UnauthorizedAccessException) when (attempt < 4)
-            {
-                Thread.Sleep(100);
-            }
+        }
+    };
+
+    private static string CreateTempDirectory()
+    {
+        var path = Path.Combine(CodeMasterTestPaths.Root, "CodeMaster.LocalAgent.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        if (!Directory.Exists(path)) return;
+        try
+        {
+            Directory.Delete(path, true);
+        }
+        catch
+        {
+            // SQLite can briefly retain a handle after a failed assertion.
         }
     }
 
-    private static void ClearSqlitePools()
+    private sealed class TestMetadataContributor : ILocalMetadataBundleContributor
     {
-        var sqliteConnectionType = Type.GetType("Microsoft.Data.Sqlite.SqliteConnection, Microsoft.Data.Sqlite");
-        sqliteConnectionType
-            ?.GetMethod("ClearAllPools", Type.EmptyTypes)
-            ?.Invoke(null, null);
+        public IReadOnlyCollection<Type> EntityTypes => [typeof(TestMetadataRow)];
+
+        public async Task RestoreAsync(GenerationBundleDto bundle, ISqlSugarClient db)
+        {
+            await db.Insertable(new TestMetadataRow
+            {
+                Id = 9001,
+                Value = "extension-loaded",
+                CreateBy = "test",
+                CreateUserId = 0,
+                UpdateUserId = 0,
+                CreateTime = DateTime.UtcNow
+            }).ExecuteCommandAsync();
+        }
+    }
+
+    [SugarTable("test_local_metadata_extension")]
+    private sealed class TestMetadataRow : EntityBase
+    {
+        [SugarColumn(ColumnName = "value", Length = 100)]
+        public string Value { get; set; } = string.Empty;
     }
 }

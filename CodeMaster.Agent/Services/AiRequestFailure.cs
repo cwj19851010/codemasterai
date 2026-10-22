@@ -38,6 +38,61 @@ public static partial class AiRequestFailure
         hasAttempt = true
     });
 
+    /// <summary>
+    /// Flattens the whole exception chain into one line, outermost first.
+    /// <para>
+    /// The outermost message alone is not diagnosable: the OpenAI SDK reports
+    /// "Retry failed after 3 tries." and the transport layer reports
+    /// "The SSL connection could not be established, see inner exception.", while the actual
+    /// cause (an untrusted certificate, a refused handshake, a proxy that never answered)
+    /// only exists on an inner exception. Reporting the chain keeps that cause visible.
+    /// </para>
+    /// <para>
+    /// Some failures carry no message at all — a key-ring <c>CryptographicException</c>, or a
+    /// transport error raised before any response exists, both surface with an empty
+    /// <see cref="Exception.Message"/>. Dropping those levels used to leave the whole chain
+    /// empty, so the caller only saw "未返回具体诊断" and lost the one fact that identifies the
+    /// failure. Such a level is now described by its type, HResult and first stack frame.
+    /// </para>
+    /// </summary>
+    public static string DescribeExceptionChain(Exception? exception)
+    {
+        if (exception == null)
+            return string.Empty;
+
+        const int maxLevels = 6;
+        var parts = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var current = exception; current != null && parts.Count < maxLevels; current = current.InnerException)
+        {
+            var typeName = current.GetType().Name;
+            var message = current.Message?.Trim();
+            var entry = string.IsNullOrWhiteSpace(message)
+                ? $"{typeName}: (无消息, HResult=0x{current.HResult:X8}){FirstFrame(current)}"
+                : $"{typeName}: {message}";
+
+            if (!seen.Add(entry))
+                break;
+
+            parts.Add(entry);
+        }
+
+        return parts.Count == 0 ? string.Empty : string.Join("  <-  ", parts);
+    }
+
+    /// <summary>First stack line, used only when an exception has no message to report.</summary>
+    private static string FirstFrame(Exception exception)
+    {
+        var stack = exception.StackTrace;
+        if (string.IsNullOrWhiteSpace(stack))
+            return string.Empty;
+
+        var line = stack.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        return line == null ? string.Empty : " @ " + line;
+    }
+
     [GeneratedRegex(@"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+")]
     private static partial Regex BearerToken();
 

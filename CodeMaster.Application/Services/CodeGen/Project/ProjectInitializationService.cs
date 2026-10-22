@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Net;
 using Microsoft.Extensions.Configuration;
 using SqlSugar;
+using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.Domain.Entities.System;
 using CodeMaster.Infrastructure.Persistence.SqlSugar;
 using Yitter.IdGenerator;
@@ -18,12 +19,33 @@ namespace CodeMaster.Application.Services.CodeGen;
 /// </summary>
 public partial class ProjectInitializationService
 {
+    private static readonly HashSet<string> TemplateTextExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".bat", ".cmd", ".config", ".cs", ".cshtml", ".csproj", ".css",
+        ".html", ".htm", ".js", ".json", ".jsx", ".less", ".md", ".mjs", ".props",
+        ".ps1", ".razor", ".sass", ".scss", ".sh", ".sln", ".sql", ".targets", ".toml",
+        ".ts", ".tsx", ".txt", ".vue", ".xml", ".yaml", ".yml"
+    };
+
+    private static readonly HashSet<string> TemplateTextFileNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".dockerignore", ".editorconfig", ".gitattributes", ".gitignore", ".npmrc"
+    };
+
     private readonly IConfiguration _configuration;
+    private readonly IReadOnlyCollection<IGeneratedProjectInitializer> _generatedProjectInitializers;
     private Action<string, string, string, int>? _progressCallback;
 
-    public ProjectInitializationService(IConfiguration configuration)
+    public ProjectInitializationService(
+        IConfiguration configuration,
+        IEnumerable<IGeneratedProjectInitializer>? generatedProjectInitializers = null)
     {
         _configuration = configuration;
+        // Optional scaffolding (AI docs, a companion app template, …) is discovered from DI.
+        // Do not instantiate known implementations here: that would make this file depend on
+        // features the core generator is not supposed to know about.
+        _generatedProjectInitializers = generatedProjectInitializers?.ToList()
+            ?? new List<IGeneratedProjectInitializer>();
     }
 
     /// <summary>
@@ -93,7 +115,15 @@ public partial class ProjectInitializationService
             // 4. 执行核心初始化逻辑
             SendProgress(projectId, "initialize", "初始化项目配置...", 30);
             await InitializeProjectCoreAsync(projectPath, projectName, databaseType, connectionString, frontendPort, backendPort, projectId, displayName);
-            await WriteProjectContextAsync(projectPath, projectName, projectId, displayName, databaseType, frontendPort, backendPort);
+            await WriteProjectContextAsync(
+                projectPath,
+                projectName,
+                projectId,
+                displayName,
+                databaseType,
+                frontendPort,
+                backendPort,
+                _configuration["Mcp:ServerBaseUrl"]);
 
             SendProgress(projectId, "completed", "初始化完成", 100);
             return true;
@@ -103,6 +133,109 @@ public partial class ProjectInitializationService
             SendProgress(projectId, "error", $"初始化失败: {ex.Message}", 0);
             throw new Exception($"Failed to initialize project: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Makes sure the generated project framework exists before code is written into it.
+    ///
+    /// Code generation used to fail with "missing Core, SourceGenerator, or Migrator framework
+    /// files" whenever a project was created without running the initialization wizard (for
+    /// example a project produced straight from the Agent flow). The extraction is merged
+    /// (missing files are filled, existing files are preserved), so running it on demand is safe
+    /// and idempotent: only the codegen-relevant steps run — extraction, rename, namespace
+    /// replacement, solution, database and port configuration, project context. Migration,
+    /// restore, npm install and service startup stay explicit user-triggered operations.
+    /// </summary>
+    /// <returns>true when the framework had to be created, false when it was already present.</returns>
+    public async Task<bool> EnsureProjectFrameworkAsync(Project project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        if (IsGeneratedProjectFrameworkPresent(project.ProjectPath, project.ProjectName))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(project.ProjectPath))
+        {
+            throw new InvalidOperationException(
+                $"Project '{project.ProjectName}' has no output path. Set the project path before generating code.");
+        }
+
+        var templateZipPath = ResolveTemplateZipPath();
+        if (string.IsNullOrWhiteSpace(templateZipPath) || !File.Exists(templateZipPath))
+        {
+            throw new InvalidOperationException(
+                $"Cannot prepare the generated project '{project.ProjectName}': the framework files are missing and no " +
+                "CodeMaster template package was found. Initialize the project from the project list before generating code.");
+        }
+
+        var projectPath = ResolveFullProjectPath(project);
+        Directory.CreateDirectory(projectPath);
+        var projectId = project.Id.ToString();
+
+        SendProgress(projectId, "extract", "补齐生成工程框架文件...", 20);
+        await ExtractTemplateWithReplacementAsync(templateZipPath, projectPath, project.ProjectName, overwriteExisting: false);
+        await RenameFilesAndDirectoriesAsync(projectPath, project.ProjectName);
+        await ReplaceProjectNameAsync(projectPath, project.ProjectName);
+        await RemoveClientShellBridgeFromGeneratedMainAsync(projectPath, project.ProjectName);
+        await GenerateSolutionFileAsync(projectPath, project.ProjectName);
+
+        if (!string.IsNullOrWhiteSpace(project.ConnectionString))
+        {
+            await UpdateDatabaseConfigAsync(
+                projectPath,
+                project.ProjectName,
+                project.DatabaseType.ToString(),
+                project.ConnectionString);
+        }
+
+        var frontendPort = project.FrontendPort ?? 0;
+        var backendPort = project.BackendPort ?? 0;
+        if (frontendPort > 0 || backendPort > 0)
+            await UpdatePortConfigAsync(projectPath, project.ProjectName, frontendPort, backendPort);
+
+        await WriteProjectContextAsync(
+            projectPath,
+            project.ProjectName,
+            projectId,
+            project.DisplayName,
+            project.DatabaseType.ToString(),
+            frontendPort,
+            backendPort,
+            _configuration["Mcp:ServerBaseUrl"]);
+
+        SendProgress(projectId, "completed", "生成工程框架已就绪", 100);
+        return true;
+    }
+
+    /// <summary>
+    /// The minimum framework contract generated code needs: the Core entities, the DbContext
+    /// source generator and the Migrator entry point. Mirrors the markers
+    /// <see cref="GeneratedProjectViewFrameworkSupport.EnsureAsync"/> checks.
+    /// </summary>
+    public static bool IsGeneratedProjectFrameworkPresent(string? projectPath, string? projectName)
+    {
+        if (string.IsNullOrWhiteSpace(projectPath) || string.IsNullOrWhiteSpace(projectName))
+            return false;
+
+        var root = Path.GetFullPath(projectPath);
+        return Directory.Exists(Path.Combine(root, $"{projectName}.Core", "Entities"))
+               && File.Exists(Path.Combine(root, $"{projectName}.SourceGenerator", "DbContextGenerator.cs"))
+               && File.Exists(Path.Combine(root, $"{projectName}.Migrator", "Persistence", "EfCore", $"{projectName}DbContext.cs"))
+               && File.Exists(Path.Combine(root, $"{projectName}.Migrator", "Program.cs"));
+    }
+
+    private string ResolveTemplateZipPath()
+    {
+        var configuredPath = _configuration["TemplatesPath"] ?? _configuration["CodeGen:TemplatesPath"];
+        return ProjectTemplateLocator.FindLatestValidTemplateZip(configuredPath);
+    }
+
+    private static string ResolveFullProjectPath(Project project)
+    {
+        var target = project.ProjectPath!.Trim();
+        return target.TrimEnd('/', '\\').EndsWith(project.ProjectName, StringComparison.OrdinalIgnoreCase)
+            ? target
+            : Path.Combine(target, project.ProjectName);
     }
 
     /// <summary>
@@ -139,7 +272,15 @@ public partial class ProjectInitializationService
 
             // 3. 执行核心初始化逻辑
             await InitializeProjectCoreAsync(projectPath, projectName, databaseType, connectionString, frontendPort, backendPort);
-            await WriteProjectContextAsync(projectPath, projectName, null, null, databaseType, frontendPort, backendPort);
+            await WriteProjectContextAsync(
+                projectPath,
+                projectName,
+                null,
+                null,
+                databaseType,
+                frontendPort,
+                backendPort,
+                _configuration["Mcp:ServerBaseUrl"]);
 
             return true;
         }
@@ -222,6 +363,10 @@ public partial class ProjectInitializationService
         {
             SendProgress(projectId, "migration", "运行数据库迁移...", 75);
             await RunDatabaseMigrationAsync(projectPath, projectName, projectId);
+            // RunDatabaseMigrationAsync 内部会先 `ef migrations add InitialCreate` 再应用迁移，
+            // 所以两个标记必须一起置位。只写 MigrationApplied 会让状态文件长期显示
+            // "迁移未创建"，用户再点"创建迁移"时 ef 会因迁移已存在而失败。
+            state.MigrationCreated = true;
             state.MigrationApplied = true;
             await SaveInitializationStateAsync(projectPath, state);
         }
@@ -316,10 +461,10 @@ public partial class ProjectInitializationService
     private async Task ReplaceProjectNameAsync(string projectPath, string newProjectName)
     {
         // 注意：.sln 文件由 GenerateSolutionFileAsync 单独处理
-        var fileExtensions = new[] { ".cs", ".csproj", ".json", ".js", ".vue", ".ts", ".tsx", ".html" };
-
         var files = Directory.GetFiles(projectPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => fileExtensions.Contains(Path.GetExtension(f).ToLower()))
+            .Where(file =>
+                !IsRuntimeModulePath(Path.GetRelativePath(projectPath, file)) &&
+                IsTemplateTextFile(file))
             .ToList();
 
         foreach (var file in files)
@@ -474,19 +619,15 @@ export default service
     /// </summary>
     private async Task UpdateDatabaseConfigAsync(string projectPath, string projectName, string databaseType, string connectionString)
     {
-        // 对于 SQLite，使用绝对路径
+        // 对于 SQLite，使用绝对路径（统一指向 {ProjectPath}/{ProjectName}.Migrator 下的同一个数据库文件）
         var finalConnectionString = connectionString;
-        if (databaseType == "SQLite" && connectionString.StartsWith("Data Source="))
+        if (databaseType == "SQLite")
         {
-            var dbFileName = connectionString.Replace("Data Source=", "").Trim().Trim('"');
-            if (!Path.IsPathRooted(dbFileName))
+            var dbFileName = ProjectService.ExtractSqliteFileName(connectionString);
+            if (!string.IsNullOrWhiteSpace(dbFileName))
             {
                 var absolutePath = Path.GetFullPath(Path.Combine(projectPath, $"{projectName}.Migrator", dbFileName));
                 finalConnectionString = $"Data Source={absolutePath}";
-            }
-            else
-            {
-                finalConnectionString = $"Data Source={dbFileName}";
             }
         }
 
@@ -562,11 +703,15 @@ export default service
         {
             var csprojContent = await File.ReadAllTextAsync(migratorCsprojPath, utf8WithoutBom);
 
-            // 将带 Condition 的默认值改写为固定值
-            csprojContent = Regex.Replace(
+            // 兼容新模板的条件默认值与旧模板已经写死的 DbProvider。
+            // 只替换第一个默认属性，避免误伤将来可能出现的条件属性组。
+            var dbProviderRegex = new Regex(
+                @"<DbProvider(?:\s+Condition=\""[^\""]*\"")?\s*>[^<]*</DbProvider>",
+                RegexOptions.IgnoreCase);
+            csprojContent = dbProviderRegex.Replace(
                 csprojContent,
-                @"<DbProvider\s+Condition=\""'\$\(DbProvider\)'==''\"">[^<]*</DbProvider>",
-                $"<DbProvider>{dbProvider}</DbProvider>");
+                $"<DbProvider>{dbProvider}</DbProvider>",
+                1);
 
             await File.WriteAllTextAsync(migratorCsprojPath, csprojContent, utf8WithoutBom);
         }
@@ -620,9 +765,17 @@ export default service
                 // 更新代理目标端口
                 if (backendPort > 0)
                 {
+                    // Newer Vite templates keep the target in an environment-aware
+                    // variable. Rewrite its localhost fallback as well as legacy
+                    // inline proxy targets; otherwise a generated project can
+                    // silently proxy its API requests to CodeMaster on port 5000.
+                    content = Regex.Replace(
+                        content,
+                        @"(apiProxyTarget\s*=\s*process\.env\.[A-Za-z0-9_]+\s*\|\|\s*['""]http://(?:localhost|127\.0\.0\.1):)\d+(['""])",
+                        match => $"{match.Groups[1].Value}{backendPort}{match.Groups[2].Value}");
                     content = Regex.Replace(content,
-                        @"target:\s*'http://localhost:\d+'",
-                        $"target: 'http://localhost:{backendPort}'");
+                        @"(target:\s*['""]http://(?:localhost|127\.0\.0\.1):)\d+(['""])",
+                        match => $"{match.Groups[1].Value}{backendPort}{match.Groups[2].Value}");
                 }
 
                 await File.WriteAllTextAsync(viteConfigPath, content, utf8WithoutBom);
@@ -1125,7 +1278,13 @@ export default service
 
     public class ProjectContext
     {
-        public int SchemaVersion { get; set; } = 1;
+        /// <summary>
+        /// 生成物内 AI 脚手架契约的版本号。真正的实现在私有模块里，但版本号属于
+        /// project-context.json 这个公开 schema，所以常量放这边，私有实现引用它。
+        /// </summary>
+        public const int CurrentAiSupportVersion = 1;
+
+        public int SchemaVersion { get; set; } = 2;
         public string CreatedBy { get; set; } = "CodeMaster";
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public string? ServerBaseUrl { get; set; }
@@ -1135,6 +1294,11 @@ export default service
         public string? DatabaseType { get; set; }
         public int FrontendPort { get; set; }
         public int BackendPort { get; set; }
+        public int AiSupportVersion { get; set; }
+        public int ExtensionContractVersion { get; set; }
+        public string AgentInstructionsPath { get; set; } = "AGENTS.md";
+        public string SkillPath { get; set; } = ".agents/skills/codemaster-project-development/SKILL.md";
+        public string McpConfigExamplePath { get; set; } = ".codemaster/mcp-config.example.json";
     }
 
     /// <summary>
@@ -1200,7 +1364,9 @@ export default service
             DisplayName = displayName,
             DatabaseType = databaseType,
             FrontendPort = frontendPort,
-            BackendPort = backendPort
+            BackendPort = backendPort,
+            AiSupportVersion = ProjectContext.CurrentAiSupportVersion,
+            ExtensionContractVersion = _generatedProjectInitializers.Select(item => item.ContractVersion).DefaultIfEmpty().Max()
         };
 
         var json = JsonSerializer.Serialize(context, new JsonSerializerOptions
@@ -1210,6 +1376,8 @@ export default service
         });
 
         await File.WriteAllTextAsync(Path.Combine(contextDir, "project-context.json"), json, new UTF8Encoding(false));
+        foreach (var initializer in _generatedProjectInitializers)
+            await initializer.InitializeAsync(projectPath, projectName);
     }
 
     #endregion
@@ -1263,6 +1431,14 @@ export default service
     /// </summary>
     private async Task ExtractAndReplaceAsync(ZipArchiveEntry entry, string destFile, string projectName)
     {
+        if (IsRuntimeModulePath(entry.FullName) || !IsTemplateTextFile(entry.FullName))
+        {
+            await using var source = entry.Open();
+            await using var target = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.None);
+            await source.CopyToAsync(target);
+            return;
+        }
+
         // 读取文件内容
         using var stream = entry.Open();
         using var reader = new StreamReader(stream, new UTF8Encoding(false));
@@ -1271,8 +1447,32 @@ export default service
         // 替换项目名称
         content = content.Replace("CodeMaster", projectName);
 
+        // A module named exactly like the project makes sibling framework files fail to resolve
+        // the bare root namespace (CS0234). Pinning root references to the global namespace keeps
+        // the extracted framework compilable for every module name.
+        if (destFile.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            content = GeneratedProjectNamespaceQualifier.QualifyRootReferences(content, projectName);
+
         // 写入文件（使用 UTF-8 without BOM）
         await File.WriteAllTextAsync(destFile, content, new UTF8Encoding(false));
+    }
+
+    private static bool IsTemplateTextFile(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (TemplateTextFileNames.Contains(fileName) ||
+            fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return TemplateTextExtensions.Contains(Path.GetExtension(fileName));
+    }
+
+    private static bool IsRuntimeModulePath(string path)
+    {
+        var normalizedPath = path.Replace('\\', '/').TrimStart('/');
+        return normalizedPath.StartsWith("modules/", StringComparison.OrdinalIgnoreCase);
     }
 
     #endregion

@@ -1,12 +1,14 @@
 using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.Application.Services;
 using CodeMaster.Core.Dtos;
+using CodeMaster.Core.Exceptions;
 using CodeMaster.Core.Repositories;
 using CodeMaster.Core.Services;
 using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.Domain.Entities.System;
 using CodeMaster.Infrastructure.Persistence.SqlSugar;
 using Mapster;
+using Microsoft.AspNetCore.Http;
 using SqlSugar;
 using System.Text.RegularExpressions;
 
@@ -33,7 +35,34 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
 
     public override async Task<long> CreateAsync(CreateProjectModuleDto input)
     {
-        input.ModuleName = CSharpModuleNameValidator.RequireValid(input.ModuleName);
+        if (input is null)
+            throw new BusinessException(StatusCodes.Status400BadRequest, "请求体不能为空,请填写模块信息。");
+        // defensive defaults so the body never leaks through with an empty
+        // ModuleName even if the JSON deserializer leaves a string at default.
+        input.ModuleName ??= string.Empty;
+        input.ModuleDescription ??= string.Empty;
+        input.Icon ??= string.Empty;
+        input.RoutePath ??= string.Empty;
+        input.Remark ??= string.Empty;
+        if (string.IsNullOrWhiteSpace(input.ModuleName))
+            throw new BusinessException(StatusCodes.Status400BadRequest,
+                "模块名(技术名称)不能为空。示例:Engineering、ProjectManagement。中文显示名请填写到 ModuleDescription。");
+        try
+        {
+            input.ModuleName = CSharpModuleNameValidator.RequireValid(input.ModuleName);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new BusinessException(
+                StatusCodes.Status400BadRequest,
+                $"{ex.Message} 示例:Engineering、ProjectManagement。");
+        }
+        input.OrderNum = await ResolveAvailableOrderAsync(
+            input.ProjectId,
+            input.OrderNum,
+            input.ModuleName,
+            input.ModuleDescription,
+            input.RoutePath);
         try
         {
             return await base.CreateAsync(input);
@@ -47,6 +76,15 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
     public override async Task<int> UpdateAsync(long id, UpdateProjectModuleDto input)
     {
         input.ModuleName = CSharpModuleNameValidator.RequireValid(input.ModuleName);
+        var current = await Repository.GetByIdAsync(id)
+            ?? throw new KeyNotFoundException($"项目模块 '{id}' 不存在");
+        input.OrderNum = await ResolveAvailableOrderAsync(
+            current.ProjectId,
+            input.OrderNum,
+            input.ModuleName,
+            input.ModuleDescription,
+            input.RoutePath,
+            id);
         return await base.UpdateAsync(id, input);
     }
 
@@ -136,8 +174,12 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
             // 更新菜单
             existingMenu.MenuName = module.ModuleDescription;
             existingMenu.TitleKey = moduleTitleKey;
-            existingMenu.Icon = string.IsNullOrWhiteSpace(existingMenu.Icon) ? "Fold" : existingMenu.Icon;
-            existingMenu.OrderNum = existingMenu.OrderNum;
+            existingMenu.Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon;
+            existingMenu.OrderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
+                module.OrderNum,
+                module.ModuleName,
+                module.ModuleDescription,
+                module.RoutePath);
             existingMenu.Path = modulePath;
             existingMenu.IsDeleted = false;
             existingMenu.DeleteTime = null;
@@ -155,13 +197,17 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
                 MenuName = module.ModuleDescription,
                 TitleKey = moduleTitleKey,
                 ParentId = null,
-                OrderNum = module.OrderNum==0?99:module.OrderNum,
+                OrderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
+                    module.OrderNum,
+                    module.ModuleName,
+                    module.ModuleDescription,
+                    module.RoutePath),
                 Path = modulePath,
                 Component = "Layout",
                 MenuType = "M",
                 Visible = true,
                 Status = 0,
-                Icon = string.IsNullOrWhiteSpace(module.Icon) ? "Fold" : module.Icon,
+                Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon,
                 CreateTime = DateTime.UtcNow,
                 IsDeleted = false
             };
@@ -269,6 +315,28 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
         }
     }
 
+    private async Task<int> ResolveAvailableOrderAsync(
+        long projectId,
+        int requestedOrder,
+        string? moduleName,
+        string? moduleDescription,
+        string? routePath,
+        long? excludedModuleId = null)
+    {
+        var query = _sqlSugarClient.Queryable<ProjectModule>()
+            .Where(module => module.ProjectId == projectId && !module.IsDeleted);
+        if (excludedModuleId.HasValue)
+            query = query.Where(module => module.Id != excludedModuleId.Value);
+
+        var occupiedOrders = await query.Select(module => module.OrderNum).ToListAsync();
+        return ProjectModuleOrderPolicy.ResolveModuleOrder(
+            requestedOrder,
+            occupiedOrders,
+            moduleName,
+            moduleDescription,
+            routePath);
+    }
+
     private static string ToCamelCase(string value)
     {
         return string.IsNullOrEmpty(value) ? value : char.ToLowerInvariant(value[0]) + value[1..];
@@ -285,13 +353,7 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
         }
 
         var connectionString = project.ConnectionString ?? string.Empty;
-        var match = Regex.Match(connectionString, @"Data Source\s*=\s*([^;]+)", RegexOptions.IgnoreCase);
-        if (!match.Success)
-        {
-            return connectionString;
-        }
-
-        var dataSource = match.Groups[1].Value.Trim().Trim('"');
+        var dataSource = ProjectService.ExtractSqliteFileName(connectionString);
         if (string.IsNullOrWhiteSpace(dataSource) || Path.IsPathRooted(dataSource))
         {
             return connectionString;
@@ -304,7 +366,8 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
         }
 
         // 目标项目数据库通常位于 {ProjectPath}/{ProjectName}.Migrator 下
-        var absolutePath = Path.GetFullPath(Path.Combine(projectPath, $"{project.ProjectName}.Migrator", dataSource));
+        var absolutePath = ProjectService.EnsureSqliteDirectory(
+            Path.GetFullPath(Path.Combine(projectPath, $"{project.ProjectName}.Migrator", dataSource)));
         return Regex.Replace(
             connectionString,
             @"Data Source\s*=\s*([^;]+)",

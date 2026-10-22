@@ -340,7 +340,10 @@ public class CodeGeneratorServiceTests
             var orderDtoCode = await generator.GenerateDtoAsync(orderId, "Demo", "Orders");
             var orderItemDtoCode = await generator.GenerateDtoAsync(orderItemId, "Demo", "Orders");
 
-            Assert.Contains("public List<CreateOrderItemDto>? OrderItems", orderDtoCode);
+            // 同上：Create DTO 的子表集合也带了 global:: 前缀。
+            Assert.Contains(
+                "public List<global::Demo.Application.Dtos.Orders.CreateOrderItemDto>? OrderItems",
+                orderDtoCode);
             Assert.Contains(
                 "[Range(typeof(long), \"1\", \"9223372036854775807\")]",
                 orderItemDtoCode);
@@ -351,6 +354,93 @@ public class CodeGeneratorServiceTests
                 "1",
                 "9223372036854775807");
             Assert.True(generatedRange.IsValid(2_078_909_676_682_088_448L));
+        }
+        finally
+        {
+            db.Dispose();
+            TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
+    public async Task EntityGeneration_ShouldFullyQualifyCrossModuleOneToManyNavigationTypes()
+    {
+        var (db, dbFile) = CreateMetadataDb();
+        try
+        {
+            db.Insertable(new[]
+            {
+                new ProjectModule
+                {
+                    Id = 10, ProjectId = 1, ModuleName = "IssueTracking", ModuleDescription = "Issue tracking",
+                    Icon = "folder", RoutePath = "/issues", Remark = string.Empty, CreateBy = "test", UpdateUserId = 0
+                },
+                new ProjectModule
+                {
+                    Id = 11, ProjectId = 1, ModuleName = "Collaboration", ModuleDescription = "Collaboration",
+                    Icon = "folder", RoutePath = "/collaboration", Remark = string.Empty, CreateBy = "test", UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+            db.Insertable(new[]
+            {
+                new ModuleEntity
+                {
+                    Id = 100, ProjectId = 1, ModuleId = 10, Name = "Issue", Description = "Issue",
+                    HasPrimaryKey = true, CreateBy = "test", UpdateUserId = 0
+                },
+                new ModuleEntity
+                {
+                    Id = 101, ProjectId = 1, ModuleId = 11, Name = "Comment", Description = "Comment",
+                    HasPrimaryKey = true, CreateBy = "test", UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+            db.Insertable(new[]
+            {
+                SystemField(102, 100, "Id", "long", isPrimaryKey: true),
+                SystemField(103, 101, "Id", "long", isPrimaryKey: true),
+                new EntityField
+                {
+                    Id = 104, ModuleEntityId = 101, Name = "IssueId", Description = "Issue",
+                    DataType = "long", IsRequired = true, CreateBy = "test", UpdateUserId = 0
+                }
+            }).ExecuteCommand();
+            db.Insertable(new OneToManyRelation
+            {
+                Id = 105, ModuleEntityId = 100, MasterField = "Id", ChildEntityId = 101,
+                ChildEntityName = "Comment", ChildForeignKey = "IssueId", CreateBy = "test", UpdateUserId = 0
+            }).ExecuteCommand();
+
+            var generator = new CodeGeneratorService(db);
+            var entityCode = await generator.GenerateEntityAutoAsync(100, "Demo", "IssueTracking");
+            var dtoCode = await generator.GenerateDtoAsync(100, "Demo", "IssueTracking");
+            var serviceCode = await generator.GenerateServiceImplementationAsync(100, "Demo", "IssueTracking");
+
+            // 跨模块导航类型在模板里统一加了 global:: 前缀（模块名与命名空间段撞名时
+            // 不加会 CS0104 引用不明确）。这里断言的是加前缀后的最终产物。
+            Assert.Contains(
+                "nameof(global::Demo.Domain.Entities.Collaboration.Comment.IssueId)",
+                entityCode);
+            Assert.Contains(
+                "List<global::Demo.Domain.Entities.Collaboration.Comment>? Comments",
+                entityCode);
+            Assert.Contains(
+                "List<global::Demo.Application.Dtos.Collaboration.CommentDto>? Comments",
+                dtoCode);
+            Assert.Contains(
+                "List<global::Demo.Application.Dtos.Collaboration.CreateCommentDto>? Comments",
+                dtoCode);
+            Assert.Contains(
+                "List<global::Demo.Application.Dtos.Collaboration.UpdateCommentDto>? Comments",
+                dtoCode);
+            Assert.Contains(
+                "item.Adapt<global::Demo.Domain.Entities.Collaboration.Comment>()",
+                serviceCode);
+            Assert.Contains(
+                "List<global::Demo.Application.Dtos.Collaboration.UpdateCommentDto> items",
+                serviceCode);
+            Assert.Contains(
+                "_db.Deleteable<global::Demo.Domain.Entities.Collaboration.Comment>()",
+                serviceCode);
         }
         finally
         {
@@ -498,6 +588,44 @@ public class CodeGeneratorServiceTests
             Assert.DoesNotContain("export function create", apiCode);
             Assert.DoesNotContain("export function update", apiCode);
             Assert.DoesNotContain("export function deleteById", apiCode);
+        }
+        finally
+        {
+            db.Dispose();
+            TryDelete(dbFile);
+        }
+    }
+
+    [Fact]
+    public void ViewEntityGeneration_EmitsExplicitViewMarker()
+    {
+        var (db, dbFile) = CreateMetadataDb();
+        try
+        {
+            var entity = new ModuleEntity
+            {
+                ProjectId = 1,
+                ModuleId = 1,
+                Name = "OrderAnalysis",
+                Description = "Order analysis",
+                TableName = "order_analysis",
+                HasPrimaryKey = true,
+                IsReadOnly = true,
+                HasAudit = false,
+                HasSoftDelete = false,
+                GenerationMode = EntityGenerationMode.FullStack
+            };
+
+            var generator = new CodeGeneratorService(db);
+            var context = generator.BuildTemplateContext(
+                entity,
+                new List<EntityField>(),
+                new List<OneToManyRelation>(),
+                "Demo",
+                "Reports");
+
+            var entityContext = (IDictionary<string, object?>)context["entity"];
+            Assert.Contains("IViewEntity", Assert.IsType<string>(entityContext["interface_list"]));
         }
         finally
         {
@@ -781,8 +909,15 @@ public class CodeGeneratorServiceTests
                 .GenerateServiceImplementationAsync(entity.Id, "Demo", "Catalog");
             Assert.Contains("GetCategoryIdOptionsAsync", serviceCode);
             Assert.Contains("GetCategoryIdLabelsAsync", serviceCode);
+            Assert.Contains("using Demo.Core.DynamicApi;", serviceCode);
+            Assert.Contains("[DynamicApi(HttpMethod = \"POST\")]", serviceCode);
             Assert.Contains("typedValues.Contains(item.Id)", serviceCode);
             Assert.Contains("item.ParentCode == typedParentValue", serviceCode);
+            Assert.Contains("await ValidateRemoteReferencesAsync(entity);", serviceCode);
+            Assert.Contains("ValidateCategoryIdReferenceAsync(entity.CategoryId)", serviceCode);
+            Assert.Contains("AnyAsync(item => item.Id == value && !item.IsDeleted)", serviceCode);
+            Assert.Contains("throw new BusinessException(400, \"CategoryId references a missing Category record.\")", serviceCode);
+            Assert.Contains("CategoryId references a missing Category record.", serviceCode);
         }
         finally
         {
@@ -816,7 +951,7 @@ public class CodeGeneratorServiceTests
 
     internal static (ISqlSugarClient Db, string DbFile) CreateMetadataDb()
     {
-        var dbFile = Path.Combine(Path.GetTempPath(), "CodeMaster_CodeGenTest_" + Guid.NewGuid().ToString("N") + ".db");
+        var dbFile = Path.Combine(CodeMasterTestPaths.Root, "CodeMaster_CodeGenTest_" + Guid.NewGuid().ToString("N") + ".db");
         var db = new SqlSugarClient(new ConnectionConfig
         {
             ConnectionString = $"Data Source={dbFile};Mode=ReadWriteCreate;",

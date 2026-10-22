@@ -50,20 +50,13 @@ YitIdHelper.SetIdGenerator(new IdGeneratorOptions { WorkerId = workerId });
 
 // 3. 配置 DbContext
 var services = new ServiceCollection();
-services.AddDbContext<CodeMasterDbContext>(opts =>
-{
-#if DB_MYSQL
-    opts.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString));
-#elif DB_PGSQL
-    opts.UseNpgsql(connectionString);
-#elif DB_SQLITE
-    opts.UseSqlite(connectionString);
-#elif DB_ORACLE
-    opts.UseOracle(connectionString);
-#else
-    opts.UseSqlServer(connectionString);
-#endif
-});
+var baseMigrationsAssembly = typeof(CodeMasterDbContext).Assembly.GetName().Name
+    ?? throw new InvalidOperationException("Unable to resolve the base migrations assembly name.");
+services.AddDbContext<CodeMasterDbContext>(opts => ConfigureDbContextOptions(
+    opts,
+    connectionString,
+    baseMigrationsAssembly,
+    "__EFMigrationsHistory"));
 
 var serviceProvider = services.BuildServiceProvider();
 using var scope = serviceProvider.CreateScope();
@@ -86,6 +79,8 @@ try
 #else
     await dbContext.Database.MigrateAsync();
 #endif
+    await ApplyModuleMigrationsAsync(dbProvider, connectionString);
+    await RuntimeMigrationModuleLoader.ApplyAsync(dbProvider, connectionString);
     Console.WriteLine("✓ 数据库迁移完成\n");
 
     // 5. 初始化种子数据
@@ -105,6 +100,68 @@ catch (Exception ex)
 }
 
 return 0;
+
+static void ConfigureDbContextOptions(
+    DbContextOptionsBuilder optionsBuilder,
+    string connectionString,
+    string migrationsAssembly,
+    string migrationsHistoryTable)
+{
+#if DB_MYSQL
+    optionsBuilder.UseMySql(
+        connectionString,
+        ServerVersion.AutoDetect(connectionString),
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#elif DB_PGSQL
+    optionsBuilder.UseNpgsql(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#elif DB_SQLITE
+    optionsBuilder.UseSqlite(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#elif DB_ORACLE
+    optionsBuilder.UseOracle(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#else
+    optionsBuilder.UseSqlServer(
+        connectionString,
+        provider => provider
+            .MigrationsAssembly(migrationsAssembly)
+            .MigrationsHistoryTable(migrationsHistoryTable));
+#endif
+}
+
+static async Task ApplyModuleMigrationsAsync(string databaseProvider, string connectionString)
+{
+    var modules = MigrationModuleCatalog.CreateDatabaseMigrationModules();
+    if (modules.Count == 0)
+    {
+        return;
+    }
+
+    var context = new MigrationModuleExecutionContext
+    {
+        DatabaseProvider = databaseProvider,
+        ConnectionString = connectionString,
+        ConfigureDbContext = ConfigureDbContextOptions
+    };
+
+    foreach (var module in modules)
+    {
+        Console.WriteLine($"  - Applying optional migration module: {module.ModuleName}");
+        await module.MigrateAsync(context);
+    }
+}
 
 static string MaskConnectionString(string connectionString)
 {
@@ -262,10 +319,8 @@ static async Task SeedDataAsync(CodeMasterDbContext dbContext)
         new TaskModule(),
         new TaskLogModule(),
 
-        // 代码生成模块
-        new ProjectModule(),
-        new ProjectModuleModule(),
-        new ModuleEntityModule()
+        // 生成项目打印运行时菜单（仅在打印模块存在时生效）
+        new PrintTemplateModule()
     };
 
     // 6. 创建顶级目录菜单
@@ -309,7 +364,7 @@ static async Task SeedDataAsync(CodeMasterDbContext dbContext)
 }
 
 /// <summary>
-/// 创建顶级目录菜单（系统管理、监控管理、代码管理）
+/// 创建生成项目需要的顶级目录菜单
 /// </summary>
 static async Task CreateTopLevelDirectoriesAsync(CodeMasterDbContext dbContext, long adminRoleId)
 {
@@ -317,9 +372,8 @@ static async Task CreateTopLevelDirectoriesAsync(CodeMasterDbContext dbContext, 
 
     var directories = new[]
     {
-        new { Name = "系统管理", TitleKey = "system", Path = "/system", Icon = "Setting", Order = 1 },
-        new { Name = "监控管理", TitleKey = "monitor", Path = "/monitor", Icon = "Monitor", Order = 2 },
-        new { Name = "代码管理", TitleKey = "codegen", Path = "/codegen", Icon = "Files", Order = 3 }
+        new { Name = "系统管理", TitleKey = "system", Path = "system", Icon = "Setting", Order = 1 },
+        new { Name = "监控管理", TitleKey = "monitor", Path = "monitor", Icon = "Monitor", Order = 2 }
     };
 
     foreach (var dir in directories)

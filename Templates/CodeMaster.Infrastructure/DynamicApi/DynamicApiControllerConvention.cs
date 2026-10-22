@@ -188,7 +188,7 @@ public class DynamicApiControllerConvention : IApplicationModelConvention
     {
         // 获取 HTTP Method
         var method = action.ActionMethod;
-        var verb = GetHttpVerb(method);
+        var verb = GetEffectiveHttpVerb(method);
 
         foreach (var parameter in action.Parameters)
         {
@@ -259,6 +259,21 @@ public class DynamicApiControllerConvention : IApplicationModelConvention
                 // 否则，简单类型参数已经添加到路由中，从 Route 绑定（默认行为）
             }
         }
+    }
+
+    private string GetEffectiveHttpVerb(MethodInfo method)
+    {
+        var existingHttpMethod = method.GetCustomAttributes()
+            .OfType<HttpMethodAttribute>()
+            .SelectMany(attribute => attribute.HttpMethods)
+            .FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(existingHttpMethod))
+            return existingHttpMethod.ToUpperInvariant();
+
+        var dynamicApi = method.GetCustomAttribute<DynamicApiAttribute>();
+        return string.IsNullOrWhiteSpace(dynamicApi?.HttpMethod)
+            ? GetHttpVerb(method)
+            : dynamicApi.HttpMethod.ToUpperInvariant();
     }
 
     private bool IsComplexType(Type type)

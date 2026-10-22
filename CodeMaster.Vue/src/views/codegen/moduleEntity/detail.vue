@@ -15,8 +15,11 @@
         <el-descriptions-item label="实体名称">
           {{ detail.name }}
         </el-descriptions-item>
-        <el-descriptions-item label="实体描述">
+        <el-descriptions-item label="显示名称">
           {{ detail.description }}
+        </el-descriptions-item>
+        <el-descriptions-item label="业务说明" :span="3">
+          {{ detail.businessDescription || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="表名">
           {{ detail.tableName }}
@@ -53,7 +56,8 @@
 
       <el-table :data="detail.fields" border style="width: 100%">
         <el-table-column prop="name" label="字段名" width="150" />
-        <el-table-column prop="description" label="描述" width="150" />
+        <el-table-column prop="description" label="显示名称" width="150" />
+        <el-table-column prop="businessDescription" label="业务说明" min-width="220" show-overflow-tooltip />
         <el-table-column prop="dataType" label="数据类型" width="120" />
         <el-table-column prop="maxLength" label="长度" width="80" />
         <el-table-column prop="defaultValue" label="默认值" width="120" />
@@ -121,6 +125,7 @@ const detail = ref({
   projectModuleName: '',
   name: '',
   description: '',
+  businessDescription: '',
   tableName: '',
   hasPrimaryKey: true,
   isTree: false,

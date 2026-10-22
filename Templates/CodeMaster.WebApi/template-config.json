@@ -54,10 +54,14 @@
       "CodeMaster.Core/Dtos/PagedQueryDto.cs",
       "CodeMaster.Core/Dtos/PagedResultDto.cs",
       "CodeMaster.Core/Dtos/UpdateDtoBase.cs",
+      "CodeMaster.Core/Dtos/IHasRowStatus.cs",
+      "CodeMaster.Core/Dtos/RowStatus.cs",
 
       "CodeMaster.Core/DynamicApi/DynamicApiAttribute.cs",
       "CodeMaster.Core/DynamicApi/DynamicApiOptions.cs",
       "CodeMaster.Core/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
+
+      "CodeMaster.Core/Extensibility/ICodeMasterExtension.cs",
 
       "CodeMaster.Core/Entities/DataPermissionEntityBase.cs",
       "CodeMaster.Core/Entities/EntityBase.cs",
@@ -66,10 +70,13 @@
       "CodeMaster.Core/Entities/IAuditEntity.cs",
       "CodeMaster.Core/Entities/IDataPermission.cs",
       "CodeMaster.Core/Entities/IDept.cs",
+      "CodeMaster.Core/Entities/IBaseEntity.cs",
+      "CodeMaster.Core/Entities/IViewEntity.cs",
       "CodeMaster.Core/Entities/IEntity.cs",
       "CodeMaster.Core/Entities/ISoftDelete.cs",
       "CodeMaster.Core/Entities/ITenant.cs",
       "CodeMaster.Core/Entities/ITenantEntity.cs",
+      "CodeMaster.Core/Entities/ITree.cs",
       "CodeMaster.Core/Entities/TreeEntityBase.cs",
 
       "CodeMaster.Core/Enums/BusinessType.cs",
@@ -98,8 +105,10 @@
       "CodeMaster.Core/Services/ICrudService.cs",
       "CodeMaster.Core/Services/IDataPermissionService.cs",
       "CodeMaster.Core/Services/IExcelService.cs",
+      "CodeMaster.Core/Services/IQueryApplicationService.cs",
       "CodeMaster.Core/Services/IReadOnlyApplicationService.cs",
       "CodeMaster.Core/Services/IReadOnlyService.cs",
+      "CodeMaster.Core/Services/IReadOnlyTreeApplicationService.cs",
       "CodeMaster.Core/Services/ITreeApplicationService.cs"
     ],
     "domain": [
@@ -173,7 +182,9 @@
       "CodeMaster.Application/Services/CrudServiceBase.cs",
       "CodeMaster.Application/Services/DataPermissionContext.cs",
       "CodeMaster.Application/Services/DataPermissionService.cs",
+      "CodeMaster.Application/Services/QueryApplicationService.cs",
       "CodeMaster.Application/Services/ReadOnlyApplicationService.cs",
+      "CodeMaster.Application/Services/ReadOnlyTreeApplicationService.cs",
       "CodeMaster.Application/Services/TreeApplicationService.cs"
 
 
@@ -196,9 +207,12 @@
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiControllerConvention.cs",
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiControllerFeatureProvider.cs",
       "CodeMaster.Infrastructure/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
+      "CodeMaster.Infrastructure/DynamicApi/CodeMasterModuleAssemblyLoader.cs",
+      "CodeMaster.Infrastructure/DynamicApi/RuntimeWebModuleLoader.cs",
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiExtensions.cs",
 
       "CodeMaster.Infrastructure/Middleware/DataPermissionMiddleware.cs",
+      "CodeMaster.Infrastructure/Middleware/BusinessExceptionMiddleware.cs",
       "CodeMaster.Infrastructure/Middleware/RequestLoggingMiddleware.cs",
 
       "CodeMaster.Infrastructure/ModelBinding/QueryStringModelBinder.cs",
@@ -242,6 +256,7 @@
       "CodeMaster.WebApi/CodeMaster.WebApi.csproj",
 
       "CodeMaster.WebApi/Converters/LongToStringConverter.cs",
+      "CodeMaster.WebApi/Converters/NumberToStringConverter.cs",
       "CodeMaster.WebApi/Converters/UtcDateTimeConverter.cs",
       "CodeMaster.WebApi/Extensions/SwaggerExtensions.cs",
 
@@ -259,6 +274,8 @@
       "CodeMaster.Migrator/Program.cs",
       "CodeMaster.Migrator/Persistence/EfCore/CodeMasterDbContext.cs",
       "CodeMaster.Migrator/Persistence/EfCore/CodeMasterDbContextFactory.cs",
+      "CodeMaster.Migrator/Persistence/EfCore/MigrationModuleCatalog.cs",
+      "CodeMaster.Migrator/Persistence/EfCore/RuntimeMigrationModuleLoader.cs",
 
 
       "CodeMaster.Migrator/SeedData/Core/BaseDataModule.cs",
@@ -333,6 +350,7 @@
       "CodeMaster.Vue/src/styles/list-page.scss",
       "CodeMaster.Vue/src/utils/auth.js",
       "CodeMaster.Vue/src/utils/dateFormat.js",
+      "CodeMaster.Vue/src/utils/pageLifecycle.js",
       "CodeMaster.Vue/src/utils/request.js",
       "CodeMaster.Vue/src/utils/signalr.js",
       "CodeMaster.Vue/src/utils/tree.js",
@@ -411,11 +429,17 @@
     ],
     "root": [
       ".gitignore",
-      "README.md"
+      "README.md",
+      "CodeMaster.CodeGenerator/Templates/**/*.scriban",
+      "CodeMaster.CodeGenerator/Templates/**/*.txt"
     ],
     "sourcegenerator": [
       "CodeMaster.SourceGenerator/CodeMaster.SourceGenerator.csproj",
       "CodeMaster.SourceGenerator/DbContextGenerator.cs"
+    ],
+    "tests": [
+      "CodeMaster.GeneratedTests/CodeMaster.GeneratedTests.csproj",
+      "CodeMaster.GeneratedTests/GeneratedProjectSmokeTests.cs"
     ]
   }
 }

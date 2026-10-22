@@ -32,6 +32,7 @@ internal sealed class AiProviderFactory : IAiProviderFactory
         return AiChatClientFactory.Create(new AiProviderConnectionSettings
         {
             ProviderType = provider.ProviderType,
+            CompatibilityMode = provider.CompatibilityMode,
             BaseUrl = provider.BaseUrl,
             ApiKey = apiKey,
             ModelName = provider.ModelName,

@@ -23,9 +23,14 @@ public class ModuleEntityDto : EntityDto
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 实体描述（中文）
+    /// 实体显示名称（建议中文，用于菜单和页面标题）
     /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 实体业务说明（供 Agent、文档和完整性分析使用）
+    /// </summary>
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// Normal entities are full-stack generated; metadata-only entities describe external contracts.
@@ -167,9 +172,14 @@ public class CreateModuleEntityDto
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 实体描述（中文）
+    /// 实体显示名称（建议中文，用于菜单和页面标题）
     /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 实体业务说明（供 Agent、文档和完整性分析使用）
+    /// </summary>
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// 是否有主键
@@ -265,9 +275,14 @@ public class UpdateModuleEntityDto
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 实体描述（中文）
+    /// 实体显示名称（建议中文，用于菜单和页面标题）
     /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 实体业务说明（供 Agent、文档和完整性分析使用）
+    /// </summary>
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// 是否有主键

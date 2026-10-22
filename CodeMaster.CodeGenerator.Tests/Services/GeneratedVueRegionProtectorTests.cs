@@ -78,7 +78,7 @@ public sealed class GeneratedVueRegionProtectorTests
     [Fact]
     public async Task WriteAsync_creates_sidecar_and_keeps_conflicts_repeatable()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "codemaster-genhash-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(CodeMasterTestPaths.Root, "codemaster-genhash-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {

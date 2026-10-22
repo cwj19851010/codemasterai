@@ -11,7 +11,9 @@ using SqlSugar;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Yitter.IdGenerator;
 
 namespace CodeMaster.Application.Services.CodeGen;
 
@@ -38,7 +40,85 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
         _serviceProvider = serviceProvider;
         _db = db;
         _templateExportService = new TemplateExportService();
-        _initializationService = new ProjectInitializationService(configuration);
+        _initializationService = new ProjectInitializationService(
+            configuration,
+            serviceProvider.GetServices<IGeneratedProjectInitializer>());
+    }
+
+    /// <summary>
+    /// 创建项目：SQLite 连接串只保留数据库文件名（路径与 Data Source 前缀由平台统一处理）
+    /// </summary>
+    public override async Task<long> CreateAsync(CreateProjectDto input)
+    {
+        input.ConnectionString = NormalizeSqliteConnectionString(input.DatabaseType, input.ConnectionString);
+        return await base.CreateAsync(input);
+    }
+
+    /// <summary>
+    /// 更新项目：SQLite 连接串只保留数据库文件名
+    /// </summary>
+    public override async Task<int> UpdateAsync(long id, UpdateProjectDto input)
+    {
+        input.ConnectionString = NormalizeSqliteConnectionString(input.DatabaseType, input.ConnectionString);
+        return await base.UpdateAsync(id, input);
+    }
+
+    /// <summary>
+    /// 规范化 SQLite 连接串：剥掉重复的 Data Source 前缀和路径，只保留数据库文件名
+    /// </summary>
+    internal static string NormalizeSqliteConnectionString(Core.Enums.DatabaseType databaseType, string connectionString)
+    {
+        if (databaseType != Core.Enums.DatabaseType.SQLite || string.IsNullOrWhiteSpace(connectionString))
+            return connectionString;
+
+        if (!Regex.IsMatch(connectionString, @"Data Source\s*=", RegexOptions.IgnoreCase))
+            return connectionString;
+
+        var value = ExtractSqliteFileName(connectionString);
+        return string.IsNullOrWhiteSpace(value) ? connectionString : $"Data Source={value}";
+    }
+
+    /// <summary>
+    /// SQLite 只创建数据库文件，不创建它的上级目录：连接串指向一个不存在的目录时，
+    /// 打开连接会失败并报 "SQLite Error 14: unable to open database file"。
+    /// 非向导创建的项目（例如 Agent 直接建的项目）此时还没有 {ProjectName}.Migrator 目录，
+    /// 所以在使用连接串之前按需把目录建出来。
+    /// </summary>
+    public static string EnsureSqliteDirectory(string absolutePath)
+    {
+        var directory = Path.GetDirectoryName(absolutePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        return absolutePath;
+    }
+
+    /// <summary>
+    /// 从 SQLite 连接串中提取数据库文件名（剥掉重复 Data Source 前缀、路径、引号）
+    /// </summary>
+    internal static string ExtractSqliteFileName(string connectionString)
+    {
+        var value = ExtractSqliteDataSource(connectionString);
+
+        // 只保留文件名（剥掉路径）
+        if (value.Contains('\\') || value.Contains('/'))
+        {
+            value = Path.GetFileName(value.Trim().Trim('"'));
+        }
+
+        return value.Trim();
+    }
+
+    internal static string ExtractSqliteDataSource(string connectionString)
+    {
+        var match = Regex.Match(connectionString, @"Data Source\s*=\s*([^;]+)", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            return string.Empty;
+
+        var value = match.Groups[1].Value.Trim().Trim('"');
+        while (Regex.IsMatch(value, @"^Data Source\s*=", RegexOptions.IgnoreCase))
+            value = Regex.Replace(value, @"^Data Source\s*=", "", RegexOptions.IgnoreCase).Trim().Trim('"');
+        return value.Trim();
     }
 
     /// <summary>
@@ -191,7 +271,7 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
                 .OrderBy(r => r.OrderNum)
                 .ToListAsync();
 
-            if (_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+            if (_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
             {
                 entityRelations = await Repository.GetQueryable<EntityRelation>()
                     .Where(r => (entityIds.Contains(r.SourceEntityId) || entityIds.Contains(r.TargetEntityId)) && !r.IsDeleted)
@@ -226,6 +306,9 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
                 .OrderBy(t => t.Sort)
                 .ToListAsync()
         };
+
+        foreach (var contributor in _serviceProvider.GetServices<IGenerationBundleContributor>())
+            await contributor.ContributeAsync(id, bundle);
 
         return bundle;
     }
@@ -265,8 +348,10 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
 
             case "generateCode":
             case "generateIncrementalCode":
+            case "generateSmartCode":
             case "generateProjectCode":
             case "generateProjectIncrementalCode":
+            case "generateProjectSmartCode":
                 await MarkGeneratedEntitiesAsync(input, completedAt);
                 return true;
 
@@ -275,6 +360,11 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
                 return true;
 
             default:
+                foreach (var handler in _serviceProvider.GetServices<ILocalExecutionCompletionHandler>())
+                {
+                    if (handler.CanHandle(action))
+                        await handler.HandleAsync(input, completedAt);
+                }
                 return true;
         }
     }
@@ -326,7 +416,7 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
         if (result.Count == 0 &&
             input.ProjectId.HasValue &&
             input.ProjectId.Value > 0 &&
-            input.Action is "generateProjectCode" or "generateProjectIncrementalCode")
+            input.Action is "generateProjectCode" or "generateProjectIncrementalCode" or "generateProjectSmartCode")
         {
             return (await _db.Queryable<ModuleEntity>()
                     .Where(e => e.ProjectId == input.ProjectId.Value && e.IsDeleted == false)
@@ -1391,31 +1481,300 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
 
     public async Task<List<DictTypeOptionDto>> GetDictTypesAsync(long projectId)
     {
-        var project = await Repository.GetByIdAsync(projectId);
-        if (project == null)
-            throw new Exception("项目不存在");
-
-        var connectionString = NormalizeConnectionString(project);
-        var dbType = GetTargetDbType(project.DatabaseType);
-        var targetDb = new SqlSugarClient(new ConnectionConfig
+        var dictionaries = await GetProjectDictionariesAsync(projectId, new ProjectDictionaryQueryDto
         {
-            ConnectionString = connectionString,
-            DbType = dbType,
-            IsAutoCloseConnection = true,
-            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(dbType)
+            IncludeItems = false,
+            IncludeDisabled = false
         });
 
-        var dictTypes = await targetDb.Queryable<CodeMaster.Domain.Entities.System.SysDictType>()
-            .Where(t => t.Status == 0)
-            .OrderBy(t => t.Sort)
-            .ToListAsync();
-
-        return dictTypes.Select(t => new DictTypeOptionDto
+        return dictionaries.Select(t => new DictTypeOptionDto
         {
             DictType = t.DictType,
             DictName = t.DictName
         }).ToList();
     }
+
+    public async Task<List<ProjectDictionaryDto>> GetProjectDictionariesAsync(
+        long projectId,
+        ProjectDictionaryQueryDto query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (query.TenantId < 0)
+            throw new ArgumentException("TenantId cannot be negative.", nameof(query));
+
+        var project = await GetRequiredProjectAsync(projectId);
+        using var targetDb = CreateTargetDb(project);
+
+        var dictTypes = await targetDb.Queryable<SysDictType>()
+            .Where(t => t.TenantId == query.TenantId && !t.IsDeleted)
+            .WhereIF(!query.IncludeDisabled, t => t.Status == 0)
+            .OrderBy(t => t.Sort)
+            .OrderBy(t => t.DictType)
+            .ToListAsync();
+
+        var dictData = await targetDb.Queryable<SysDictData>()
+            .Where(d => d.TenantId == query.TenantId && !d.IsDeleted)
+            .WhereIF(!query.IncludeDisabled, d => d.Status == 0)
+            .OrderBy(d => d.Sort)
+            .OrderBy(d => d.Value)
+            .ToListAsync();
+
+        var exactType = NormalizeOptional(query.DictType);
+        var keyword = NormalizeOptional(query.Keyword);
+        if (exactType != null)
+        {
+            dictTypes = dictTypes
+                .Where(item => string.Equals(item.DictType, exactType, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (keyword != null)
+        {
+            var matchingTypes = dictData
+                .Where(item => Contains(item.Label, keyword) || Contains(item.Value, keyword))
+                .Select(item => item.DictType)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            dictTypes = dictTypes
+                .Where(item => Contains(item.DictType, keyword) ||
+                               Contains(item.DictName, keyword) ||
+                               matchingTypes.Contains(item.DictType))
+                .ToList();
+        }
+
+        return dictTypes.Select(type =>
+        {
+            var items = dictData
+                .Where(item => string.Equals(item.DictType, type.DictType, StringComparison.OrdinalIgnoreCase))
+                .Select(MapDictionaryItem)
+                .ToList();
+            return new ProjectDictionaryDto
+            {
+                Id = type.Id,
+                TenantId = type.TenantId,
+                DictType = type.DictType,
+                DictName = type.DictName,
+                LangKey = type.LangKey,
+                Status = type.Status,
+                Sort = type.Sort,
+                Remark = type.Remark,
+                ItemCount = items.Count,
+                Items = query.IncludeItems ? items : null
+            };
+        }).ToList();
+    }
+
+    public async Task<SaveProjectDictionaryResultDto> SaveProjectDictionaryAsync(
+        long projectId,
+        SaveProjectDictionaryDto input)
+    {
+        ValidateDictionaryInput(input);
+        var project = await GetRequiredProjectAsync(projectId);
+        using var targetDb = CreateTargetDb(project);
+        var now = DateTime.UtcNow;
+        var dictType = input.DictType.Trim();
+        var result = new SaveProjectDictionaryResultDto
+        {
+            TenantId = input.TenantId,
+            DictType = dictType,
+            DictName = input.DictName.Trim()
+        };
+
+        targetDb.Ado.BeginTran();
+        try
+        {
+            var typeMatches = (await targetDb.Queryable<SysDictType>()
+                    .Where(item => item.TenantId == input.TenantId)
+                    .ToListAsync())
+                .Where(item => string.Equals(item.DictType, dictType, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var dict = typeMatches.FirstOrDefault(item => !item.IsDeleted) ?? typeMatches.FirstOrDefault();
+            if (dict == null)
+            {
+                dict = new SysDictType
+                {
+                    Id = YitIdHelper.NextId(),
+                    TenantId = input.TenantId,
+                    DictType = dictType,
+                    CreateBy = "CodeMaster",
+                    CreateUserId = 0,
+                    UpdateUserId = 0,
+                    CreateTime = now
+                };
+                result.Created = true;
+            }
+            else
+            {
+                result.Restored = dict.IsDeleted;
+                dict.UpdateBy = "CodeMaster";
+                dict.UpdateUserId = 0;
+                dict.UpdateTime = now;
+            }
+
+            dict.DictName = input.DictName.Trim();
+            dict.DictType = dictType;
+            dict.LangKey = input.LangKey == null ? dict.LangKey : NormalizeOptional(input.LangKey);
+            dict.Status = input.Status ?? dict.Status;
+            dict.Sort = input.Sort ?? dict.Sort;
+            dict.Remark = input.Remark == null ? dict.Remark : NormalizeOptional(input.Remark);
+            Restore(dict);
+
+            if (result.Created)
+                await targetDb.Insertable(dict).ExecuteCommandAsync();
+            else
+                await targetDb.Updateable(dict).ExecuteCommandAsync();
+
+            result.Id = dict.Id;
+            result.DictName = dict.DictName;
+
+            var existingItems = (await targetDb.Queryable<SysDictData>()
+                    .Where(item => item.TenantId == input.TenantId)
+                    .ToListAsync())
+                .Where(item => string.Equals(item.DictType, dictType, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var itemInput in input.Items)
+            {
+                var value = itemInput.Value.Trim();
+                var matches = existingItems
+                    .Where(item => string.Equals(item.Value, value, StringComparison.Ordinal))
+                    .ToList();
+                var item = matches.FirstOrDefault(candidate => !candidate.IsDeleted) ?? matches.FirstOrDefault();
+                var itemResult = new SaveProjectDictionaryItemResultDto { Value = value };
+                if (item == null)
+                {
+                    item = new SysDictData
+                    {
+                        Id = YitIdHelper.NextId(),
+                        TenantId = input.TenantId,
+                        DictType = dictType,
+                        Value = value,
+                        CreateBy = "CodeMaster",
+                        CreateUserId = 0,
+                        UpdateUserId = 0,
+                        CreateTime = now
+                    };
+                    itemResult.Created = true;
+                }
+                else
+                {
+                    itemResult.Restored = item.IsDeleted;
+                    item.UpdateBy = "CodeMaster";
+                    item.UpdateUserId = 0;
+                    item.UpdateTime = now;
+                }
+
+                item.Label = itemInput.Label.Trim();
+                item.DictType = dictType;
+                item.LangKey = itemInput.LangKey == null ? item.LangKey : NormalizeOptional(itemInput.LangKey);
+                item.IsDefault = itemInput.IsDefault ?? item.IsDefault;
+                item.Status = itemInput.Status ?? item.Status;
+                item.Sort = itemInput.Sort ?? item.Sort;
+                item.Remark = itemInput.Remark == null ? item.Remark : NormalizeOptional(itemInput.Remark);
+                Restore(item);
+
+                if (itemResult.Created)
+                {
+                    await targetDb.Insertable(item).ExecuteCommandAsync();
+                    existingItems.Add(item);
+                    result.CreatedItemCount++;
+                }
+                else
+                {
+                    await targetDb.Updateable(item).ExecuteCommandAsync();
+                    result.UpdatedItemCount++;
+                }
+
+                itemResult.Id = item.Id;
+                result.Items.Add(itemResult);
+            }
+
+            targetDb.Ado.CommitTran();
+            return result;
+        }
+        catch
+        {
+            targetDb.Ado.RollbackTran();
+            throw;
+        }
+    }
+
+    private async Task<Project> GetRequiredProjectAsync(long projectId)
+    {
+        var project = await Repository.GetByIdAsync(projectId);
+        return project ?? throw new KeyNotFoundException("项目不存在或无权访问");
+    }
+
+    private SqlSugarClient CreateTargetDb(Project project)
+    {
+        var dbType = GetTargetDbType(project.DatabaseType);
+        return new SqlSugarClient(new ConnectionConfig
+        {
+            ConnectionString = NormalizeConnectionString(project),
+            DbType = dbType,
+            IsAutoCloseConnection = true,
+            InitKeyType = InitKeyType.Attribute,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(dbType)
+        });
+    }
+
+    private static ProjectDictionaryItemDto MapDictionaryItem(SysDictData item)
+    {
+        return new ProjectDictionaryItemDto
+        {
+            Id = item.Id,
+            TenantId = item.TenantId,
+            DictType = item.DictType,
+            Label = item.Label,
+            Value = item.Value,
+            LangKey = item.LangKey,
+            IsDefault = item.IsDefault,
+            Status = item.Status,
+            Sort = item.Sort,
+            Remark = item.Remark
+        };
+    }
+
+    private static void ValidateDictionaryInput(SaveProjectDictionaryDto input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.TenantId < 0)
+            throw new ArgumentException("TenantId cannot be negative.", nameof(input));
+        if (string.IsNullOrWhiteSpace(input.DictType))
+            throw new ArgumentException("DictType is required.", nameof(input));
+        if (string.IsNullOrWhiteSpace(input.DictName))
+            throw new ArgumentException("DictName is required.", nameof(input));
+        if (input.Status is not null and not (0 or 1))
+            throw new ArgumentException("Dictionary status must be 0 or 1.", nameof(input));
+
+        var values = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in input.Items)
+        {
+            if (string.IsNullOrWhiteSpace(item.Value))
+                throw new ArgumentException("Every dictionary item requires a value.", nameof(input));
+            if (string.IsNullOrWhiteSpace(item.Label))
+                throw new ArgumentException($"Dictionary item '{item.Value}' requires a label.", nameof(input));
+            if (!values.Add(item.Value.Trim()))
+                throw new ArgumentException($"Dictionary item value '{item.Value.Trim()}' is duplicated.", nameof(input));
+            if (item.Status is not null and not (0 or 1))
+                throw new ArgumentException($"Dictionary item '{item.Value.Trim()}' status must be 0 or 1.", nameof(input));
+            if (item.IsDefault is not null and not (0 or 1))
+                throw new ArgumentException($"Dictionary item '{item.Value.Trim()}' IsDefault must be 0 or 1.", nameof(input));
+        }
+    }
+
+    private static void Restore(CodeMaster.Core.Entities.EntityBase entity)
+    {
+        entity.IsDeleted = false;
+        entity.DeleteTime = null;
+        entity.DeleteBy = null;
+        entity.DeleteUserId = null;
+    }
+
+    private static bool Contains(string? source, string value) =>
+        source?.Contains(value, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private string NormalizeConnectionString(Project project)
     {
@@ -1423,16 +1782,17 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             return project.ConnectionString ?? string.Empty;
 
         var connectionString = project.ConnectionString ?? string.Empty;
-        var match = Regex.Match(connectionString, @"Data Source\s*=\s*([^;]+)", RegexOptions.IgnoreCase);
-        if (!match.Success)
+        var configuredDataSource = ExtractSqliteDataSource(connectionString);
+        if (string.IsNullOrWhiteSpace(configuredDataSource) ||
+            Path.IsPathRooted(configuredDataSource) ||
+            string.Equals(configuredDataSource, ":memory:", StringComparison.OrdinalIgnoreCase) ||
+            configuredDataSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
             return connectionString;
 
-        var dataSource = match.Groups[1].Value.Trim().Trim('"');
-        if (string.IsNullOrWhiteSpace(dataSource) || Path.IsPathRooted(dataSource))
-            return connectionString;
-
+        var dataSource = Path.GetFileName(configuredDataSource);
         var projectPath = GetFullProjectPath(project, null);
-        var absolutePath = Path.GetFullPath(Path.Combine(projectPath, $"{project.ProjectName}.Migrator", dataSource));
+        var absolutePath = EnsureSqliteDirectory(
+            Path.GetFullPath(Path.Combine(projectPath, $"{project.ProjectName}.Migrator", dataSource)));
         return Regex.Replace(connectionString, @"Data Source\s*=\s*([^;]+)", "Data Source=" + absolutePath, RegexOptions.IgnoreCase);
     }
 
@@ -1458,12 +1818,13 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
         bool throwOnNonZero = true)
     {
         using var cts = new CancellationTokenSource(timeout);
+        var processWorkingDirectory = NormalizeProcessWorkingDirectory(workingDirectory);
 
         var processInfo = new ProcessStartInfo
         {
             FileName = fileName,
             Arguments = arguments,
-            WorkingDirectory = workingDirectory,
+            WorkingDirectory = processWorkingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -1471,7 +1832,7 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
         };
         DotnetProcessEnvironment.Apply(processInfo);
 
-        Console.WriteLine($"[Migrate] {fileName} {arguments} (cwd: {workingDirectory})");
+        Console.WriteLine($"[Migrate] {fileName} {arguments} (cwd: {processWorkingDirectory})");
 
         using var process = Process.Start(processInfo);
         if (process == null)
@@ -1508,6 +1869,25 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
 
         return process.ExitCode;
     }
+
+    internal static string NormalizeProcessWorkingDirectory(string workingDirectory)
+    {
+        var fullPath = Path.GetFullPath(workingDirectory);
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(fullPath))
+            return fullPath;
+
+        var buffer = new global::System.Text.StringBuilder(32768);
+        var length = GetLongPathName(fullPath, buffer, (uint)buffer.Capacity);
+        return length > 0 && length < buffer.Capacity
+            ? buffer.ToString()
+            : fullPath;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetLongPathName(
+        string shortPath,
+        global::System.Text.StringBuilder longPath,
+        uint bufferLength);
 
     private static string RedactSensitiveOutput(string output)
     {
@@ -1573,6 +1953,74 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
                 Output = BuildDiagnosticFormatter.Summarize(outputBuilder.ToString(), ex.Message)
             };
         }
+    }
+
+    public async Task<ProjectActionResultDto> TestAsync(ProjectActionDto input)
+    {
+        var outputBuilder = new global::System.Text.StringBuilder();
+        try
+        {
+            var project = await Repository.GetByIdAsync(input.ProjectId);
+            if (project == null)
+                throw new Exception("Project not found");
+
+            var projectPath = GetFullProjectPath(project, null);
+            var testProjectPath = FindTestProjectPath(projectPath, project.ProjectName);
+            if (testProjectPath == null)
+            {
+                return new ProjectActionResultDto
+                {
+                    Success = true,
+                    Message = "目标项目未包含自动测试工程，跳过 dotnet test。",
+                    Output = "未发现 *.GeneratedTests/*.Tests 测试工程。"
+                };
+            }
+
+            outputBuilder.AppendLine($"[1/1] 运行测试工程: {Path.GetFileName(testProjectPath)}");
+            await RunCommandAsync(
+                "dotnet",
+                $"test \"{testProjectPath}\"",
+                projectPath,
+                outputBuilder,
+                TimeSpan.FromMinutes(10));
+
+            return new ProjectActionResultDto
+            {
+                Success = true,
+                Message = "项目自动测试全部通过",
+                Output = outputBuilder.ToString()
+            };
+        }
+        catch (Exception ex)
+        {
+            return new ProjectActionResultDto
+            {
+                Success = false,
+                Message = $"项目自动测试失败: {ex.Message}",
+                Output = BuildDiagnosticFormatter.Summarize(outputBuilder.ToString(), ex.Message)
+            };
+        }
+    }
+
+    private static string? FindTestProjectPath(string projectPath, string projectName)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(projectPath, $"{projectName}.GeneratedTests"),
+            Path.Combine(projectPath, $"{projectName}.Tests")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (!Directory.Exists(candidate))
+                continue;
+
+            var csproj = Directory.GetFiles(candidate, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
+            if (csproj != null)
+                return csproj;
+        }
+
+        return null;
     }
 
     public async Task<ProjectUiEnhancementResultDto> EnhanceUiPageAsync(ProjectUiEnhancementDto input)

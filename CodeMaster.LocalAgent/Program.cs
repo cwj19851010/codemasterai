@@ -1,11 +1,17 @@
 using CodeMaster.LocalAgent.Models;
 using CodeMaster.LocalAgent.Services;
+using CodeMaster.Infrastructure.DynamicApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var configuredOptions = builder.Configuration.GetSection("LocalAgent").Get<LocalAgentOptions>() ?? new LocalAgentOptions();
 var runStdio = args.Any(arg => string.Equals(arg, "--stdio", StringComparison.OrdinalIgnoreCase)) ||
                string.Equals(configuredOptions.Mode, "stdio", StringComparison.OrdinalIgnoreCase);
+
+var optionalModules = CodeMasterModuleAssemblyLoader.LoadOptionalModules(
+    AppContext.BaseDirectory,
+    Environment.GetEnvironmentVariable("CODEMASTER_LOCAL_AGENT_MODULE_PATHS"));
+builder.Services.AddCodeMasterExtensions(optionalModules);
 
 if (runStdio)
 {
@@ -19,14 +25,31 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.AllowAnyOrigin()
-            .AllowAnyHeader()
-            .AllowAnyMethod();
+        policy.SetIsOriginAllowed(origin =>
+        {
+            if (string.Equals(origin, "tauri://localhost", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(origin, "http://tauri.localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return origin.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase) ||
+                   origin.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        });
     });
 });
 
 if (!runStdio)
 {
+    if (string.IsNullOrWhiteSpace(configuredOptions.ClientToken))
+    {
+        throw new InvalidOperationException(
+            "CodeMaster.LocalAgent HTTP mode requires a non-empty LocalAgent:ClientToken. " +
+            "Add \"LocalAgent\": { \"ClientToken\": \"<your-token>\" } to appsettings.json, " +
+            "and set the same token as the agent token in the CodeMaster client settings. " +
+            "Alternatively run in sidecar mode with --stdio.");
+    }
+
     builder.WebHost.UseUrls($"http://127.0.0.1:{configuredOptions.Port}");
 }
 

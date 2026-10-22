@@ -15,6 +15,7 @@ public class TemplateConfig
     public string Description { get; set; } = "";
     public string SourceRoot { get; set; } = ".";
     public IncludeConfig Include { get; set; } = new();
+    public List<string> Overlays { get; set; } = new();
     public ExcludeConfig Exclude { get; set; } = new();
 }
 
@@ -42,12 +43,33 @@ public class ExcludeConfig
 /// </summary>
 public class TemplateExportService
 {
+    private const string PrintingRuntimePathEnvironmentVariable = "CODEMASTER_PRINTING_RUNTIME_PATH";
+
+    /// <summary>
+    /// 记录"当前生效模板包"的文件名。WebApi 构建只拷贝这里指名的那个包，
+    /// 避免历史导出的包全部进入 bin/ 与 publish/。
+    /// </summary>
+    public const string CurrentTemplatePointerFileName = "latest-template.txt";
     private readonly string _solutionRoot;
+    private readonly IReadOnlyList<string>? _printingRuntimeSourceRoots;
 
     public TemplateExportService()
+        : this(
+            Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../..")),
+            null)
     {
-        // 获取解决方案根目录
-        _solutionRoot = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "../../../.."));
+    }
+
+    internal TemplateExportService(
+        string solutionRoot,
+        IEnumerable<string>? printingRuntimeSourceRoots)
+    {
+        _solutionRoot = Path.GetFullPath(solutionRoot);
+        _printingRuntimeSourceRoots = printingRuntimeSourceRoots?
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     /// <summary>
@@ -76,18 +98,27 @@ public class TemplateExportService
     /// </summary>
     public async Task<string> ExportCleanTemplateAsync(string? outputPath)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"CodeMaster_Template_{Guid.NewGuid():N}");
+        // Keep export scratch data inside the CodeMaster workspace. Some
+        // managed Windows environments deny the user TEMP directory, while
+        // the workspace is already the intended ownership boundary for
+        // CodeMaster-generated artifacts.
+        var tempRoot = Path.Combine(_solutionRoot, ".artifacts", "template-export");
+        Directory.CreateDirectory(tempRoot);
+        var tempDir = Path.Combine(tempRoot, $"CodeMaster_Template_{Guid.NewGuid():N}");
 
         try
         {
             // 1. 加载配置
             var config = LoadTemplateConfig();
+            var sourceDir = ResolveSourceDirectory(config);
 
             // 2. 创建临时目录
             Directory.CreateDirectory(tempDir);
 
             // 3. 复制配置中列出的文件
-            await CopyIncludedFilesAsync(_solutionRoot, tempDir, config);
+            await CopyIncludedFilesAsync(sourceDir, tempDir, config);
+            await ApplyConfiguredOverlaysAsync(tempDir, config);
+            await CopyGeneratedProjectRuntimeModulesAsync(tempDir);
 
             // 4. 在 Program.cs 中删除额外种子数据调用
             await RemoveAdditionalSeedCallAsync(tempDir);
@@ -96,15 +127,18 @@ public class TemplateExportService
             await RemoveCodeGenLinesAsync(tempDir);
             await RemovePlatformWebApiProjectReferencesAsync(tempDir);
             await RemoveFrontendMcpReferencesAsync(tempDir);
+            await RewriteFrontendViewModuleGlobAsync(tempDir);
             await RemoveFrontendAgentReferencesAsync(tempDir);
             await RemoveTauriBridgeLinesAsync(tempDir);
             await RewriteRequestWithoutClientBridgeAsync(tempDir);
             await RewriteSignalRWithoutClientBridgeAsync(tempDir);
             await RemoveLoginClientBridgeAsync(tempDir);
             await RemoveAgentDbContextReferencesAsync(tempDir);
+            await RemoveCodeGenDbContextReferencesAsync(tempDir);
 
             // 5. 复制 template.sln 并重命名
-            await CopySolutionTemplateAsync(tempDir);
+            await CopySolutionTemplateAsync(sourceDir, tempDir);
+            ValidateCleanTemplateDirectory(sourceDir, tempDir, config);
 
             // 6. 确定输出目录（如果未指定，使用默认的 Templates 目录）
             if (string.IsNullOrWhiteSpace(outputPath))
@@ -126,6 +160,11 @@ public class TemplateExportService
 
             ZipFile.CreateFromDirectory(tempDir, zipPath, CompressionLevel.Optimal, false);
 
+            // Record which package is the current one. The WebApi build only ships
+            // the package named here, so accumulated historical exports no longer
+            // land in bin/ and publish/ (they used to cost several GB per build).
+            await WriteCurrentTemplatePointerAsync(outputPath, Path.GetFileName(zipPath));
+
             return zipPath;
         }
         finally
@@ -139,10 +178,18 @@ public class TemplateExportService
     }
 
     /// <summary>
+    /// 写入"当前生效模板包"指针文件（内容是包文件名）。
+    /// </summary>
+    private static async Task WriteCurrentTemplatePointerAsync(string outputPath, string fileName)
+    {
+        var pointerPath = Path.Combine(outputPath, CurrentTemplatePointerFileName);
+        await File.WriteAllTextAsync(pointerPath, fileName, new UTF8Encoding(false));
+    }
+
+    /// <summary>
     /// 复制配置中列出的文件
     /// </summary>
-    private async Task CopyIncludedFilesAsync(string sourceDir, string destDir, TemplateConfig config)
-    {
+    private async Task CopyIncludedFilesAsync(string sourceDir, string destDir, TemplateConfig config)    {
         var allFiles = new List<string>();
         allFiles.AddRange(config.Include.Core);
         allFiles.AddRange(config.Include.Domain);
@@ -161,6 +208,11 @@ public class TemplateExportService
             {
                 // 处理通配符（支持 **/*.cs 和 *.cs）
                 var files = ExpandWildcard(sourceDir, relativePath);
+                if (files.Count == 0)
+                {
+                    throw new FileNotFoundException(
+                        $"模板 include 通配符没有匹配到文件: {relativePath} (sourceRoot: {sourceDir})");
+                }
                 foreach (var file in files)
                 {
                     var relPath = Path.GetRelativePath(sourceDir, file).Replace('\\', '/');
@@ -178,7 +230,14 @@ public class TemplateExportService
             {
                 // 精确路径
                 var sourceFile = Path.Combine(sourceDir, relativePath);
-                if (File.Exists(sourceFile) && !ShouldExcludeTemplateFile(relativePath, config))
+                if (!File.Exists(sourceFile))
+                {
+                    throw new FileNotFoundException(
+                        $"模板 include 文件不存在: {relativePath} (sourceRoot: {sourceDir})",
+                        sourceFile);
+                }
+
+                if (!ShouldExcludeTemplateFile(relativePath, config))
                 {
                     CopyFileWithDirectory(sourceFile, sourceDir, destDir);
                 }
@@ -187,6 +246,292 @@ public class TemplateExportService
 
         await Task.CompletedTask;
     }
+
+    private string ResolveSourceDirectory(TemplateConfig config)
+    {
+        var configuredRoot = string.IsNullOrWhiteSpace(config.SourceRoot)
+            ? "."
+            : config.SourceRoot.Trim();
+        var sourceDir = Path.GetFullPath(Path.IsPathRooted(configuredRoot)
+            ? configuredRoot
+            : Path.Combine(_solutionRoot, configuredRoot));
+        var solutionRoot = _solutionRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var solutionPrefix = solutionRoot + Path.DirectorySeparatorChar;
+        if (!sourceDir.Equals(solutionRoot, StringComparison.OrdinalIgnoreCase) &&
+            !sourceDir.StartsWith(solutionPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"模板 sourceRoot 必须位于解决方案目录内: {sourceDir}");
+        }
+
+        if (!Directory.Exists(sourceDir))
+            throw new DirectoryNotFoundException($"模板 sourceRoot 不存在: {sourceDir}");
+
+        return sourceDir;
+    }
+
+    private async Task ApplyConfiguredOverlaysAsync(string tempDir, TemplateConfig config)
+    {
+        var overlayRoot = Path.Combine(_solutionRoot, "Templates");
+        foreach (var relativePath in config.Overlays.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var normalized = relativePath.Replace('\\', '/').TrimStart('/');
+            if (normalized.Contains("../", StringComparison.Ordinal) || Path.IsPathRooted(relativePath))
+                throw new InvalidOperationException($"模板 overlay 路径无效: {relativePath}");
+
+            var sourcePath = Path.GetFullPath(Path.Combine(
+                overlayRoot,
+                normalized.Replace('/', Path.DirectorySeparatorChar)));
+            var overlayPrefix = Path.GetFullPath(overlayRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!sourcePath.StartsWith(overlayPrefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(sourcePath))
+                throw new FileNotFoundException($"模板 overlay 文件不存在: {relativePath}", sourcePath);
+
+            var targetPath = Path.Combine(tempDir, normalized.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.Copy(sourcePath, targetPath, overwrite: true);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private void ValidateCleanTemplateDirectory(string sourceDir, string tempDir, TemplateConfig config)
+    {
+        var allowedFiles = GetConfiguredIncludeFiles(sourceDir, config)
+            .Select(path => Path.GetRelativePath(sourceDir, path).Replace('\\', '/'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        allowedFiles.UnionWith(config.Overlays.Select(path => path.Replace('\\', '/').TrimStart('/')));
+        allowedFiles.Add("CodeMaster.sln");
+
+        var unexpectedFiles = Directory.EnumerateFiles(tempDir, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .Where(path => !path.StartsWith("modules/", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !allowedFiles.Contains(path))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (unexpectedFiles.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"纯净模板包含不在 template-config.json include 白名单中的文件: {string.Join(", ", unexpectedFiles)}");
+        }
+
+        var forbiddenDirectories = new[]
+        {
+            "CodeMaster.Agent",
+            "CodeMaster.CodeGenerator",
+            "CodeMaster.LocalAgent",
+            "CodeMaster.McpServer",
+            "CodeMaster.Private",
+            "CodeMaster.Vue/src-tauri"
+        };
+        var forbiddenPath = allowedFiles.FirstOrDefault(path => forbiddenDirectories.Any(directory =>
+            path.Equals(directory, StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase)));
+        if (forbiddenPath != null)
+            throw new InvalidOperationException($"纯净模板 include 包含平台专用文件: {forbiddenPath}");
+
+        RequireFile(tempDir, "modules/CM.Printing.Runtime.dll");
+        RequireFile(tempDir, "modules/CM.Printing.Migrations.dll");
+        RequireFile(tempDir, "CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs");
+        RequireFile(tempDir, "CodeMaster.Vue/src/views/codegen/print/preview.vue");
+        RequireFile(tempDir, "CodeMaster.Vue/src/views/codegen/printTemplate/index.vue");
+
+        var packageJson = ReadTemplateText(tempDir, "CodeMaster.Vue/package.json");
+        var dashboard = ReadTemplateText(tempDir, "CodeMaster.Vue/src/views/dashboard/index.vue");
+        var migratorProgram = ReadTemplateText(tempDir, "CodeMaster.Migrator/Program.cs");
+        var readme = ReadTemplateText(tempDir, "README.md");
+        var settings = ReadTemplateText(tempDir, "CodeMaster.WebApi/appsettings.json");
+        var developmentSettings = ReadTemplateText(tempDir, "CodeMaster.WebApi/appsettings.Development.json");
+
+        if (packageJson.Contains("@tauri-apps", StringComparison.OrdinalIgnoreCase) ||
+            packageJson.Contains("sidecar:publish", StringComparison.OrdinalIgnoreCase) ||
+            packageJson.Contains("build:full", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("纯净模板前端 package.json 包含平台客户端依赖或脚本。");
+        }
+
+        if (dashboard.Contains("/codegen/project", StringComparison.OrdinalIgnoreCase) ||
+            migratorProgram.Contains("Name = \"代码管理\"", StringComparison.Ordinal) ||
+            migratorProgram.Contains("new ProjectModule()", StringComparison.Ordinal) ||
+            migratorProgram.Contains("new ModuleEntityModule()", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("纯净模板包含 CodeMaster 平台代码管理入口。");
+        }
+
+        if (readme.Contains("MCP", StringComparison.OrdinalIgnoreCase) ||
+            readme.Contains("Tauri", StringComparison.OrdinalIgnoreCase) ||
+            readme.Contains("LocalAgent", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("纯净模板 README 包含 CodeMaster 平台客户端说明。");
+        }
+
+        var unsafeSettings = settings + Environment.NewLine + developmentSettings;
+        if (unsafeSettings.Contains("tauri.localhost", StringComparison.OrdinalIgnoreCase) ||
+            Regex.IsMatch(
+                unsafeSettings,
+                @"(?i)(Password|Pwd)\s*=\s*(?!your_mysql_password|CHANGE_ME|\*{3})[^;\""\r\n]+"))
+        {
+            throw new InvalidOperationException("纯净模板配置包含平台客户端地址或非占位数据库密码。");
+        }
+    }
+
+    private IReadOnlyList<string> GetConfiguredIncludeFiles(string sourceDir, TemplateConfig config)
+    {
+        var configuredPaths = new List<string>();
+        configuredPaths.AddRange(config.Include.Core);
+        configuredPaths.AddRange(config.Include.Domain);
+        configuredPaths.AddRange(config.Include.Application);
+        configuredPaths.AddRange(config.Include.Infrastructure);
+        configuredPaths.AddRange(config.Include.WebApi);
+        configuredPaths.AddRange(config.Include.Migrator);
+        configuredPaths.AddRange(config.Include.Frontend);
+        configuredPaths.AddRange(config.Include.Root);
+        configuredPaths.AddRange(config.Include.SourceGenerator);
+        configuredPaths.AddRange(config.Include.Tests);
+
+        return configuredPaths
+            .SelectMany(path => path.Contains('*')
+                ? ExpandWildcard(sourceDir, path)
+                : [Path.Combine(sourceDir, path)])
+            .Where(File.Exists)
+            .Where(path => !ShouldExcludeTemplateFile(
+                Path.GetRelativePath(sourceDir, path).Replace('\\', '/'),
+                config))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static void RequireFile(string root, string relativePath)
+    {
+        var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+            throw new InvalidOperationException($"纯净模板缺少必需文件: {relativePath}");
+    }
+
+    private static string ReadTemplateText(string root, string relativePath)
+    {
+        var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+    }
+
+    /// <summary>
+    /// Copies the independent printing runtime into the generated-project template.
+    /// Platform host assemblies are deliberately excluded because generated projects
+    /// rename their host projects and must remain independent from CodeMaster.
+    /// </summary>
+    internal async Task<int> CopyGeneratedProjectRuntimeModulesAsync(string tempDir)
+    {
+        var sourceRoots = ResolvePrintingRuntimeSourceRoots();
+        var runtimeFiles = CollectPrintingRuntimeFiles(sourceRoots);
+        if (!runtimeFiles.Any(file => string.Equals(file.RelativePath, "CM.Printing.Runtime.dll", StringComparison.OrdinalIgnoreCase)) ||
+            !runtimeFiles.Any(file => string.Equals(file.RelativePath, "CM.Printing.Migrations.dll", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                "生成模板缺少完整打印运行时。请先构建 CodeMaster.Private/Printing.LocalAgent，" +
+                $"或设置 {PrintingRuntimePathEnvironmentVariable} 指向包含 CM.Printing.Runtime.dll 与 CM.Printing.Migrations.dll 的目录。");
+        }
+
+        var modulesDirectory = Path.Combine(tempDir, "modules");
+        Directory.CreateDirectory(modulesDirectory);
+        foreach (var runtimeFile in runtimeFiles)
+        {
+            var targetPath = Path.Combine(
+                modulesDirectory,
+                runtimeFile.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            await using var source = File.OpenRead(runtimeFile.SourcePath);
+            await using var target = File.Create(targetPath);
+            await source.CopyToAsync(target);
+        }
+
+        return runtimeFiles.Count;
+    }
+
+    private IReadOnlyList<string> ResolvePrintingRuntimeSourceRoots()
+    {
+        if (_printingRuntimeSourceRoots is { Count: > 0 })
+            return _printingRuntimeSourceRoots;
+
+        var configuredPath = Environment.GetEnvironmentVariable(PrintingRuntimePathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return [Path.GetFullPath(configuredPath)];
+
+        var hostedBundle = Path.Combine(
+            AppContext.BaseDirectory,
+            "modules",
+            "CodeMaster.PrintingRuntime");
+        if (HasCompletePrintingRuntime([hostedBundle]))
+            return [hostedBundle];
+
+        var configurations = AppContext.BaseDirectory.Contains(
+                $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+                StringComparison.OrdinalIgnoreCase)
+            ? new[] { "Release", "Debug" }
+            : new[] { "Debug", "Release" };
+        foreach (var configuration in configurations)
+        {
+            var roots = new[]
+            {
+                Path.Combine(_solutionRoot, "CodeMaster.Private", "Printing.Runtime", "bin", configuration, "net10.0"),
+                Path.Combine(_solutionRoot, "CodeMaster.Private", "Printing.Migrations", "bin", configuration, "net10.0")
+            };
+            if (HasCompletePrintingRuntime(roots))
+                return roots;
+        }
+
+        return Array.Empty<string>();
+    }
+
+    private static bool HasCompletePrintingRuntime(IEnumerable<string> sourceRoots)
+    {
+        var existingRoots = sourceRoots.Where(Directory.Exists).ToArray();
+        return existingRoots.Any(root => File.Exists(Path.Combine(root, "CM.Printing.Runtime.dll"))) &&
+               existingRoots.Any(root => File.Exists(Path.Combine(root, "CM.Printing.Migrations.dll")));
+    }
+
+    private static IReadOnlyList<RuntimeTemplateFile> CollectPrintingRuntimeFiles(IEnumerable<string> sourceRoots)
+    {
+        var files = new Dictionary<string, RuntimeTemplateFile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sourceRoot in sourceRoots.Where(Directory.Exists))
+        {
+            foreach (var sourcePath in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(sourceRoot, sourcePath)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+                if (!IsPrintingRuntimeFile(relativePath))
+                    continue;
+
+                files[relativePath] = new RuntimeTemplateFile(sourcePath, relativePath);
+            }
+        }
+
+        return files.Values
+            .OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsPrintingRuntimeFile(string relativePath)
+    {
+        if (relativePath.StartsWith("runtimes/", StringComparison.OrdinalIgnoreCase) ||
+            relativePath.StartsWith(".playwright/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var fileName = Path.GetFileName(relativePath);
+        if (fileName.Equals("CM.Printing.Runtime.dll", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("CM.Printing.Runtime.deps.json", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("CM.Printing.Migrations.dll", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("CM.Printing.Migrations.deps.json", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Equals("playwright.ps1", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return Path.GetExtension(fileName).Equals(".dll", StringComparison.OrdinalIgnoreCase) &&
+               !fileName.StartsWith("CodeMaster.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record RuntimeTemplateFile(string SourcePath, string RelativePath);
 
     /// <summary>
     /// 展开通配符模式，支持 **/*.cs 和 *.cs
@@ -490,6 +835,61 @@ public class TemplateExportService
         await File.WriteAllLinesAsync(layoutPath, result, utf8WithoutBom);
     }
 
+    internal async Task RewriteFrontendViewModuleGlobAsync(string tempDir)
+    {
+        var routerPath = Path.Combine(tempDir, "CodeMaster.Vue", "src", "router", "index.js");
+        if (!File.Exists(routerPath))
+        {
+            return;
+        }
+
+        var utf8WithoutBom = new UTF8Encoding(false);
+        var content = await File.ReadAllTextAsync(routerPath, utf8WithoutBom);
+
+        content = Regex.Replace(
+            content,
+            @"^\s*import\s+\{\s*modules\s*\}\s+from\s+['""]@view-modules['""]\s*;?\s*$",
+            "const modules = import.meta.glob('../views/**/*.vue')",
+            RegexOptions.Multiline);
+
+        content = Regex.Replace(
+            content,
+            @"import\.meta\.glob\(\s*['""](?:@/views|/src/views)/\*\*/\*\.vue['""]\s*\)",
+            "import.meta.glob('../views/**/*.vue')");
+
+        content = Regex.Replace(
+            content,
+            @"let componentPath\s*=\s*`@/views/\$\{view\}\.vue`",
+            "let componentPath = `../views/${view}.vue`");
+        content = Regex.Replace(
+            content,
+            @"if\s*\(!modules\[`/src/views/\$\{view\}\.vue`\]\)",
+            "if (!modules[componentPath])");
+        content = Regex.Replace(
+            content,
+            @"componentPath\s*=\s*`@/views/\$\{view\}/index\.vue`",
+            "componentPath = `../views/${view}/index.vue`");
+        content = Regex.Replace(
+            content,
+            @"modules\[componentPath\.replace\('@',\s*'/src'\)\]",
+            "modules[componentPath]");
+
+        if (content.Contains("@view-modules", StringComparison.Ordinal) ||
+            Regex.IsMatch(content, @"import\.meta\.glob\(\s*['""]@/views/", RegexOptions.IgnoreCase) ||
+            content.Contains("modules[`/src/views/${view}.vue`]", StringComparison.Ordinal) ||
+            content.Contains("componentPath.replace('@', '/src')", StringComparison.Ordinal) ||
+            !Regex.IsMatch(
+                content,
+                @"const\s+modules\s*=\s*import\.meta\.glob\(\s*['""]\.\./views/\*\*/\*\.vue['""]\s*\)",
+                RegexOptions.IgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Unable to rewrite CodeMaster.Vue/src/router/index.js to a portable Vite view-module glob.");
+        }
+
+        await File.WriteAllTextAsync(routerPath, content, utf8WithoutBom);
+    }
+
     private static bool ContainsFrontendMcpReference(string value)
     {
         return value.Contains("mcp-token", StringComparison.OrdinalIgnoreCase) ||
@@ -499,23 +899,41 @@ public class TemplateExportService
     /// <summary>
     /// 在 Program.cs 中删除额外种子数据调用
     /// </summary>
-    private async Task RemoveTauriBridgeLinesAsync(string tempDir)
+    internal async Task RemoveTauriBridgeLinesAsync(string tempDir)
     {
         var mainPath = Path.Combine(tempDir, "CodeMaster.Vue", "src", "main.js");
-        if (!File.Exists(mainPath))
+        var layoutPath = Path.Combine(tempDir, "CodeMaster.Vue", "src", "layout", "index.vue");
+        if (!File.Exists(mainPath) && !File.Exists(layoutPath))
         {
             return;
         }
 
         var utf8WithoutBom = new UTF8Encoding(false);
-        var lines = await File.ReadAllLinesAsync(mainPath, utf8WithoutBom);
-        var result = lines
-            .Where(line =>
-                !line.Contains("tauriBridge", StringComparison.OrdinalIgnoreCase) &&
-                !line.Contains("installTauriBridge", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        if (File.Exists(mainPath))
+        {
+            var lines = await File.ReadAllLinesAsync(mainPath, utf8WithoutBom);
+            var result = lines
+                .Where(line =>
+                    !line.Contains("tauriBridge", StringComparison.OrdinalIgnoreCase) &&
+                    !line.Contains("installTauriBridge", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
-        await File.WriteAllLinesAsync(mainPath, result, utf8WithoutBom);
+            await File.WriteAllLinesAsync(mainPath, result, utf8WithoutBom);
+        }
+
+        if (File.Exists(layoutPath))
+        {
+            var lines = await File.ReadAllLinesAsync(layoutPath, utf8WithoutBom);
+            var result = lines
+                .Where(line =>
+                    !line.Contains("@/utils/tauriBridge", StringComparison.OrdinalIgnoreCase) &&
+                    !line.Contains("@/components/UpdateChecker", StringComparison.OrdinalIgnoreCase) &&
+                    !line.Contains("<update-checker", StringComparison.OrdinalIgnoreCase) &&
+                    !line.Contains("const isClient = isTauriRuntime()", StringComparison.Ordinal))
+                .ToList();
+
+            await File.WriteAllLinesAsync(layoutPath, result, utf8WithoutBom);
+        }
     }
 
     private async Task RewriteRequestWithoutClientBridgeAsync(string tempDir)
@@ -580,6 +998,48 @@ public class TemplateExportService
             }
 
             if (line.Contains("modelBuilder.Entity<Ai", StringComparison.Ordinal))
+            {
+                while (i < lines.Count && !lines[i].TrimEnd().EndsWith(';'))
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            result.Add(line);
+        }
+
+        await File.WriteAllLinesAsync(dbContextPath, result, utf8WithoutBom);
+    }
+
+    internal async Task RemoveCodeGenDbContextReferencesAsync(string tempDir)
+    {
+        var dbContextPath = Path.Combine(
+            tempDir,
+            "CodeMaster.Migrator",
+            "Persistence",
+            "EfCore",
+            "CodeMasterDbContext.cs");
+        if (!File.Exists(dbContextPath))
+        {
+            return;
+        }
+
+        var utf8WithoutBom = new UTF8Encoding(false);
+        var lines = (await File.ReadAllLinesAsync(dbContextPath, utf8WithoutBom)).ToList();
+        var result = new List<string>(lines.Count);
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (line.Contains(".Domain.Entities.CodeGen;", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (line.Contains("modelBuilder.Entity<ProjectModule>()", StringComparison.Ordinal) ||
+                line.Contains("modelBuilder.Entity<ModuleEntity>()", StringComparison.Ordinal))
             {
                 while (i < lines.Count && !lines[i].TrimEnd().EndsWith(';'))
                 {
@@ -707,16 +1167,8 @@ function getAccessToken() {
   return localStorage.getItem('token') || ''
 }
 
-function getSignalRBaseUrl() {
-  if (window.location.port === '5173') {
-    return 'http://localhost:5000'
-  }
-
-  return window.location.origin
-}
-
 function getHubUrl(path) {
-  return `${getSignalRBaseUrl()}${path}`
+  return path
 }
 
 class SignalRService {
@@ -847,9 +1299,9 @@ export const signalRService = new SignalRService()
     /// <summary>
     /// 复制 CodeMaster.sln 文件
     /// </summary>
-    private async Task CopySolutionTemplateAsync(string tempDir)
+    private async Task CopySolutionTemplateAsync(string sourceDir, string tempDir)
     {
-        var sourceSlnPath = Path.Combine(_solutionRoot, "CodeMaster.sln");
+        var sourceSlnPath = Path.Combine(sourceDir, "CodeMaster.sln");
         var destSlnPath = Path.Combine(tempDir, "CodeMaster.sln");
 
         if (File.Exists(sourceSlnPath))
@@ -874,6 +1326,7 @@ export const signalRService = new SignalRService()
             };
 
             content = RemoveSolutionProjects(content, projectsToRemove);
+            content = RemoveMissingSolutionProjects(content, tempDir);
 
             // 写入目标文件（使用 UTF-8 without BOM）
             await File.WriteAllTextAsync(destSlnPath, content, utf8WithoutBom);
@@ -921,5 +1374,27 @@ export const signalRService = new SignalRService()
         return string.Join(Environment.NewLine,
             keptLines.Where(line => !projectGuidsToRemove.Any(guid =>
                 line.Contains(guid, StringComparison.OrdinalIgnoreCase))));
+    }
+
+    internal static string RemoveMissingSolutionProjects(string content, string templateRoot)
+    {
+        var missingProjectNames = Regex.Matches(
+                content,
+                "^Project\\(\\\"\\{[^}]+\\}\\\"\\) = \\\"(?<name>[^\\\"]+)\\\", \\\"(?<path>[^\\\"]+\\.csproj)\\\", \\\"\\{[^}]+\\}\\\"",
+                RegexOptions.Multiline | RegexOptions.IgnoreCase)
+            .Where(match =>
+            {
+                var projectPath = match.Groups["path"].Value
+                    .Replace('\\', Path.DirectorySeparatorChar)
+                    .Replace('/', Path.DirectorySeparatorChar);
+                return !File.Exists(Path.Combine(templateRoot, projectPath));
+            })
+            .Select(match => match.Groups["name"].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return missingProjectNames.Count == 0
+            ? content
+            : RemoveSolutionProjects(content, missingProjectNames);
     }
 }

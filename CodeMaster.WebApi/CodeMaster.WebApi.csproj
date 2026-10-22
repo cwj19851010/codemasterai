@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <!-- Microsoft.Playwright (the private printing module) requires assembly version 6.0.0.0.
+         Keep the host on the same assembly version so optional modules can load in the
+         default AssemblyLoadContext without a Microsoft.Bcl.AsyncInterfaces mismatch. -->
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="6.0.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
     <PackageReference Include="System.ClientModel" Version="1.10.0" />
@@ -51,12 +55,31 @@
     <ProjectReference Include="..\CodeMaster.Infrastructure\CodeMaster.Infrastructure.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
+  <PropertyGroup>
+    <!-- Templates/latest-template.txt is written by TemplateExportService on every export.
+         Only the package it names is shipped; historical exports stay out of bin/ and publish/.
+         When the pointer is absent (fresh clone / older tree) fall back to every package. -->
+    <CodeMasterTemplatePointerPath>$(MSBuildThisFileDirectory)..\Templates\latest-template.txt</CodeMasterTemplatePointerPath>
+    <CodeMasterCurrentTemplateZip Condition="Exists('$(CodeMasterTemplatePointerPath)')">$([System.IO.File]::ReadAllText('$(CodeMasterTemplatePointerPath)').Trim())</CodeMasterCurrentTemplateZip>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(CodeMasterCurrentTemplateZip)' != ''">
+    <Content Include="..\Templates\$(CodeMasterCurrentTemplateZip)">
+      <Link>Templates\$(CodeMasterCurrentTemplateZip)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CodeMasterCurrentTemplateZip)' == ''">
     <Content Include="..\Templates\CodeMaster_Template_*.zip">
       <Link>Templates\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\CodeMaster.CodeGenerator\Templates\**\*.*">
       <Link>CodeMaster.CodeGenerator\Templates\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -70,6 +93,12 @@
     <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
   </Target>
 
+  <Target Name="ValidatePrintingModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\Printing\CodeMaster.Printing.csproj')">
+    <Error Text="CodeMaster Full edition requires the Printing private module." />
+  </Target>
+
   <Target Name="BuildUiCompositionModules"
           BeforeTargets="Publish"
           Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
@@ -79,6 +108,14 @@
     <MSBuild Projects="..\CodeMaster.Private\UiComposition.Agent\CodeMaster.UiComposition.Agent.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
+  </Target>
+
+  <Target Name="BuildPrintingModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\Printing\CodeMaster.Printing.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\Printing\CodeMaster.Printing.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)" />
   </Target>
 
   <Target Name="PublishUiCompositionModules"
@@ -93,6 +130,17 @@
     </ItemGroup>
     <MakeDir Directories="$(PublishDir)modules" />
     <Copy SourceFiles="@(UiModuleFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
+
+  <Target Name="PublishFullEditionModuleDirectory"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('$(TargetDir)modules')">
+    <ItemGroup>
+      <FullEditionModuleFiles Include="$(TargetDir)modules\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FullEditionModuleFiles)"
+          DestinationFiles="@(FullEditionModuleFiles->'$(PublishDir)modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="RemoveUiCompositionModulesFromPublicPublish"

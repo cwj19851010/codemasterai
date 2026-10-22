@@ -160,6 +160,11 @@ public interface IProjectService : IApplicationService
     Task<ProjectActionResultDto> BuildAsync(ProjectActionDto input);
 
     /// <summary>
+    /// 运行目标项目自动测试（dotnet test，仅测试工程）
+    /// </summary>
+    Task<ProjectActionResultDto> TestAsync(ProjectActionDto input);
+
+    /// <summary>
     /// Apply a controlled, project-aware redesign to the generated login or dashboard page.
     /// </summary>
     Task<ProjectUiEnhancementResultDto> EnhanceUiPageAsync(ProjectUiEnhancementDto input);
@@ -168,6 +173,16 @@ public interface IProjectService : IApplicationService
     /// 获取目标项目的字典类型列表
     /// </summary>
     Task<List<DictTypeOptionDto>> GetDictTypesAsync(long projectId);
+
+    /// <summary>
+    /// 查询目标项目数据库中的字典及明细。
+    /// </summary>
+    Task<List<ProjectDictionaryDto>> GetProjectDictionariesAsync(long projectId, ProjectDictionaryQueryDto query);
+
+    /// <summary>
+    /// 幂等新增或更新目标项目数据库中的字典及明细。
+    /// </summary>
+    Task<SaveProjectDictionaryResultDto> SaveProjectDictionaryAsync(long projectId, SaveProjectDictionaryDto input);
 
     /// <summary>
     /// 根据ID获取项目

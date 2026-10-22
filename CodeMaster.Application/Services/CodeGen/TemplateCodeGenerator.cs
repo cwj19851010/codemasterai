@@ -60,7 +60,9 @@ public class TemplateCodeGenerator
             EntityDescription = entity.Description ?? entity.Name,
             ModuleName = moduleName,
             ModuleNameLower = CodeGenNaming.ToJavaScriptIdentifier(moduleName),
-            ModuleNameAllLower = CodeGenNaming.ToPathSegment(moduleName)
+            ModuleNameAllLower = CodeGenNaming.ToPathSegment(moduleName),
+            ProjectId = entity.ProjectId.ToString(),
+            ModuleId = entity.ModuleId.ToString()
         };
 
         result.EntityName = entity.Name;
@@ -75,6 +77,8 @@ public class TemplateCodeGenerator
             ["moduleName"] = moduleName,
             ["moduleNameLower"] = CodeGenNaming.ToJavaScriptIdentifier(moduleName),
             ["moduleNameAllLower"] = CodeGenNaming.ToPathSegment(moduleName),
+            ["projectId"] = entity.ProjectId.ToString(),
+            ["moduleId"] = entity.ModuleId.ToString(),
         };
 
         var globalSection = ScriptBuilder.ScriptSection.FromMarker(DeserializeScript(mainTemplate.ScriptSections));

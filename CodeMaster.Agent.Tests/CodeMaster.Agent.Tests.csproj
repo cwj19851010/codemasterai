@@ -16,6 +16,13 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\CodeMaster.WebApi\Controllers\AgentController.cs" Link="Web\AgentController.cs" />
+    <Compile Include="..\CodeMaster.WebApi\Filters\GlobalOperationLogFilter.cs" Link="Web\GlobalOperationLogFilter.cs" />
   </ItemGroup>
 
   <ItemGroup>

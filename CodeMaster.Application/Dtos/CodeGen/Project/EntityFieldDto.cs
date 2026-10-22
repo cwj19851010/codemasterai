@@ -18,9 +18,14 @@ public class EntityFieldDto : EntityDto
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 字段描述（中文）
+    /// 字段显示名称（建议中文，用于表单和列表标签）
     /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 字段业务说明（供 Agent、文档和完整性分析使用）
+    /// </summary>
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// 是否系统字段
@@ -231,9 +236,14 @@ public class CreateEntityFieldDto
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 字段描述（中文）
+    /// 字段显示名称（建议中文，用于表单和列表标签）
     /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 字段业务说明（供 Agent、文档和完整性分析使用）
+    /// </summary>
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// 是否系统字段
@@ -411,9 +421,14 @@ public class UpdateEntityFieldDto
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// 字段描述（中文）
+    /// 字段显示名称（建议中文，用于表单和列表标签）
     /// </summary>
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 字段业务说明（供 Agent、文档和完整性分析使用）
+    /// </summary>
+    public string? BusinessDescription { get; set; }
 
     /// <summary>
     /// C# 数据类型

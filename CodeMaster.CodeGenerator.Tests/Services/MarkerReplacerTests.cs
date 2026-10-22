@@ -6,6 +6,36 @@ namespace CodeMaster.CodeGenerator.Tests.Services;
 public class MarkerReplacerTests
 {
     [Fact]
+    public void ReplaceGen_Resolves_Project_And_Module_Id_Markers()
+    {
+        // 打印按钮脚本依赖 [gen.projectId]/[gen.moduleId] 按范围查询打印模板
+        var ctx = new GenContext
+        {
+            ProjectId = "500",
+            ModuleId = "12"
+        };
+
+        var html = MarkerReplacer.ReplaceGen(
+            "openEntityPrintReport({ projectId: [gen.projectId], moduleId: [gen.moduleId] }, { id: target.id });", ctx);
+        Assert.Contains("projectId: 500", html);
+        Assert.Contains("moduleId: 12", html);
+
+        var script = ScriptMarkerReplacer.ReplaceGenInScript(
+            "openEntityPrintReport({ projectId: [gen.projectId], moduleId: [gen.moduleId] });", ctx);
+        Assert.Contains("projectId: 500", script);
+        Assert.Contains("moduleId: 12", script);
+    }
+
+    [Fact]
+    public void ReplaceGen_Leaves_Project_Module_Markers_Unresolved_When_Empty()
+    {
+        var ctx = new GenContext();
+        var html = MarkerReplacer.ReplaceGen("x = [gen.projectId]", ctx);
+        // 未设置时替换为空字符串（与其他 gen 标记行为一致）
+        Assert.Equal("x = ", html);
+    }
+
+    [Fact]
     public void ReplaceField_Expands_DisplayField_VFor_Nodes()
     {
         var template =

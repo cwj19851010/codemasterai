@@ -2,6 +2,35 @@
   "templateVersion": "1.0.0",
   "description": "CodeMaster 模板配置 - 精确文件列表",
   "sourceRoot": ".",
+  "overlays": [
+    ".gitignore",
+    "README.md",
+    "CodeMaster.WebApi/appsettings.json",
+    "CodeMaster.WebApi/appsettings.Development.json",
+    "CodeMaster.WebApi/CodeMaster.WebApi.csproj",
+    "CodeMaster.WebApi/Program.cs",
+    "CodeMaster.WebApi/Controllers/System/HealthController.cs",
+    "CodeMaster.WebApi/Hubs/OnlineUserHub.cs",
+    "CodeMaster.Infrastructure/DynamicApi/RuntimeWebModuleLoader.cs",
+    "CodeMaster.Migrator/CodeMaster.Migrator.csproj",
+    "CodeMaster.Migrator/appsettings.json",
+    "CodeMaster.Migrator/Program.cs",
+    "CodeMaster.Migrator/Persistence/EfCore/MigrationModuleCatalog.cs",
+    "CodeMaster.Migrator/Persistence/EfCore/RuntimeMigrationModuleLoader.cs",
+    "CodeMaster.Migrator/SeedData/Core/BaseDataModule.cs",
+    "CodeMaster.Migrator/SeedData/Core/GlobalTranslations.cs",
+    "CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs",
+    "CodeMaster.Vue/index.html",
+    "CodeMaster.Vue/package.json",
+    "CodeMaster.Vue/package-lock.json",
+    "CodeMaster.Vue/vite.config.js",
+    "CodeMaster.Vue/src/views/dashboard/index.vue",
+    "CodeMaster.Vue/src/api/codegen/printTemplate.js",
+    "CodeMaster.Vue/src/utils/printReport.js",
+    "CodeMaster.Vue/src/views/codegen/print/preview.vue",
+    "CodeMaster.Vue/src/views/codegen/printTemplate/index.vue",
+    "CodeMaster.Vue/src/views/codegen/printTemplate/detail.vue"
+  ],
   "templateSettings": {
     "excludedModules": [
       "ProjectModule",
@@ -58,6 +87,7 @@
 
       "CodeMaster.Core/DynamicApi/DynamicApiAttribute.cs",
       "CodeMaster.Core/DynamicApi/DynamicApiOptions.cs",
+      "CodeMaster.Core/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
 
       "CodeMaster.Core/Entities/DataPermissionEntityBase.cs",
       "CodeMaster.Core/Entities/EntityBase.cs",
@@ -67,6 +97,7 @@
       "CodeMaster.Core/Entities/IDataPermission.cs",
       "CodeMaster.Core/Entities/IDept.cs",
       "CodeMaster.Core/Entities/IBaseEntity.cs",
+      "CodeMaster.Core/Entities/IViewEntity.cs",
       "CodeMaster.Core/Entities/IEntity.cs",
       "CodeMaster.Core/Entities/ISoftDelete.cs",
       "CodeMaster.Core/Entities/ITenant.cs",
@@ -82,6 +113,8 @@
       "CodeMaster.Core/Exceptions/NotFoundException.cs",
 
       "CodeMaster.Core/Extensions/SoftDeleteExtensions.cs",
+
+      "CodeMaster.Core/Extensibility/ICodeMasterExtension.cs",
 
       "CodeMaster.Core/Filters/TenantFilter.cs",
 
@@ -129,7 +162,7 @@
     ],
     "application": [
       "CodeMaster.Application/CodeMaster.Application.csproj",
- 
+
       "CodeMaster.Application/Dtos/Auth/LoginDto.cs",
       "CodeMaster.Application/Dtos/Auth/RouteDto.cs",
       "CodeMaster.Application/Dtos/Auth/UserInfoDto.cs",
@@ -201,9 +234,12 @@
 
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiControllerConvention.cs",
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiControllerFeatureProvider.cs",
+      "CodeMaster.Infrastructure/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
+      "CodeMaster.Infrastructure/DynamicApi/CodeMasterModuleAssemblyLoader.cs",
       "CodeMaster.Infrastructure/DynamicApi/DynamicApiExtensions.cs",
 
       "CodeMaster.Infrastructure/Middleware/DataPermissionMiddleware.cs",
+      "CodeMaster.Infrastructure/Middleware/BusinessExceptionMiddleware.cs",
       "CodeMaster.Infrastructure/Middleware/RequestLoggingMiddleware.cs",
 
       "CodeMaster.Infrastructure/ModelBinding/QueryStringModelBinder.cs",
@@ -254,7 +290,6 @@
 
       "CodeMaster.WebApi/Filters/DynamicApiOperationFilter.cs",
       "CodeMaster.WebApi/Filters/GlobalOperationLogFilter.cs",
-      "CodeMaster.WebApi/Hubs/OnlineUserHub.cs",
       "CodeMaster.WebApi/Program.cs",
       "CodeMaster.WebApi/Properties/launchSettings.json",
       "CodeMaster.WebApi/Swagger/DynamicApiDescriptionProvider.cs",
@@ -265,12 +300,14 @@
       "CodeMaster.Migrator/Program.cs",
       "CodeMaster.Migrator/Persistence/EfCore/CodeMasterDbContext.cs",
       "CodeMaster.Migrator/Persistence/EfCore/CodeMasterDbContextFactory.cs",
+      "CodeMaster.Migrator/Persistence/EfCore/MigrationModuleCatalog.cs",
 
 
       "CodeMaster.Migrator/SeedData/Core/BaseDataModule.cs",
       "CodeMaster.Migrator/SeedData/Core/GlobalTranslations.cs",
       "CodeMaster.Migrator/SeedData/Core/LangModule.cs",
       "CodeMaster.Migrator/SeedData/Core/SystemDirectory.cs",
+
 
       "CodeMaster.Migrator/SeedData/Monitor/LoginLogModule.cs",
       "CodeMaster.Migrator/SeedData/Monitor/MonitorDirectory.cs",
@@ -348,7 +385,7 @@
       "CodeMaster.Vue/src/views/login/index.vue",
       "CodeMaster.Vue/src/views/monitor/loginlog/detail.vue",
       "CodeMaster.Vue/src/views/monitor/loginlog/index.vue",
-      "CodeMaster.Vue/src/views/monitor/online.vue",
+      "CodeMaster.Vue/src/views/monitor/online/index.vue",
       "CodeMaster.Vue/src/views/monitor/operlog/detail.vue",
       "CodeMaster.Vue/src/views/monitor/operlog/index.vue",
       "CodeMaster.Vue/src/views/monitor/task/add.vue",
@@ -412,15 +449,12 @@
       "CodeMaster.Vue/src/views/system/user/index.vue",
       "CodeMaster.Vue/index.html",
       "CodeMaster.Vue/package.json",
-      "CodeMaster.Vue/vite.config.js",
-      "CodeMaster.Vue/.env.development",
-      "CodeMaster.Vue/.env.production"
+      "CodeMaster.Vue/package-lock.json",
+      "CodeMaster.Vue/vite.config.js"
     ],
     "root": [
       ".gitignore",
-      "README.md",
-      "CodeMaster.CodeGenerator/Templates/**/*.scriban",
-      "CodeMaster.CodeGenerator/Templates/**/*.txt"
+      "README.md"
     ],
     "sourcegenerator": [
       "CodeMaster.SourceGenerator/CodeMaster.SourceGenerator.csproj",

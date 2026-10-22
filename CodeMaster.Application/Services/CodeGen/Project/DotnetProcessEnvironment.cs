@@ -35,12 +35,17 @@ public static class DotnetProcessEnvironment
 
     private static string GetWritableDotnetHome()
     {
+        var workspaceRoot = Environment.GetEnvironmentVariable("CODEMASTER_WORKSPACE_ROOT")
+            ?? TryFindCodeMasterWorkspaceRoot();
+        var workspaceHome = string.IsNullOrWhiteSpace(workspaceRoot)
+            ? null
+            : Path.Combine(workspaceRoot, ".artifacts", "dotnet-home");
         var candidates = new[]
         {
+            workspaceHome,
             Environment.GetEnvironmentVariable("DOTNET_CLI_HOME"),
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            Path.Combine(Path.GetTempPath(), "codemaster", "dotnet-home")
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
         };
 
         foreach (var candidate in candidates)
@@ -49,9 +54,22 @@ public static class DotnetProcessEnvironment
                 return Path.GetFullPath(candidate!);
         }
 
-        var fallback = Path.Combine(Path.GetTempPath(), "codemaster", "dotnet-home");
+        var fallback = workspaceHome ?? Path.Combine(AppContext.BaseDirectory, ".artifacts", "dotnet-home");
         Directory.CreateDirectory(fallback);
         return Path.GetFullPath(fallback);
+    }
+
+    private static string? TryFindCodeMasterWorkspaceRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "CodeMaster.sln")) ||
+                File.Exists(Path.Combine(directory.FullName, "AGENTS.md")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+        return null;
     }
 
     private static bool IsWritableDirectory(string? path)

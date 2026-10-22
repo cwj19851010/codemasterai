@@ -1,3 +1,4 @@
+using CodeMaster.Agent.Contracts;
 using CodeMaster.Agent.Tools;
 using Microsoft.Extensions.AI;
 
@@ -21,6 +22,7 @@ public static class AiTurnToolSelector
         CodeMasterAgentToolCatalog.GetProjectCompletionStatus,
         CodeMasterAgentToolCatalog.GetProjectWorkPlan,
         CodeMasterAgentToolCatalog.UpsertProjectWorkPlan,
+        CodeMasterAgentToolCatalog.SubmitBusinessPlan,
         CodeMasterAgentToolCatalog.SupersedeProjectWorkPlan
     };
 
@@ -32,8 +34,79 @@ public static class AiTurnToolSelector
         CodeMasterAgentToolCatalog.GetProjectCompletionStatus,
         CodeMasterAgentToolCatalog.GetProjectWorkTask,
         CodeMasterAgentToolCatalog.UpsertProjectWorkPlan,
+        CodeMasterAgentToolCatalog.SubmitBusinessPlan,
         CodeMasterAgentToolCatalog.SupersedeProjectWorkPlan
     };
+
+    /// <summary>
+    /// The complete read-only tool surface allowed in requirements mode. This is an
+    /// allowlist on purpose: a tool that is not listed here is code-mode only, so adding a
+    /// new mutating tool can never silently leak into the requirements page.
+    /// </summary>
+    private static readonly HashSet<string> RequirementsModeTools = new(StringComparer.Ordinal)
+    {
+        CodeMasterAgentToolCatalog.GetProjectSummary,
+        CodeMasterAgentToolCatalog.GetProjectStructure,
+        CodeMasterAgentToolCatalog.GetCodegenCatalog,
+        CodeMasterAgentToolCatalog.GetEntityBlueprint,
+        CodeMasterAgentToolCatalog.GetUiPageBlueprint,
+        CodeMasterAgentToolCatalog.GetProjectDictionaries,
+        CodeMasterAgentToolCatalog.GetProjectWorkPlan,
+        CodeMasterAgentToolCatalog.GetProjectCompletionStatus,
+        CodeMasterAgentToolCatalog.GetProjectWorkTask,
+        CodeMasterAgentToolCatalog.GetViewBuilderContext,
+        CodeMasterAgentToolCatalog.GetUiCompositionContext,
+        CodeMasterAgentToolCatalog.GetComplexPageContext
+    };
+
+    /// <summary>
+    /// Narrows the tool list to the current Agent mode.
+    /// Requirements mode exposes read-only tools only, which is what makes
+    /// "never generate code from the requirements page" a structural property rather than
+    /// a prompt instruction the model could ignore. Code mode exposes everything.
+    /// </summary>
+    public static IList<AITool> SelectForMode(IList<AITool> tools, string? agentMode)
+    {
+        if (AiAgentModes.IsCode(agentMode))
+            return tools;
+
+        return tools
+            .Where(tool => tool is AIFunction function && RequirementsModeTools.Contains(function.Name))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Server-side enforcement used before executing a tool on behalf of a local client.
+    /// The <c>AvailableTools</c> list sent to the client is advisory; this check is what
+    /// actually stops a local client from submitting a plan while the conversation is in
+    /// requirements mode.
+    /// </summary>
+    public static bool IsToolAllowedInMode(string? agentMode, string? toolName)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+            return false;
+
+        if (AiAgentModes.IsCode(agentMode))
+            return true;
+
+        return RequirementsModeTools.Contains(toolName.Trim());
+    }
+
+    /// <summary>
+    /// Computes the tool names a mode is allowed to use from an arbitrary candidate list.
+    /// Used when reporting the available tool surface to a local client.
+    /// </summary>
+    public static IReadOnlyCollection<string> AllowedToolNamesInMode(string? agentMode, IEnumerable<string> candidateNames)
+    {
+        var candidates = candidateNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal);
+
+        if (AiAgentModes.IsCode(agentMode))
+            return candidates.ToArray();
+
+        return candidates.Where(RequirementsModeTools.Contains).ToArray();
+    }
 
     public static bool IsWorkPlanRepairRequest(string? content)
     {

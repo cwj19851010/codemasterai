@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using CodeMaster.Agent.BusinessTemplates;
 using CodeMaster.Agent.Contracts;
 using CodeMaster.Agent.PlatformConstraints;
 using CodeMaster.Agent.Serialization;
@@ -62,15 +63,18 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
     private readonly IAiProjectWorkPlanService _workPlanService;
     private readonly IRepository<AiToolExecution> _executionRepository;
     private readonly IRepository<AiConversation> _conversationRepository;
+    private readonly IAgentEventStore _eventStore;
     private readonly ISqlSugarClient _db;
     private readonly IAiCurrentUser _currentUser;
     private readonly IAiAuthorizationService _authorizationService;
-    private readonly IAiProjectSourceRepairExecutor? _sourceRepairExecutor;
     private readonly IReadOnlyCollection<ICodeMasterAgentToolExtension> _toolExtensions;
     private readonly IReadOnlyDictionary<string, ICodeMasterAgentBatchOperationAdapter> _batchAdapters;
     private readonly IPlatformConstraintsProvider? _platformConstraints;
     private Func<AiChatStreamEvent, CancellationToken, ValueTask>? _publishAsync;
     private AiConversationReadCacheManager? _cacheManager;
+    private long _activeConversationId;
+    private long _activeProjectId;
+    private int _eventSequence;
 
     public CodeMasterAgentToolFactory(
         IProjectService projectService,
@@ -82,12 +86,12 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         IAiProjectWorkPlanService workPlanService,
         IRepository<AiToolExecution> executionRepository,
         IRepository<AiConversation> conversationRepository,
+        IAgentEventStore eventStore,
         ISqlSugarClient db,
         IAiCurrentUser currentUser,
         IAiAuthorizationService authorizationService,
         IEnumerable<ICodeMasterAgentToolExtension>? toolExtensions = null,
         IEnumerable<ICodeMasterAgentBatchOperationAdapter>? batchAdapters = null,
-        IAiProjectSourceRepairExecutor? sourceRepairExecutor = null,
         IPlatformConstraintsProvider? platformConstraints = null,
         AiConversationReadCacheManager? cacheManager = null)
     {
@@ -101,10 +105,10 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         _workPlanService = workPlanService;
         _executionRepository = executionRepository;
         _conversationRepository = conversationRepository;
+        _eventStore = eventStore;
         _db = db;
         _currentUser = currentUser;
         _authorizationService = authorizationService;
-        _sourceRepairExecutor = sourceRepairExecutor;
         _toolExtensions = toolExtensions?.ToArray() ?? Array.Empty<ICodeMasterAgentToolExtension>();
         _batchAdapters = (batchAdapters ?? []).ToDictionary(item => item.OperationKind, StringComparer.OrdinalIgnoreCase);
         _platformConstraints = platformConstraints;
@@ -113,6 +117,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
     public async Task<IList<AITool>> CreateToolsAsync(long conversationId, long projectId, string requestId, Func<AiChatStreamEvent, CancellationToken, ValueTask>? publishAsync = null)
     {
         _publishAsync = publishAsync;
+        _activeConversationId = conversationId;
+        _activeProjectId = projectId;
+        _eventSequence = 0;
         if (_cacheManager == null)
             return Array.Empty<AITool>();
         var readCache = _cacheManager.Acquire(conversationId, _blueprintService);
@@ -153,7 +160,10 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                 Relations = doc.Relations.RenderForPrompt(),
                 Controls = doc.Controls.RenderForPrompt(),
                 Workflow = doc.Workflow.RenderForPrompt(),
-                Generation = doc.Generation.RenderForPrompt()
+                Generation = doc.Generation.RenderForPrompt(),
+                // 业务规则目录与框架约束一起下发，模型在规划阶段就能读到跨实体约束，
+                // 不用等到执行阶段从工具结果里反推。
+                BusinessRules = BusinessRuleCatalog.All
             };
         }
 
@@ -301,59 +311,15 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             }, JsonOptions);
         }
 
-        async Task<AiProjectWorkPlanDto> RequireTestSourceRepairPlanAsync()
-        {
-            if (_sourceRepairExecutor == null)
-                throw new InvalidOperationException("CodeMaster source repair is not installed.");
-            var plan = await _workPlanService.GetActiveAsync(projectId)
-                ?? throw new InvalidOperationException("No active project work plan is available for source repair.");
-            if (!string.Equals(plan.RepairMode, "TestSourceRepair", StringComparison.OrdinalIgnoreCase) ||
-                !plan.RepairPolicy.CanInspectCodeMasterSource)
-                throw new InvalidOperationException("CodeMaster source inspection is available only in an authorized TestSourceRepair plan.");
-            return plan;
-        }
-
-        async Task<string> InspectCodeMasterSourceAsync(AiProjectSourceInspectionRequest input)
-        {
-            _ = await RequireTestSourceRepairPlanAsync();
-            var result = await _sourceRepairExecutor!.InspectAsync(input);
-            return JsonSerializer.Serialize(result, JsonOptions);
-        }
-
-        async Task<string> ApplyTestSourceRepairAsync(AiProjectSourceRepairRequest input)
-        {
-            var plan = await RequireTestSourceRepairPlanAsync();
-            if (input.PlanId != plan.Id)
-                throw new InvalidOperationException("The source repair plan id is stale.");
-            var task = plan.Stages.SelectMany(item => item.Tasks)
-                .FirstOrDefault(item => item.Id == input.TaskId);
-            var technicalFailure = task != null &&
-                (string.Equals(task.LastFailureCategory, "GeneratorOrTemplate", StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(task.LastFailureCategory, "GeneratedProjectIntegration", StringComparison.OrdinalIgnoreCase));
-            if (!technicalFailure || !string.Equals(task!.Status, "Failed", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(task.LastAttempt?.FailureSignature, input.FailureSignature?.Trim(), StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Source repair requires the current failed generator/integration signature from the task list.");
-            if (task.LastAttempt?.Repair != null)
-                throw new InvalidOperationException("This task attempt already contains one CodeMaster source repair. Retry or replan before another patch.");
-            input.ProjectId = projectId;
-            var result = await _sourceRepairExecutor!.ApplyAsync(input);
-            await _workPlanService.RecordSourceRepairAsync(input.PlanId, input.TaskId, result);
-            return JsonSerializer.Serialize(result, JsonOptions);
-        }
-
-
         /// <summary>
-        /// Local helper: after a plan is saved, optionally confirm it and start
-        /// executing the first ready batch. Both upsert_project_work_plan and
-        /// submit_business_plan paths call this so the auto-continue behavior
-        /// stays in lock-step (doc section 5.3).
+        /// Local helper: after a plan is saved, optionally confirm it and keep
+        /// executing server-side batches until the plan reaches a terminal
+        /// state or requires a client action. Both plan-save paths use the same
+        /// loop so a successful metadata task cannot strand the next stage.
         /// </summary>
         async Task<(AiProjectWorkPlanDto Plan, AiToolExecutionDto? Execution)> AutoApproveAndExecuteAsync(
             AiProjectWorkPlanDto plan)
         {
-            if (plan.ActiveBatchId.HasValue)
-                return (await _workPlanService.GetAsync(plan.Id), null);
-
             var conv = await _conversationRepository.GetQueryable()
                 .Where(item => item.Id == conversationId && item.UserId == _currentUser.UserId)
                 .FirstAsync();
@@ -361,29 +327,38 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             if (!preferences.ShouldAutoApprove)
                 return (plan, null);
 
-            if (plan.RequiresConfirmation)
-            {
-                plan = await _workPlanService.ConfirmAsync(
-                    plan.Id,
-                    new ConfirmAiProjectWorkPlanRequest
-                    {
-                        ExpectedStructureVersion = plan.StructureVersion,
-                        ContentHash = plan.ContentHash ?? string.Empty
-                    });
-            }
-
-            plan = await _workPlanService.GetAsync(plan.Id);
-            var hasReadyTask = plan.Stages
-                .SelectMany(stage => stage.Tasks)
-                .Any(task => string.Equals(task.Status, "Ready", StringComparison.OrdinalIgnoreCase));
             AiToolExecutionDto? execution = null;
-            if (!plan.ActiveBatchId.HasValue && hasReadyTask)
+            for (var iteration = 0; iteration < 64; iteration++)
             {
+                plan = await _workPlanService.GetAsync(plan.Id);
+                if (plan.RequiresConfirmation)
+                {
+                    plan = await _workPlanService.ConfirmAsync(
+                        plan.Id,
+                        new ConfirmAiProjectWorkPlanRequest
+                        {
+                            ExpectedStructureVersion = plan.StructureVersion,
+                            ContentHash = plan.ContentHash ?? string.Empty
+                        });
+                }
+
+                if (plan.Status is "Completed" or "Cancelled" or "Superseded" or "Failed" or "Blocked")
+                    break;
+
+                var hasReadyTask = plan.Stages
+                    .SelectMany(stage => stage.Tasks)
+                    .Any(task => string.Equals(task.Status, "Ready", StringComparison.OrdinalIgnoreCase));
+                if (!hasReadyTask && !plan.ActiveBatchId.HasValue)
+                    break;
+
                 execution = await ExecuteNextWorkPlanBatchAsync(
                     conversationId,
                     projectId,
                     plan.Id,
                     $"plan-auto-{plan.Id}-{DateTime.UtcNow.Ticks}");
+
+                if (execution == null || !string.Equals(execution.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                    break;
             }
             plan = await _workPlanService.GetAsync(plan.Id);
             InvalidateReadCaches();
@@ -723,13 +698,6 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                 "codegen:moduleEntity:delete",
                 "codegen:project:build");
         var canChangeDictionary = await _authorizationService.HasAnyAsync("codegen:project:update");
-        var sourceRepairPlan = _sourceRepairExecutor == null
-            ? null
-            : await _workPlanService.GetActiveAsync(projectId);
-        var canSourceRepair = sourceRepairPlan != null &&
-            string.Equals(sourceRepairPlan.RepairMode, "TestSourceRepair", StringComparison.OrdinalIgnoreCase) &&
-            sourceRepairPlan.RepairPolicy.CanInspectCodeMasterSource;
-
         var tools = CodeMasterAgentToolCatalog.Create(
             canRead,
             GetProjectSummaryAsync,
@@ -755,9 +723,6 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             upsertProjectWorkPlan: UpsertProjectWorkPlanAsync,
             includeWorkBatch: canChange,
             proposeProjectWorkBatch: ProposeProjectWorkBatchAsync,
-            includeSourceRepair: canSourceRepair,
-            inspectCodeMasterSource: InspectCodeMasterSourceAsync,
-            applyTestSourceRepair: ApplyTestSourceRepairAsync,
             supersedeProjectWorkPlan: SupersedeProjectWorkPlanAsync,
             includeSubmitBusinessPlan: canChange,
             submitBusinessPlan: SubmitBusinessPlanAsync);
@@ -1137,7 +1102,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             projectId,
             NormalizeAutomaticRequestId(requestId, planId, proposal.Batch.Id),
             "project_work_batch",
-            proposal);
+            proposal,
+            proposal.PlanId,
+            proposal.Batch.Id);
         await _workPlanService.AttachToolExecutionAsync(proposal.Batch.Id, execution.Id);
         return await ApproveAsync(execution.Id);
     }
@@ -1478,10 +1445,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         bool success = false,
         string? errorMessage = null)
     {
-        if (_publishAsync == null) return;
         var taskIndex = proposal.Operations.FindIndex(item => item.TaskId == operation.TaskId);
         var total = proposal.Operations.Count;
-        await _publishAsync(new AiChatStreamEvent
+        var streamEvent = new AiChatStreamEvent
         {
             Event = eventName,
             RequestId = requestId,
@@ -1494,7 +1460,10 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             ErrorMessage = errorMessage,
             PlanId = proposal.PlanId.ToString(),
             Message = $"{operation.TaskKey} {(eventName == "task_started" ? "started" : success ? "completed" : "failed")}"
-        }, CancellationToken.None);
+        };
+        await RecordAgentEventAsync(streamEvent);
+        if (_publishAsync != null)
+            await _publishAsync(streamEvent, CancellationToken.None);
     }
 
     private async Task<(string Key, string Title)?> ResolveBatchStageAsync(AiProjectWorkBatchProposal proposal)
@@ -1514,9 +1483,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         bool success = true,
         string? errorMessage = null)
     {
-        if (_publishAsync == null || stage == null)
+        if (stage == null)
             return;
-        await _publishAsync(new AiChatStreamEvent
+        var streamEvent = new AiChatStreamEvent
         {
             Event = eventName,
             RequestId = requestId,
@@ -1527,7 +1496,37 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             TaskSuccess = success,
             ErrorMessage = errorMessage,
             Message = $"{stage.Value.Title} {(eventName == "stage_started" ? "started" : success ? "completed" : "failed")}"
-        }, CancellationToken.None);
+        };
+        await RecordAgentEventAsync(streamEvent);
+        if (_publishAsync != null)
+            await _publishAsync(streamEvent, CancellationToken.None);
+    }
+
+    private async Task RecordAgentEventAsync(AiChatStreamEvent streamEvent)
+    {
+        if (_activeConversationId <= 0 || _activeProjectId <= 0)
+            return;
+        try
+        {
+            await _eventStore.RecordAsync(new AgentEventRecord(
+                ConversationId: _activeConversationId,
+                ProjectId: _activeProjectId,
+                UserId: _currentUser.UserId,
+                RequestId: streamEvent.RequestId,
+                EventType: streamEvent.Event,
+                Sequence: Interlocked.Increment(ref _eventSequence),
+                PlanId: long.TryParse(streamEvent.PlanId, out var planId) ? planId : null,
+                StageKey: streamEvent.ToolStage,
+                TaskKey: streamEvent.TaskKey,
+                Status: streamEvent.TaskSuccess == false ? "Failed" : streamEvent.Event,
+                ErrorCode: streamEvent.FailureKind,
+                Message: streamEvent.Message ?? streamEvent.ErrorMessage));
+        }
+        catch
+        {
+            // Event persistence is diagnostic infrastructure. A missing table
+            // or transient write failure must never break the actual work batch.
+        }
     }
 
     private async Task VerifyWorkBatchOperationAsync(
@@ -1686,7 +1685,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         long projectId,
         ProjectChangeSetProposal proposal)
     {
-        var repairs = new List<string>();
+        var repairs = RepairImplicitPrimaryKeys(proposal);
+        repairs.AddRange(ProjectChangeSetIssueRepairs.NormalizeOneToManyRelations(proposal));
+        repairs.AddRange(await DeferUnresolvedRelatedTargetsAsync(projectId, proposal));
 
         foreach (var entity in proposal.Entities)
         {
@@ -1720,6 +1721,52 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             update.IsTree = true;
             repairs.Add(
                 $"Converted {source.Name} hierarchy from an unsupported explicit self relation to IsTree=true with built-in ParentId/Ancestors fields.");
+        }
+
+        return repairs;
+    }
+
+    private async Task<List<string>> DeferUnresolvedRelatedTargetsAsync(
+        long projectId,
+        ProjectChangeSetProposal proposal)
+    {
+        var blueprint = await _blueprintService.GetProjectAsync(projectId);
+        return ProjectChangeSetIssueRepairs.DeferUnresolvedRelatedTargets(
+            proposal,
+            blueprint.Modules.SelectMany(module => module.Entities).Select(entity => entity.Name));
+    }
+
+    /// <summary>
+    /// Marks the conventional <c>Id</c> field as the primary key when an entity declares a primary
+    /// key but flags none of its fields.
+    /// <para>
+    /// The rest of the pipeline already assumes that implicit key: the change-set rules' field map
+    /// synthesises an <c>Id</c> primary key for exactly this shape
+    /// (see <c>GetCreatedFieldMap</c>). Only the validator insisted the field be flagged, so a
+    /// proposal the pipeline otherwise handles cleanly was rejected outright with
+    /// "contains an Id field that must be marked as the primary key". Making it explicit keeps the
+    /// stored proposal self-consistent instead of relying on that implicit fallback.
+    /// </para>
+    /// </summary>
+    internal static List<string> RepairImplicitPrimaryKeys(ProjectChangeSetProposal proposal)
+    {
+        var repairs = new List<string>();
+
+        foreach (var entity in proposal.Entities)
+        {
+            if (!entity.HasPrimaryKey)
+                continue;
+            if (entity.Fields.Any(field => field.IsPrimaryKey))
+                continue;
+
+            var idField = entity.Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, "Id", StringComparison.OrdinalIgnoreCase));
+            if (idField == null)
+                continue;
+
+            idField.IsPrimaryKey = true;
+            repairs.Add(
+                $"Marked {entity.Name}.{idField.Name} as the primary key; the entity declares a primary key but no field was flagged as one.");
         }
 
         return repairs;
@@ -1796,14 +1843,8 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                 : proposal.Page ?? string.Empty,
             ClientActions = { action }
         };
-        if (proposal.BuildAfterApply)
-        {
-            result.ClientActions.Add(new AiClientActionDto
-            {
-                Action = "buildProject",
-                ProjectId = execution.ProjectId
-            });
-        }
+        // No build action: building the generated project is a manual action the user triggers
+        // from the project page, so the Agent never queues it.
 
         return result;
     }
@@ -1842,7 +1883,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         long projectId,
         string requestId,
         string toolName,
-        T input)
+        T input,
+        long? workPlanId = null,
+        long? workBatchId = null)
     {
         var conversation = await _conversationRepository.GetQueryable()
             .Where(x => x.Id == conversationId &&
@@ -1866,7 +1909,21 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                            item.InputHash == inputHash)
             .FirstAsync();
         if (existing != null)
+        {
+            // Records written before the linkage was persisted have no back-reference, which would
+            // fail the batch validation on an idempotent retry. Back-fill rather than return stale.
+            if (existing.WorkPlanId != workPlanId || existing.WorkBatchId != workBatchId)
+            {
+                existing.WorkPlanId = workPlanId;
+                existing.WorkBatchId = workBatchId;
+                existing.UpdateUserId = _currentUser.UserId;
+                existing.UpdateBy = _currentUser.UserName;
+                existing.UpdateTime = DateTime.UtcNow;
+                await _executionRepository.UpdateAsync(existing);
+            }
+
             return existing;
+        }
 
         await EnsureSinglePendingApprovalAsync(conversationId, requestId, inputHash);
 
@@ -1880,6 +1937,13 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             RequestId = requestId,
             InputHash = inputHash,
             ToolName = toolName,
+            // The forward link lives on the batch (batch.tool_execution_id). The execution also has
+            // to carry its own back-reference: the work-batch executor validates that the approval
+            // record points at the batch it is approving, while AttachToolExecutionAsync only ever
+            // wrote the batch side. Without these the fields stay null and every batch fails with
+            // "The approval record is not linked to the proposed work batch."
+            WorkPlanId = workPlanId,
+            WorkBatchId = workBatchId,
             InputJson = BuildStoredPayloadSummary(toolName, rawInputJson.Length, inputPayload.Length),
             InputPayload = inputPayload,
             Status = "PendingApproval",

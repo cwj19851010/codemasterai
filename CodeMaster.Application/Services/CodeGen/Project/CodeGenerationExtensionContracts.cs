@@ -14,6 +14,55 @@ public interface IGenerationBundleContributor : ICodeMasterExtension
     Task ContributeAsync(long projectId, GenerationBundleDto bundle);
 }
 
+/// <summary>
+/// Project-level generation hook. Entity generation loops over entities; the pages a
+/// complex-page task creates live in their own metadata and are only marked NeedsSync
+/// when something they bind changes. Without this hook nothing in the entity loop ever
+/// touches them, so a project whose pages were created by the Agent materializes with
+/// its list/detail pages only and every business page stuck on NeedsSync.
+/// Implementations run after the entity pass and must not throw: a page that fails is
+/// recorded on the page row itself.
+/// </summary>
+public interface IProjectCodeGenerationObserver : ICodeMasterExtension
+{
+    Task ProjectGeneratedAsync(ProjectCodeGenerationContext context);
+}
+
+public sealed class ProjectCodeGenerationContext
+{
+    public long ProjectId { get; init; }
+    public bool Incremental { get; init; }
+
+    /// <summary>Aggregate roots the run actually regenerated; empty means nothing changed.</summary>
+    public IReadOnlyList<long> EntityIds { get; init; } = Array.Empty<long>();
+}
+
+/// <summary>
+/// Optional per-entity output that rides along with standard generation, for companion
+/// targets that mirror the main slice instead of replacing it (a second front end, a
+/// printable layout, and so on). Called after the entity's own slice has been written.
+/// </summary>
+/// <remarks>
+/// The core generator knows nothing about what an implementation produces: it only hands
+/// over the identity of the entity and whether this run was tree-only. Implementations own
+/// their own files, their own incremental logic and their own failure handling — throwing
+/// here must not be what turns a successful generation into a failed one, so the caller
+/// swallows exceptions and records nothing.
+/// </remarks>
+public interface IEntityCodeGenerationObserver : ICodeMasterExtension
+{
+    Task EntityGeneratedAsync(EntityCodeGenerationContext context);
+}
+
+public sealed class EntityCodeGenerationContext
+{
+    public long ProjectId { get; init; }
+    public long EntityId { get; init; }
+
+    /// <summary>Only the component tree was refreshed; no code was written for this entity.</summary>
+    public bool TreeOnly { get; init; }
+}
+
 public interface ILocalExecutionCompletionHandler : ICodeMasterExtension
 {
     bool CanHandle(string action);

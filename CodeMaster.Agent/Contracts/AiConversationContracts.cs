@@ -8,16 +8,40 @@ namespace CodeMaster.Agent.Contracts;
 
 public static class AiWorkflowModes
 {
+    public const string Default = "Default";
     public const string Standard = "Standard";
     public const string Minimal = "Minimal";
 
     public static string Normalize(string? value)
-        => string.Equals(value, Minimal, StringComparison.OrdinalIgnoreCase)
-            ? Minimal
-            : Standard;
+    {
+        if (string.Equals(value, Minimal, StringComparison.OrdinalIgnoreCase)) return Minimal;
+        if (string.Equals(value, Standard, StringComparison.OrdinalIgnoreCase)) return Standard;
+        return Default;
+    }
 
     public static bool ShouldAutoApprove(string? workflowMode, bool autoApproveApprovals)
-        => Normalize(workflowMode) == Minimal || autoApproveApprovals;
+        => Normalize(workflowMode) is Default or Minimal || autoApproveApprovals;
+}
+
+/// <summary>
+/// Explicit, user-selected Agent mode. The mode is chosen from the UI (requirements page
+/// or code page) and persisted with the conversation. It is never inferred from message
+/// keywords, because a user describing a requirement ("我想要做一个工程管理平台") must not
+/// be treated as authorization to generate code.
+/// </summary>
+public static class AiAgentModes
+{
+    /// <summary>Discussion and requirements design only. Read-only tools are exposed.</summary>
+    public const string Requirements = "Requirements";
+
+    /// <summary>Authorized generation. The full tool set is exposed.</summary>
+    public const string Code = "Code";
+
+    /// <summary>Unknown values fall back to the safe, non-destructive mode.</summary>
+    public static string Normalize(string? value)
+        => string.Equals(value, Code, StringComparison.OrdinalIgnoreCase) ? Code : Requirements;
+
+    public static bool IsCode(string? value) => Normalize(value) == Code;
 }
 
 public sealed class AiConversationDto
@@ -29,7 +53,14 @@ public sealed class AiConversationDto
     public string ProviderName { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
-    public string WorkflowMode { get; set; } = AiWorkflowModes.Standard;
+    public string WorkflowMode { get; set; } = AiWorkflowModes.Default;
+    public string AgentMode { get; set; } = AiAgentModes.Requirements;
+
+    /// <summary>
+    /// When the last successful generation ran in this conversation. The client uses it to
+    /// warn that a re-run would produce nothing new.
+    /// </summary>
+    public DateTime? LastGeneratedAt { get; set; }
     public bool AutoApproveApprovals { get; set; }
     public DateTime? LastMessageAt { get; set; }
     public DateTime CreateTime { get; set; }
@@ -41,13 +72,32 @@ public sealed class CreateAiConversationRequest
     public long ProviderId { get; set; }
     public string? Title { get; set; }
     public string? WorkflowMode { get; set; }
+    public string? AgentMode { get; set; }
     public bool AutoApproveApprovals { get; set; }
 }
 
 public sealed class UpdateAiConversationPreferencesRequest
 {
     public string? WorkflowMode { get; set; }
+    public string? AgentMode { get; set; }
     public bool AutoApproveApprovals { get; set; }
+}
+
+/// <summary>
+/// Result of switching the conversation mode. Mirrors the persisted conversation so the
+/// client never has to guess whether the switch succeeded.
+/// </summary>
+public sealed class SwitchAiAgentModeRequest
+{
+    public long ConversationId { get; set; }
+    public string AgentMode { get; set; } = AiAgentModes.Requirements;
+
+    /// <summary>
+    /// Set by the client after it has explicitly warned the user that no new requirement
+    /// arrived since the last generation. Without it the server refuses that switch, so the
+    /// guard cannot be bypassed by accident.
+    /// </summary>
+    public bool Force { get; set; }
 }
 
 public sealed class UpdateAiConversationProviderRequest
@@ -97,6 +147,17 @@ public sealed class AiChatStreamEvent
     public string? ToolStage { get; set; }
     public string? NextAction { get; set; }
     public int Attempt { get; set; }
+    public string? Stage { get; set; }
+    public int? Percent { get; set; }
+    public int? AddedEntities { get; set; }
+    public int? AddedViews { get; set; }
+    public int? TotalTasks { get; set; }
+    public string? PlanId { get; set; }
+    public string? TaskId { get; set; }
+    public string? TaskKey { get; set; }
+    public int? TaskIndex { get; set; }
+    public bool? TaskSuccess { get; set; }
+    public string? ErrorMessage { get; set; }
     public string? ExceptionType { get; set; }
     public string? ExceptionSource { get; set; }
     public string? FailureKind { get; set; }
@@ -117,6 +178,13 @@ public sealed class BeginLocalAiChatResult
     public List<AiMessageDto> Messages { get; set; } = new();
     public List<string> AvailableTools { get; set; } = new();
     public bool RequiresWorkPlan { get; set; }
+
+    /// <summary>
+    /// The mode this turn runs in. The local client must not call tools outside
+    /// <see cref="AvailableTools"/>; the server enforces the same rule when the client
+    /// reports a tool invocation.
+    /// </summary>
+    public string AgentMode { get; set; } = AiAgentModes.Requirements;
 }
 
 public sealed class InvokeLocalAiToolRequest
@@ -162,7 +230,7 @@ public sealed class AiToolExecutionDto
 
 public sealed class CreateModuleProposal
 {
-    [Description("Technical module name used as a C# namespace and generated directory. Required ASCII PascalCase, for example OrderManagement. Never put Chinese text here.")]
+    [Description("Technical module name used as a C# namespace and generated directory. Required ASCII PascalCase, for example OrderManagement. Never put Chinese text here. Must not repeat the project name: generated modules live under the project root namespace, so the same name shadows that root and breaks the build with CS0234.")]
     public string ModuleName { get; set; } = string.Empty;
     [Description("Human-readable module title. Chinese or another display language belongs here, for example 订单管理.")]
     public string ModuleDescription { get; set; } = string.Empty;
@@ -593,7 +661,8 @@ public sealed class UiPageEnhancementProposal
     [Description("Structured operations anchored by stable genId values. Supported types: SetTag, SetProp, RemoveProp, SetGrid, Move, Group.")]
     public List<ProjectUiNodeOperationDto> Operations { get; set; } = new();
 
-    public bool BuildAfterApply { get; set; } = true;
+    [Description("Ignored by the Agent. Building the generated project is a manual action the user triggers from the project page.")]
+    public bool BuildAfterApply { get; set; }
 }
 
 public sealed class UiPageEnhancementExecutionResult

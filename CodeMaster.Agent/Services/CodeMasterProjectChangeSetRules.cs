@@ -7,14 +7,17 @@ namespace CodeMaster.Agent.Services;
 
 public static class CodeMasterProjectChangeSetRules
 {
+    // The agent only writes metadata. Code generation is a manual action the user triggers from
+    // the project page, so a change set can never ask for generation any more.
     private static readonly HashSet<string> GenerationModes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "None", "Incremental", "Full"
+        "None"
     };
 
     public static ProjectChangeSetValidationResult Validate(
         AiProjectBlueprintDto blueprint,
-        ProjectChangeSetProposal proposal)
+        ProjectChangeSetProposal proposal,
+        string? projectName = null)
     {
         var result = new ProjectChangeSetValidationResult
         {
@@ -25,11 +28,15 @@ public static class CodeMasterProjectChangeSetRules
             UpdatedModuleCount = proposal.ModuleUpdates.Count,
             UpdatedEntityCount = proposal.EntityUpdates.Count,
             DeletedModuleCount = proposal.DeleteModuleIds.Count,
-            DeletedEntityCount = proposal.DeleteEntityIds.Count
+            DeletedEntityCount = proposal.DeleteEntityIds.Count,
+            DictionaryCount = proposal.Dictionaries.Count
         };
 
         if (string.IsNullOrWhiteSpace(proposal.Summary))
             result.Errors.Add("A change set summary is required.");
+
+        foreach (var dictionary in proposal.Dictionaries)
+            ValidateDictionary(dictionary, result);
 
         if (!HasChanges(proposal))
         {
@@ -38,9 +45,7 @@ public static class CodeMasterProjectChangeSetRules
         }
 
         if (!GenerationModes.Contains(proposal.GenerationMode))
-            result.Errors.Add("GenerationMode must be None, Incremental, or Full.");
-        if (proposal.BuildAfterGeneration && string.Equals(proposal.GenerationMode, "None", StringComparison.OrdinalIgnoreCase))
-            result.Errors.Add("BuildAfterGeneration requires Incremental or Full generation mode.");
+            result.Errors.Add("GenerationMode must be None. The agent only writes metadata; code generation is a manual action the user triggers from the project page.");
 
         var existingModulesById = blueprint.Modules.ToDictionary(x => x.Id);
         var existingModulesByName = blueprint.Modules.ToDictionary(x => x.ModuleName, StringComparer.OrdinalIgnoreCase);
@@ -69,8 +74,8 @@ public static class CodeMasterProjectChangeSetRules
             .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
 
-        ValidateCreatedModules(proposal, existingModulesByName, result);
-        ValidateModuleUpdates(proposal, existingModulesById, existingModulesByName, proposedModules, deletedModuleIds, result);
+        ValidateCreatedModules(proposal, existingModulesByName, projectName, result);
+        ValidateModuleUpdates(proposal, existingModulesById, existingModulesByName, proposedModules, deletedModuleIds, projectName, result);
 
         foreach (var entity in proposal.Entities)
         {
@@ -111,6 +116,7 @@ public static class CodeMasterProjectChangeSetRules
     {
         return proposal.Modules.Count > 0
             || proposal.Entities.Count > 0
+            || proposal.Dictionaries.Count > 0
             || proposal.ModuleUpdates.Count > 0
             || proposal.EntityUpdates.Count > 0
             || proposal.DeleteModuleIds.Count > 0
@@ -118,9 +124,94 @@ public static class CodeMasterProjectChangeSetRules
             || !string.Equals(proposal.GenerationMode, "None", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static void ValidateDictionary(
+        ProjectDictionaryChangeProposal dictionary,
+        ProjectChangeSetValidationResult result)
+    {
+        var prefix = string.IsNullOrWhiteSpace(dictionary.DictType)
+            ? "Dictionary"
+            : $"Dictionary '{dictionary.DictType.Trim()}'";
+
+        if (string.IsNullOrWhiteSpace(dictionary.Summary))
+            result.Errors.Add($"{prefix} requires a summary.");
+        if (dictionary.TenantId < 0)
+            result.Errors.Add($"{prefix} tenant id cannot be negative.");
+        if (string.IsNullOrWhiteSpace(dictionary.DictType))
+            result.Errors.Add("Every dictionary change requires a dictionary code.");
+        if (string.IsNullOrWhiteSpace(dictionary.DictName))
+            result.Errors.Add($"{prefix} requires a dictionary name.");
+
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in dictionary.Items)
+        {
+            if (string.IsNullOrWhiteSpace(item.Label) || string.IsNullOrWhiteSpace(item.Value))
+            {
+                result.Errors.Add($"Every entry in {prefix} requires a label and value.");
+                continue;
+            }
+
+            if (!values.Add(item.Value.Trim()))
+                result.Errors.Add($"{prefix} contains duplicate entry value '{item.Value.Trim()}'.");
+
+            if (item.IsDefault is not (null or 0 or 1))
+                result.Errors.Add($"{prefix} entry '{item.Value.Trim()}' IsDefault must be 0 or 1.");
+            if (item.Status is not (null or 0 or 1))
+                result.Errors.Add($"{prefix} entry '{item.Value.Trim()}' Status must be 0 or 1.");
+        }
+
+        if (dictionary.Status is not (null or 0 or 1))
+            result.Errors.Add($"{prefix} Status must be 0 or 1.");
+    }
+
+    /// <summary>
+    /// Rejects a module name that reuses the project's root namespace.
+    /// </summary>
+    /// <remarks>
+    /// A module becomes a namespace segment: its entities land in
+    /// <c>{Project}.Domain.Entities.{Module}</c> and its services in
+    /// <c>{Project}.{Layer}.{Module}</c>. When the module is named exactly like the project, the
+    /// generated files end up declaring the leaf <c>{Module}</c> under the same root that owns the
+    /// leaf <c>{Project}</c>, and the framework files stop resolving their own absolute references
+    /// such as <c>{Project}.Domain</c> — the compiler reports them as CS0234
+    /// ("the type or namespace name 'X' does not exist in the namespace 'Y'"). That is not a repair
+    /// problem: once the metadata exists, every generation of that project is broken and the only
+    /// way out is a rename plus a re-init. So the name is rejected here, before anything is written.
+    /// The check is deliberately cheap and case-insensitive — C# namespace members are distinct
+    /// from the root declaration, but the tooling (project folders, solution names, route paths)
+    /// treats them as the same identifier.
+    /// </remarks>
+    /// <param name="moduleName">The module name the change set wants to use.</param>
+    /// <param name="projectName">The project name reported by the server.</param>
+    /// <param name="currentModuleName">
+    /// When the name comes from a rename, the module's current name; null for a newly created module.
+    /// </param>
+    private static void ValidateProjectRootNamespaceReuse(
+        string moduleName,
+        string? projectName,
+        ProjectChangeSetValidationResult result,
+        string? currentModuleName = null)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName) || string.IsNullOrWhiteSpace(projectName))
+            return;
+
+        if (!string.Equals(moduleName.Trim(), projectName.Trim(), StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var name = moduleName.Trim();
+        var subject = string.IsNullOrWhiteSpace(currentModuleName)
+            ? $"Module '{name}' cannot reuse the project name '{projectName}'"
+            : $"Module '{currentModuleName}' cannot be renamed to '{name}', which reuses the project name '{projectName}'";
+        result.Errors.Add(
+            $"{subject}: generated module namespaces would collide with the project root namespace, " +
+            $"and the framework files then fail to resolve '{projectName}.Domain' and its siblings during the build (CS0234). " +
+            $"Choose a module name that describes its business area instead, for example " +
+            $"'{name}Module' or '{name}Business'.");
+    }
+
     private static void ValidateCreatedModules(
         ProjectChangeSetProposal proposal,
         IReadOnlyDictionary<string, AiModuleBlueprintDto> existingModulesByName,
+        string? projectName,
         ProjectChangeSetValidationResult result)
     {
         foreach (var module in proposal.Modules)
@@ -134,8 +225,29 @@ public static class CodeMasterProjectChangeSetRules
             if (!CSharpModuleNameValidator.IsValid(module.ModuleName))
                 result.Errors.Add(CSharpModuleNameValidator.Requirement);
 
-            if (existingModulesByName.ContainsKey(module.ModuleName.Trim()))
+            var moduleName = module.ModuleName.Trim();
+            if (existingModulesByName.ContainsKey(moduleName))
                 result.Errors.Add($"Module '{module.ModuleName}' already exists in this project.");
+
+            ValidateProjectRootNamespaceReuse(moduleName, projectName, result);
+
+            if (ProjectModuleOrderPolicy.IsReportsModule(
+                    module.ModuleName,
+                    module.ModuleDescription,
+                    module.RoutePath))
+            {
+                if (module.OrderNum != ProjectModuleOrderPolicy.ReportsDirectoryOrder)
+                {
+                    result.Warnings.Add(
+                        $"Reports module '{module.ModuleName}' will use the reserved terminal menu order 9999.");
+                }
+            }
+            else if (!ProjectModuleOrderPolicy.IsBusinessDirectoryOrder(module.OrderNum))
+            {
+                result.Warnings.Add(
+                    $"Module '{module.ModuleName}' requested reserved or missing menu order '{module.OrderNum}'; " +
+                    "the service will allocate an available order in 3..9998.");
+            }
         }
     }
 
@@ -145,6 +257,7 @@ public static class CodeMasterProjectChangeSetRules
         IReadOnlyDictionary<string, AiModuleBlueprintDto> existingModulesByName,
         IReadOnlyDictionary<string, CreateModuleProposal> proposedModules,
         IReadOnlySet<long> deletedModuleIds,
+        string? projectName,
         ProjectChangeSetValidationResult result)
     {
         foreach (var update in proposal.ModuleUpdates)
@@ -171,11 +284,30 @@ public static class CodeMasterProjectChangeSetRules
                         result.Errors.Add($"Module name '{name}' already belongs to another module.");
                     if (proposedModules.ContainsKey(name))
                         result.Errors.Add($"Module name '{name}' is also used by a newly proposed module.");
+                    ValidateProjectRootNamespaceReuse(name, projectName, result, current.ModuleName);
                 }
             }
 
             if (update.ModuleDescription != null && string.IsNullOrWhiteSpace(update.ModuleDescription))
                 result.Errors.Add($"Module '{current.ModuleName}' cannot have an empty description.");
+
+            var finalModuleName = update.ModuleName ?? current.ModuleName;
+            var finalModuleDescription = update.ModuleDescription ?? current.ModuleDescription;
+            var finalRoutePath = update.RoutePath ?? current.RoutePath;
+            if (ProjectModuleOrderPolicy.IsReportsModule(finalModuleName, finalModuleDescription, finalRoutePath))
+            {
+                if (update.OrderNum.HasValue && update.OrderNum.Value != ProjectModuleOrderPolicy.ReportsDirectoryOrder)
+                {
+                    result.Warnings.Add(
+                        $"Reports module '{finalModuleName}' will use the reserved terminal menu order 9999.");
+                }
+            }
+            else if (update.OrderNum.HasValue && !ProjectModuleOrderPolicy.IsBusinessDirectoryOrder(update.OrderNum.Value))
+            {
+                result.Warnings.Add(
+                    $"Module '{current.ModuleName}' requested reserved menu order '{update.OrderNum.Value}'; " +
+                    "the service will allocate an available order in 3..9998.");
+            }
         }
     }
 
@@ -197,6 +329,8 @@ public static class CodeMasterProjectChangeSetRules
             result.Errors.Add("Every new entity requires a name and description.");
             return;
         }
+
+        ValidateDescriptionLengths($"Entity '{entity.Name}'", entity.Description, entity.BusinessDescription, result);
 
         if (existingEntitiesByName.ContainsKey(entity.Name.Trim()))
             result.Errors.Add($"Entity '{entity.Name}' already exists in this project.");
@@ -273,6 +407,7 @@ public static class CodeMasterProjectChangeSetRules
 
         if (update.Description != null && string.IsNullOrWhiteSpace(update.Description))
             result.Errors.Add($"Entity '{current.Name}' cannot have an empty description.");
+        ValidateDescriptionLengths($"Entity '{current.Name}'", update.Description, update.BusinessDescription, result);
 
         var fieldsById = current.Fields.ToDictionary(x => x.Id);
         var deletedFieldIds = update.DeletedFieldIds.ToHashSet();
@@ -332,6 +467,25 @@ public static class CodeMasterProjectChangeSetRules
 
         var sourceFields = BuildUpdatedFieldMap(current, update);
         ValidateUpdatedPrimaryKey(current, update, sourceFields, result);
+        // 模型经常把"已经存在的遗留关系"当成新建关系再提一次，只是换了个显示名
+        // （例如把 'Supplier.PurchaseContract' 写成 '供应商合同'）。
+        // 判成整批无效代价太大：一条等价关系会让整个变更集作废，后面所有任务都被阻塞。
+        // 等价关系直接认作"已满足"——从提案里摘掉，既不报错，也不会再插一条重复行。
+        // 与视图消费实体那边"认领孤儿"是同一处理哲学：能确定是自己人，就接管，不要拒绝。
+        for (var index = update.NewRelations.Count - 1; index >= 0; index--)
+        {
+            var relation = update.NewRelations[index];
+            var duplicateLegacy = current.LegacyOneToManyRelations.FirstOrDefault(existing =>
+                IsEquivalentLegacyRelation(relation, existing));
+            if (duplicateLegacy == null)
+                continue;
+
+            update.NewRelations.RemoveAt(index);
+            result.Warnings.Add(
+                $"Relation '{current.Name}.{relation.RelationName}' already exists as the legacy one-to-many relation " +
+                $"'{current.Name}.{duplicateLegacy.ChildEntityName}' ({duplicateLegacy.MasterField} -> {duplicateLegacy.ChildForeignKey}); the duplicate was dropped instead of failing the change set.");
+        }
+
         foreach (var relation in update.NewRelations)
         {
             ValidateRelation(
@@ -389,6 +543,8 @@ public static class CodeMasterProjectChangeSetRules
             return;
         }
 
+        ValidateDescriptionLengths($"Field '{entityName}.{field.Name}'", field.Description, field.BusinessDescription, result);
+
         ValidateControl(entityName, field.Name, field.FormControlType, controls, result);
         ValidateRelatedControl(
             entityName,
@@ -428,6 +584,7 @@ public static class CodeMasterProjectChangeSetRules
             result.Errors.Add($"Field '{entityName}.{current.Name}' cannot be renamed to an empty name.");
         if (field.Description != null && string.IsNullOrWhiteSpace(field.Description))
             result.Errors.Add($"Field '{entityName}.{current.Name}' cannot have an empty description.");
+        ValidateDescriptionLengths($"Field '{entityName}.{current.Name}'", field.Description, field.BusinessDescription, result);
         if (field.DataType != null && string.IsNullOrWhiteSpace(field.DataType))
             result.Errors.Add($"Field '{entityName}.{current.Name}' cannot have an empty data type.");
         if (field.FormControlType != null && string.IsNullOrWhiteSpace(field.FormControlType))
@@ -462,6 +619,25 @@ public static class CodeMasterProjectChangeSetRules
             result);
     }
 
+    private static void ValidateDescriptionLengths(
+        string subject,
+        string? displayName,
+        string? businessDescription,
+        ProjectChangeSetValidationResult result)
+    {
+        if (displayName?.Trim().Length > MetadataDescriptionNormalizer.DisplayNameMaxLength)
+        {
+            result.Errors.Add(
+                $"{subject} description must be a short display title of at most {MetadataDescriptionNormalizer.DisplayNameMaxLength} characters. Put detailed semantics in BusinessDescription.");
+        }
+
+        if (businessDescription?.Trim().Length > MetadataDescriptionNormalizer.BusinessDescriptionMaxLength)
+        {
+            result.Errors.Add(
+                $"{subject} BusinessDescription cannot exceed {MetadataDescriptionNormalizer.BusinessDescriptionMaxLength} characters.");
+        }
+    }
+
     private static void ValidateControl(
         string entityName,
         string fieldName,
@@ -472,7 +648,7 @@ public static class CodeMasterProjectChangeSetRules
         if (string.IsNullOrWhiteSpace(control))
             result.Errors.Add($"Field '{entityName}.{fieldName}' requires a form control type.");
         else if (controls.Count > 0 && !controls.Contains(control))
-            result.Errors.Add($"Field '{entityName}.{fieldName}' uses unknown control '{control}'. Read the control catalog from get_project_structure first.");
+            result.Errors.Add($"Field '{entityName}.{fieldName}' uses unknown control '{control}'. Read the control catalog from get_codegen_catalog first.");
     }
 
     private static void ValidateRelatedControl(
@@ -670,6 +846,21 @@ public static class CodeMasterProjectChangeSetRules
             result.Errors.Add($"Relation '{entityName}.{relation.RelationName}' must reference an existing or proposed target entity.");
         else
         {
+            var isSelfReference = string.Equals(
+                    entityName.Trim(),
+                    relation.TargetEntityName?.Trim(),
+                    StringComparison.OrdinalIgnoreCase) ||
+                (relation.TargetEntityId > 0 &&
+                 existingEntitiesByName.TryGetValue(entityName.Trim(), out var sourceEntity) &&
+                 sourceEntity.Id == relation.TargetEntityId);
+            if (isSelfReference)
+            {
+                result.Errors.Add(
+                    $"Relation '{entityName}.{relation.RelationName}' targets the same entity. " +
+                    "Use IsTree=true with the built-in ParentId/Ancestors fields for hierarchy; do not create an explicit self-reference relation.");
+                return;
+            }
+
             if (target.Value.Id > 0 && deletedEntityIds.Contains(target.Value.Id))
                 result.Errors.Add($"Relation '{entityName}.{relation.RelationName}' cannot target an entity deleted by the same change set.");
             if (!target.Value.Fields.TryGetValue(relation.TargetField, out var targetField))
@@ -871,6 +1062,28 @@ public static class CodeMasterProjectChangeSetRules
             DeleteBehavior = update.DeleteBehavior ?? current.DeleteBehavior,
             OrderNum = update.OrderNum ?? current.OrderNum
         };
+    }
+
+    internal static bool IsEquivalentLegacyRelation(
+        CreateEntityRelationProposal candidate,
+        AiLegacyOneToManyBlueprintDto legacy)
+    {
+        if (!Enum.TryParse<EntityRelationCardinality>(candidate.Cardinality, true, out var cardinality) ||
+            !Enum.TryParse<EntityRelationOwnership>(candidate.Ownership, true, out var ownership) ||
+            cardinality != EntityRelationCardinality.OneToMany ||
+            ownership != EntityRelationOwnership.Owned)
+        {
+            return false;
+        }
+
+        var sameTarget = candidate.TargetEntityId > 0
+            ? candidate.TargetEntityId == legacy.ChildEntityId
+            : !string.IsNullOrWhiteSpace(candidate.TargetEntityName) &&
+              string.Equals(candidate.TargetEntityName.Trim(), legacy.ChildEntityName.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        return sameTarget &&
+               string.Equals(candidate.SourceField.Trim(), legacy.MasterField.Trim(), StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(candidate.TargetField.Trim(), legacy.ChildForeignKey.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static (IReadOnlyDictionary<string, RelationFieldInfo> Fields, long Id)? ResolveTarget(

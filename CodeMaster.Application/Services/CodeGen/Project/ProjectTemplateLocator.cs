@@ -8,11 +8,18 @@ internal static class ProjectTemplateLocator
     private const string TemplatePattern = "CodeMaster_Template_*.zip";
     private static readonly string[] RequiredFrameworkEntries =
     [
+        "CodeMaster.Core/Extensibility/ICodeMasterExtension.cs",
+        "CodeMaster.Core/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
         "CodeMaster.Core/Entities/ITree.cs",
+        "CodeMaster.Core/Entities/IViewEntity.cs",
         "CodeMaster.Core/Services/IQueryApplicationService.cs",
         "CodeMaster.Core/Services/IReadOnlyTreeApplicationService.cs",
         "CodeMaster.Application/Services/QueryApplicationService.cs",
-        "CodeMaster.Application/Services/ReadOnlyTreeApplicationService.cs"
+        "CodeMaster.Application/Services/ReadOnlyTreeApplicationService.cs",
+        "CodeMaster.Infrastructure/DynamicApi/ApplicationServiceCapabilityCatalog.cs",
+        "CodeMaster.Infrastructure/DynamicApi/CodeMasterModuleAssemblyLoader.cs",
+        "CodeMaster.SourceGenerator/DbContextGenerator.cs",
+        "CodeMaster.Migrator/Persistence/EfCore/MigrationModuleCatalog.cs"
     ];
 
     public static string ResolveWritableDirectory(
@@ -139,6 +146,29 @@ internal static class ProjectTemplateLocator
                     $"Template ZIP is missing required framework files: {string.Join(", ", missingFrameworkEntries)}");
             }
 
+            var sourceGeneratorEntry = archive.Entries.First(entry =>
+                NormalizeZipEntryName(entry.FullName).Equals(
+                    "CodeMaster.SourceGenerator/DbContextGenerator.cs",
+                    StringComparison.OrdinalIgnoreCase));
+            var sourceGeneratorContent = ReadEntryContent(sourceGeneratorEntry);
+            if (!sourceGeneratorContent.Contains("IViewEntity", StringComparison.Ordinal) ||
+                !sourceGeneratorContent.Contains("builder.ToView", StringComparison.Ordinal))
+            {
+                throw new Exception(
+                    "Template ZIP does not support generated database-view entities in the EF source generator.");
+            }
+
+            var migratorProgramEntry = archive.Entries.FirstOrDefault(entry =>
+                NormalizeZipEntryName(entry.FullName).Equals(
+                    "CodeMaster.Migrator/Program.cs",
+                    StringComparison.OrdinalIgnoreCase));
+            if (migratorProgramEntry == null ||
+                !ReadEntryContent(migratorProgramEntry).Contains("ApplyModuleMigrationsAsync", StringComparison.Ordinal))
+            {
+                throw new Exception(
+                    "Template ZIP does not execute generated migration modules after EF migrations.");
+            }
+
             var migrationEntry = entries.FirstOrDefault(IsHistoricalMigrationEntry);
             if (migrationEntry != null)
             {
@@ -182,6 +212,35 @@ internal static class ProjectTemplateLocator
                     "without the excluded MCP page. Generate a new clean template before initializing a project.");
             }
 
+            var frontendRouterEntry = archive.Entries.FirstOrDefault(entry =>
+                NormalizeZipEntryName(entry.FullName).Equals(
+                    "CodeMaster.Vue/src/router/index.js",
+                    StringComparison.OrdinalIgnoreCase));
+            if (frontendRouterEntry != null)
+            {
+                var routerContent = ReadEntryContent(frontendRouterEntry);
+                var hasPortableViewGlob = Regex.IsMatch(
+                    routerContent,
+                    @"const\s+modules\s*=\s*import\.meta\.glob\(\s*['""]\.\./views/\*\*/\*\.vue['""]\s*\)",
+                    RegexOptions.IgnoreCase);
+                var hasPortableViewLookup =
+                    routerContent.Contains("let componentPath = `../views/${view}.vue`", StringComparison.Ordinal) &&
+                    routerContent.Contains("const matchedModule = modules[componentPath]", StringComparison.Ordinal);
+                var hasNonPortableViewLoader =
+                    routerContent.Contains("@view-modules", StringComparison.Ordinal) ||
+                    Regex.IsMatch(
+                        routerContent,
+                        @"import\.meta\.glob\(\s*['""](?:@/views|/src/views)/",
+                        RegexOptions.IgnoreCase);
+
+                if (hasNonPortableViewLoader || !hasPortableViewGlob || !hasPortableViewLookup)
+                {
+                    throw new Exception(
+                        "Template ZIP contains a non-portable frontend view module loader. " +
+                        "Generated projects must use the relative import.meta.glob('../views/**/*.vue') loader.");
+                }
+            }
+
             var frontendAgentEntry = archive.Entries.FirstOrDefault(entry =>
             {
                 var entryName = NormalizeZipEntryName(entry.FullName);
@@ -214,6 +273,15 @@ internal static class ProjectTemplateLocator
                 {
                     throw new Exception(
                         "Template ZIP contains CodeMaster Agent entity references in the generated-project Migrator. " +
+                        "Generate a new clean template before initializing a project.");
+                }
+
+                if (dbContextContent.Contains("Domain.Entities.CodeGen", StringComparison.Ordinal) ||
+                    dbContextContent.Contains("modelBuilder.Entity<ProjectModule>", StringComparison.Ordinal) ||
+                    dbContextContent.Contains("modelBuilder.Entity<ModuleEntity>", StringComparison.Ordinal))
+                {
+                    throw new Exception(
+                        "Template ZIP contains CodeMaster CodeGen entity references in the generated-project Migrator. " +
                         "Generate a new clean template before initializing a project.");
                 }
             }

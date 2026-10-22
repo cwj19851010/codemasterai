@@ -28,10 +28,11 @@ public class BusinessPlanCompilerTests
             progressAsync: evt => { progressEvents.Add(evt); return Task.CompletedTask; },
             cancellationToken: CancellationToken.None);
 
-        Assert.Equal(7, result.CompiledPlan.Stages.Count);
+        Assert.Equal(6, result.CompiledPlan.Stages.Count);
         var totalTasks = result.CompiledPlan.Stages.Sum(s => s.Tasks.Count);
-        Assert.Equal(7, totalTasks);
-        Assert.Equal(10, progressEvents.Count);
+        Assert.Equal(6, totalTasks);
+        Assert.Equal(9, progressEvents.Count);
+        Assert.DoesNotContain(result.CompiledPlan.Stages, s => s.StageKey == "GenerateCode");
 
         foreach (var stage in result.CompiledPlan.Stages)
         {
@@ -46,7 +47,7 @@ public class BusinessPlanCompilerTests
         Assert.Contains("setup_engineeringmanagement_relations", result.CompiledPlan.Stages.Find(s => s.StageKey == "FieldControls")!.Tasks[0].DependsOnTaskKeys);
         Assert.Contains("setup_engineeringmanagement_controls", result.CompiledPlan.Stages.Find(s => s.StageKey == "ComplexPages")!.Tasks[0].DependsOnTaskKeys);
         Assert.Contains("setup_engineeringmanagement_pages", result.CompiledPlan.Stages.Find(s => s.StageKey == "ConsistencyCheck")!.Tasks[0].DependsOnTaskKeys);
-        Assert.Contains("consistency_check", result.CompiledPlan.Stages.Find(s => s.StageKey == "GenerateCode")!.Tasks[0].DependsOnTaskKeys);
+        Assert.Equal("ConsistencyCheck", result.CompiledPlan.Stages[^1].StageKey);
     }
 
     [Fact]
@@ -56,9 +57,43 @@ public class BusinessPlanCompilerTests
         var result = await BusinessPlanCompiler.CompileAsync(
             def, 1L, 1L, new FakeBlueprintService(),
             progressAsync: null, cancellationToken: default);
-        Assert.Equal(7, result.CompiledPlan.Stages.Count);
+        Assert.Equal(6, result.CompiledPlan.Stages.Count);
         Assert.NotNull(result.CompiledPlan.Stages.Single(s => s.StageKey == "ConsistencyCheck").Tasks.Single().Definition);
-        Assert.NotNull(result.CompiledPlan.Stages.Single(s => s.StageKey == "GenerateCode").Tasks.Single().Definition);
+        Assert.DoesNotContain(result.CompiledPlan.Stages, s => s.StageKey == "GenerateCode");
+    }
+
+    [Fact]
+    public async Task Compiler_emits_executable_relation_control_page_definitions()
+    {
+        var result = await BusinessPlanCompiler.CompileAsync(
+            BuildEngineeringManagementDefinition(), 1L, 2L, new FakeBlueprintService());
+
+        var relations = result.CompiledPlan.Stages.Single(s => s.StageKey == "Relations").Tasks.Single();
+        Assert.Equal("project_change_set", relations.OperationKind);
+        Assert.True(relations.Definition!.Value.GetProperty("relations").GetArrayLength() > 0);
+
+        var controls = result.CompiledPlan.Stages.Single(s => s.StageKey == "FieldControls").Tasks.Single();
+        Assert.Equal("project_change_set", controls.OperationKind);
+        Assert.True(controls.Definition!.Value.GetProperty("controlBindings").GetArrayLength() > 0);
+
+        var pages = result.CompiledPlan.Stages.Single(s => s.StageKey == "ComplexPages").Tasks.Single();
+        Assert.Equal("complex_page", pages.OperationKind);
+        Assert.Equal("EngineeringManagement", pages.Definition!.Value.GetProperty("definition").GetProperty("moduleName").GetString());
+    }
+
+    [Fact]
+    public async Task Compiler_preserves_existing_pascal_case_names()
+    {
+        var result = await BusinessPlanCompiler.CompileAsync(
+            BuildEngineeringManagementDefinition(), 1L, 2L, new FakeBlueprintService());
+        var definition = result.CompiledPlan.Stages.Single(s => s.StageKey == "EntityFields")
+            .Tasks.Single().Definition!.Value;
+        var names = definition.GetProperty("entities").EnumerateArray()
+            .Select(item => item.GetProperty("name").GetString())
+            .ToList();
+        Assert.Contains("EngineeringProject", names);
+        Assert.Contains("PurchaseContract", names);
+        Assert.DoesNotContain("Engineeringproject", names);
     }
 
     [Fact]
@@ -112,7 +147,7 @@ public class BusinessPlanCompilerTests
             PropertyNameCaseInsensitive = true
         });
 
-        Assert.Equal(7, deserialized!.Stages.Count);
+        Assert.Equal(6, deserialized!.Stages.Count);
 
         var allTasks = deserialized.Stages.SelectMany(s => s.Tasks).ToList();
         Assert.True(allTasks.Count > 0);
@@ -124,7 +159,7 @@ public class BusinessPlanCompilerTests
         Assert.Contains(relationsKey, deserialized.Stages.Find(s => s.StageKey == "FieldControls")!.Tasks[0].DependsOnTaskKeys);
         Assert.Contains("setup_engineeringmanagement_controls", deserialized.Stages.Find(s => s.StageKey == "ComplexPages")!.Tasks[0].DependsOnTaskKeys);
         Assert.Contains("setup_engineeringmanagement_pages", deserialized.Stages.Find(s => s.StageKey == "ConsistencyCheck")!.Tasks[0].DependsOnTaskKeys);
-        Assert.Contains("consistency_check", deserialized.Stages.Find(s => s.StageKey == "GenerateCode")!.Tasks[0].DependsOnTaskKeys);
+        Assert.DoesNotContain(deserialized.Stages, s => s.StageKey == "GenerateCode");
     }
 
     static BusinessPlanDefinition BuildEngineeringManagementDefinition()

@@ -106,11 +106,13 @@ copyFileSync(sourcePath, outputPath)
 if (target.extension !== '.exe') {
   chmodSync(outputPath, 0o755)
 }
+copyPublishedModules()
 
 console.log(`Published Tauri sidecar: ${outputPath}`)
 
 function prepareBundledResources() {
   rmSync(resourcesDir, { recursive: true, force: true })
+  mkdirSync(join(resourcesDir, 'modules'), { recursive: true })
   copyLegacyCodeGeneratorTemplates()
 }
 
@@ -123,4 +125,13 @@ function copyLegacyCodeGeneratorTemplates() {
   const targetTemplatesDir = join(resourcesDir, 'CodeMaster.CodeGenerator', 'Templates')
   mkdirSync(targetTemplatesDir, { recursive: true })
   cpSync(sourceTemplatesDir, targetTemplatesDir, { recursive: true })
+}
+
+function copyPublishedModules() {
+  const sourceModulesDir = join(publishDir, 'modules')
+  if (!existsSync(sourceModulesDir)) return
+
+  const targetModulesDir = join(resourcesDir, 'modules')
+  mkdirSync(targetModulesDir, { recursive: true })
+  cpSync(sourceModulesDir, targetModulesDir, { recursive: true })
 }

@@ -20,4 +20,63 @@
     </Content>
   </ItemGroup>
 
+  <Target Name="ValidateFullEditionLocalAgentModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
+    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+  </Target>
+
+  <Target Name="ValidatePrintingLocalAgentModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj')">
+    <Error Text="CodeMaster Full edition requires the CodeMaster.Private printing LocalAgent module." />
+  </Target>
+
+  <Target Name="BuildUiCompositionLocalAgentModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;SelfContained;PublishSingleFile;PublishTrimmed;IncludeNativeLibrariesForSelfExtract" />
+  </Target>
+
+  <Target Name="BuildPrintingLocalAgentModule"
+          BeforeTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj')">
+    <MSBuild Projects="..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;SelfContained;PublishSingleFile;PublishTrimmed;IncludeNativeLibrariesForSelfExtract" />
+  </Target>
+
+  <Target Name="PublishUiCompositionLocalAgentModule"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
+    <ItemGroup>
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.LocalAgent.dll" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(UiCompositionLocalAgentFiles)" DestinationFolder="$(PublishDir)modules" />
+  </Target>
+
+  <Target Name="PublishPrintingLocalAgentModule"
+          AfterTargets="Publish"
+          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\Printing.LocalAgent\CodeMaster.Printing.LocalAgent.csproj')">
+    <ItemGroup>
+      <PrintingLocalAgentFiles Include="..\CodeMaster.Private\Printing.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.Printing.LocalAgent.dll" />
+      <PrintingRuntimeBundleFiles Include="$(TargetDir)modules\CodeMaster.PrintingRuntime\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(PrintingLocalAgentFiles)" DestinationFolder="$(PublishDir)modules" />
+    <MakeDir Directories="$(PublishDir)modules\CodeMaster.PrintingRuntime" />
+    <Copy SourceFiles="@(PrintingRuntimeBundleFiles)"
+          DestinationFiles="@(PrintingRuntimeBundleFiles->'$(PublishDir)modules\CodeMaster.PrintingRuntime\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

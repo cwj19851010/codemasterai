@@ -5,17 +5,17 @@ namespace CodeMaster.Agent.Services;
 
 /// <summary>
 /// In-memory IAgentEventStore. Used by tests and as the no-op fallback when
-/// no persistence is registered. Maintains idempotency via (request_id, sequence).
+/// no persistence is registered. Maintains idempotency per conversation stream.
 /// </summary>
 internal sealed class InMemoryAgentEventStore : IAgentEventStore
 {
-    private readonly ConcurrentDictionary<(string requestId, int sequence), AiAgentEvent> _events =
-        new ConcurrentDictionary<(string, int), AiAgentEvent>();
+    private readonly ConcurrentDictionary<(long conversationId, string requestId, int sequence), AiAgentEvent> _events =
+        new ConcurrentDictionary<(long, string, int), AiAgentEvent>();
 
     public Task<AiAgentEvent> RecordAsync(AgentEventRecord record, CancellationToken cancellationToken = default)
     {
         var sequence = record.Sequence ?? 0;
-        var key = (record.RequestId, sequence);
+        var key = (record.ConversationId, record.RequestId, sequence);
         if (sequence > 0 && _events.ContainsKey(key))
             return Task.FromResult(_events[key]);
 
@@ -37,7 +37,7 @@ internal sealed class InMemoryAgentEventStore : IAgentEventStore
             ErrorCode = record.ErrorCode,
             Message = record.Message,
             PayloadJson = record.PayloadJson,
-            TenantId = 0,
+            TenantId = record.TenantId ?? 0,
         };
         _events[key] = entity;
         return Task.FromResult(entity);

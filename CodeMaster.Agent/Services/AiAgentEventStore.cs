@@ -32,7 +32,8 @@ public sealed record AgentEventRecord(
     string? Status = null,
     string? ErrorCode = null,
     string? Message = null,
-    string? PayloadJson = null);
+    string? PayloadJson = null,
+    long? TenantId = null);
 
 internal sealed class SqlAgentEventStore : IAgentEventStore
 {
@@ -54,12 +55,17 @@ internal sealed class SqlAgentEventStore : IAgentEventStore
         AgentEventRecord record,
         CancellationToken cancellationToken = default)
     {
-        // Idempotency: skip insert if the (request_id, sequence) tuple already exists.
+        // Idempotency is scoped to the conversation/request stream. A request id
+        // is normally globally unique, but the persistence contract must not
+        // accidentally collapse two conversations that reused the same id.
         var sequence = record.Sequence ?? 0;
         if (sequence > 0)
         {
             var existing = await _db.Queryable<AiAgentEvent>()
-                .FirstAsync(e => e.RequestId == record.RequestId && e.Sequence == sequence);
+                .FirstAsync(e => e.TenantId == (record.TenantId ?? _tenantContext.CurrentTenantId ?? 0) &&
+                                 e.ConversationId == record.ConversationId &&
+                                 e.RequestId == record.RequestId &&
+                                 e.Sequence == sequence);
             if (existing != null) return existing;
         }
 
@@ -80,7 +86,7 @@ internal sealed class SqlAgentEventStore : IAgentEventStore
             ErrorCode = record.ErrorCode,
             Message = Truncate(record.Message, 2000),
             PayloadJson = Truncate(record.PayloadJson, 4000),
-            TenantId = _tenantContext.CurrentTenantId ?? 0,
+            TenantId = record.TenantId ?? _tenantContext.CurrentTenantId ?? 0,
         };
         entity.Id = await _repo.InsertAsync(entity);
         return entity;

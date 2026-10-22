@@ -23,6 +23,10 @@ public partial class CodeMasterDbContext : DbContext
         // 全局配置snake_case列名（已由 Source Generator 处理，这里保留作为后备）
         foreach (var entity in modelBuilder.Model.GetEntityTypes())
         {
+            // View entities already have a ToView mapping from the source generator.
+            if (entity.ClrType.GetInterfaces().Any(item => item.Name == "IViewEntity"))
+                continue;
+
             // 表名转snake_case
             var tableName = entity.GetTableName();
             if (!string.IsNullOrEmpty(tableName))

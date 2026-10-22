@@ -228,6 +228,40 @@ public class ProjectController : ControllerBase
     }
 
     /// <summary>
+    /// Query dictionaries stored in the generated project's database.
+    /// </summary>
+    [HttpGet("{id}/dictionaries")]
+    public async Task<IActionResult> GetDictionaries(long id, [FromQuery] ProjectDictionaryQueryDto query)
+    {
+        try
+        {
+            var result = await _projectService.GetProjectDictionariesAsync(id, query);
+            return Ok(ApiResponse<List<ProjectDictionaryDto>>.Success(result));
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(ApiResponse<List<ProjectDictionaryDto>>.Fail(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Idempotently create or update a dictionary in the generated project's database.
+    /// </summary>
+    [HttpPost("{id}/dictionaries")]
+    public async Task<IActionResult> SaveDictionary(long id, [FromBody] SaveProjectDictionaryDto dto)
+    {
+        try
+        {
+            var result = await _projectService.SaveProjectDictionaryAsync(id, dto);
+            return Ok(ApiResponse<SaveProjectDictionaryResultDto>.Success(result, "字典保存成功"));
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(ApiResponse<SaveProjectDictionaryResultDto>.Fail(ex.Message));
+        }
+    }
+
+    /// <summary>
     /// 客户端本地执行完成后回写服务器元数据状态。
     /// </summary>
     [HttpPost("local-execution/completed")]

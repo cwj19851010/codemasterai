@@ -32,6 +32,13 @@ export const constantRoutes = [
         name: 'Dashboard',
         component: () => import('@/views/dashboard/index.vue'),
         meta: { title: 'dashboard', icon: 'HomeFilled', affix: true }
+      },
+      // 通用打印报表运行页（任务 5.5）：所有模板共用，按 templateId + 参数加载
+      {
+        path: 'print-preview/:templateId',
+        name: 'PrintPreview',
+        component: () => import('@/views/codegen/print/preview.vue'),
+        meta: { title: '打印预览', hidden: true, noCache: true }
       }
     ]
   }
@@ -46,7 +53,7 @@ const router = createRouter({
 let isAddingRoutes = false
 
 // 使用 import.meta.glob 预加载所有视图组件
-const modules = import.meta.glob('@/views/**/*.vue')
+const modules = import.meta.glob('../views/**/*.vue')
 
 // 动态加载组件
 const loadView = (view) => {
@@ -58,15 +65,15 @@ const loadView = (view) => {
   }
 
   // 构建完整路径
-  let componentPath = `@/views/${view}.vue`
+  let componentPath = `../views/${view}.vue`
 
   // 如果路径不存在,尝试添加 index
-  if (!modules[`/src/views/${view}.vue`]) {
-    componentPath = `@/views/${view}/index.vue`
+  if (!modules[componentPath]) {
+    componentPath = `../views/${view}/index.vue`
   }
 
   // 返回动态导入函数
-  const matchedModule = modules[componentPath.replace('@', '/src')]
+  const matchedModule = modules[componentPath]
   if (matchedModule) {
     console.log(`[Router] ✓ 加载组件: ${view} -> ${componentPath}`)
     return matchedModule

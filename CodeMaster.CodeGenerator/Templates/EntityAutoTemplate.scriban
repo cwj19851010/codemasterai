@@ -34,8 +34,8 @@ public partial class {{ entity.name }} : {{ entity.base_class_name }}{{ entity.i
     /// <summary>
     /// {{ relation.child_entity_name }}列表（导航属性）
     /// </summary>
-    [Navigate(NavigateType.OneToMany, nameof({{ relation.child_entity_name }}.{{ relation.child_foreign_key }}), nameof({{ relation.master_field }}))]
-    public List<{{ relation.child_entity_name }}>? {{ relation.child_entity_name }}s { get; set; }
+    [Navigate(NavigateType.OneToMany, nameof(global::{{ entity.project_name }}.Domain.Entities.{{ relation.child_module_name }}.{{ relation.child_entity_name }}.{{ relation.child_foreign_key }}), nameof({{ relation.master_field }}))]
+    public List<global::{{ entity.project_name }}.Domain.Entities.{{ relation.child_module_name }}.{{ relation.child_entity_name }}>? {{ relation.child_entity_name }}s { get; set; }
 
 {{~ end ~}}
 {{~ for relation in entity.owned_one_relations ~}}
@@ -43,7 +43,7 @@ public partial class {{ entity.name }} : {{ entity.base_class_name }}{{ entity.i
     /// {{ relation.target_entity_description }}（一对一组成导航属性）
     /// </summary>
     [SugarColumn(IsIgnore = true)]
-    public {{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}? {{ relation.relation_name }} { get; set; }
+    public global::{{ entity.project_name }}.Domain.Entities.{{ relation.target_module_name }}.{{ relation.target_entity_name }}? {{ relation.relation_name }} { get; set; }
 
 {{~ end ~}}
 }

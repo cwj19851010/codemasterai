@@ -1,61 +1,76 @@
 # CodeMasterAI
 
-**面向 .NET 10 + Vue 3 的 AI 辅助低代码开发平台，从可视化建模直接生成可独立运行、可继续维护的前后端源码。**
+![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
+![Vue 3](https://img.shields.io/badge/Vue-3-42B883)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+
+**说清业务，直接生成一套能独立维护的 .NET 10 + Vue 3 系统。**
+
+内置 AI Agent 理解需求后直接建模——项目、模块、实体、字段、关系、控件——再生成后端服务、DTO、数据库迁移、权限菜单、国际化资源和前端页面。生成结果是**标准源码**，可以脱离本平台独立构建、部署和二次开发。
 
 [在线体验](http://124.221.136.83:8000) · [介绍视频](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [English](README.en.md)
 
-CodeMasterAI 面向企业管理系统、内部业务平台和定制化软件交付场景。开发者可以在平台中定义项目、模块、实体、字段、关系和页面控件，再生成包含后端服务、DTO、数据库迁移、权限菜单、国际化资源和 Vue 页面在内的完整工程。
+## 和传统低代码的区别
 
-它不是只能运行在平台内部的页面搭建器。生成结果是标准的 **ASP.NET Core + Vue 3** 源码，可以脱离 CodeMasterAI 独立构建、部署和二次开发；平台同时提供模板、增量生成、MCP 和本地客户端能力，让重复的工程工作可以持续自动化。
+| | 传统低代码 | CodeMasterAI |
+|---|---|---|
+| 产出物 | 平台内的配置，导出受限 | 标准 ASP.NET Core + Vue 3 源码 |
+| 能否脱离平台 | 通常不能 | 能，直接 `dotnet build` / `npm run build` |
+| 二次开发 | 受限于平台提供的能力 | 就是普通工程，按需要改 |
+| 复杂逻辑 | 拖拽表达不了就卡住 | 生成后手写，或继续让 Agent 改 |
+| 数据与代码归属 | 常在平台方 | 全在你自己的数据库和仓库里 |
 
-> 当前状态：项目处于持续迭代阶段。核心框架、代码生成、模板设计器、MCP 集成和 Tauri 客户端流程已经可用，模板契约和部分交互仍会继续完善。
->
-> 项目品牌已由 CodeMaster 更新为 CodeMasterAI。为保持现有工程兼容性，解决方案、命名空间和部分客户端标识暂时保留 `CodeMaster.*`。
+它更接近“一个按你的技术栈写项目骨架的工程师”，而不是“把你的业务装进别人盒子里的容器”。
 
-## 演示视频
-
-[![CodeMasterAI 完整介绍视频：自带 Agent 的低代码快速开发平台](https://i0.hdslb.com/bfs/archive/d89000ccb3ac6bd309a2401c05144fc45913007d.jpg)](https://www.bilibili.com/video/BV1Cxg96nE73/)
-
-[在 Bilibili 观看《自带Agent的全新低代码快速开发平台》](https://www.bilibili.com/video/BV1Cxg96nE73/)（2 分 24 秒）
-
-视频展示了可视化建模、Vue 3 页面设计、完整代码生成、智能增量更新、内置 Agent、MCP/Skill 连接和多数据库支持。视频发布时项目仍使用 CodeMaster 名称，与当前 CodeMasterAI 为同一项目。
-
-## 从建模到交付
+## 从需求到可运行系统
 
 ```text
-创建项目与模块
+自然语言描述业务
       ↓
-设计实体、字段和一对一/一对多关系
+AI Agent 拆解为工作计划（实体 → 视图 → 关系 → 控件 → 复杂页面 → 一致性检查）
       ↓
-配置列表、表单、详情及字段控件
+逐阶段生成结构化变更集，写入项目元数据
       ↓
-生成后端、前端、权限、菜单和迁移数据
+生成后端、前端、权限、菜单、国际化与迁移数据
       ↓
-运行并验证生成项目
+本地或服务端构建验证，失败自动分析并修复
       ↓
-通过模板、增量生成或 AI Agent 持续迭代
+继续用自然语言增量迭代
 ```
 
-## 适用场景
-
-- 企业后台、ERP、CRM、MES、WMS 等数据密集型管理系统
-- 需要统一权限、菜单、字典、多租户和审计能力的内部平台
-- 希望沉淀自有开发框架、控件模板和代码规范的技术团队
-- 需要让 AI 通过结构化工具参与建模、生成和维护的工程场景
+也可以完全不用 AI：在实体设计器里手工建模，走同一条生成链路。
 
 ## 核心能力
 
-- **约定式建模**：定义项目、模块、实体、字段和关系后，自动生成后端服务、DTO、前端页面、菜单、权限、语言资源和迁移数据。
-- **动态 API**：应用服务可按约定自动暴露为 REST API，也可以通过特性调整路由和权限规则，减少重复的 Controller 代码。
-- **自动权限**：根据服务、菜单、按钮和生成规则自动维护权限编码，降低权限遗漏风险。
-- **模板化代码生成**：页面模板、字段控件模板和子表模板存储在数据库中，可通过系统界面维护，支持一对一、一对多和复杂选项控件生成。
-- **全量与增量生成**：既能从零生成完整项目，也能更新已有工程，并通过结构化脚本区尽量保留用户定制内容。
-- **可视化页面设计**：实体设计器覆盖常用 Element Plus 控件，组件树、属性和关联脚本可以协同编辑。
-- **MCP 智能体集成**：AI 可以通过 MCP 工具新增/编辑项目、模块、实体、字段，执行初始化、生成代码和启动服务。
-- **Tauri + LocalAgent 客户端**：桌面客户端可调用本地能力，例如本地初始化、生成代码、启动生成项目的前后端。
-- **多数据库支持**：运行时和迁移流程覆盖 SQL Server、MySQL、PostgreSQL、SQLite 与 Oracle，可按项目部署环境选择 Provider。
-- **多租户基础能力**：内置租户上下文、菜单范围、JWT 租户声明和数据权限扩展点。
-- **企业开发栈**：ASP.NET Core、SqlSugar、EF Core Migrator、Vue 3、Element Plus、Vite、SignalR、Quartz、Redis 可选缓存。
+### AI Agent：从描述到元数据
+
+- **多阶段工作计划**：把一句需求拆成可确认、可断点续跑的工作计划，逐阶段执行，而不是一次性抛给模型一大坨改动。
+- **结构化变更集**：Agent 不直接改文件，而是提交可校验的元数据变更集，非法变更在执行前被拦截。
+- **字段类型回读**：每轮重新读取真实字段类型注入上下文，避免跨轮次用过期类型配置控件。
+- **行业业务规则模板**：内置跨实体约束（如合同累计上限、入库后锁定、对账单次使用、对账金额上限），这类规则模型不会自己想到。
+- **构建失败修复**：编译错误回灌给 Agent 分析并修复，而不是让人去读日志。
+- **模型通道无关**：兼容 OpenAI 协议，可接任意兼容服务；CodeMaster 自身不配置代理，走系统环境变量。
+
+### 代码生成：产出可脱离平台的源码
+
+- **约定式建模**：定义实体、字段和关系后，自动生成服务、DTO、页面、菜单、权限、语言资源和迁移数据。
+- **模板存数据库**：页面模板、字段控件模板、子表模板都可在界面里维护，改模板不用重新发版。
+- **全量与增量**：既能从零生成完整项目，也能更新已有工程，并通过结构化脚本区尽量保留你的定制内容。
+- **孤儿清理**：实体删除后残留的生成文件按纵向切片清理，避免旧文件把工程编译搞红。
+
+### 多端交付
+
+- **Web 管理端**：Vue 3 + Element Plus，含列表、表单、详情、子表卡片与弹窗。
+- **微信小程序**：同一套元数据生成小程序页面，主表详情内嵌子表区块。
+- **桌面客户端**：Tauri + LocalAgent，可打开远程部署的前端，同时调用**本地**数据库和本地大模型，代码生成全部在本地完成。
+
+### 企业底座
+
+- **动态 API**：应用服务按约定自动暴露 REST 接口，减少重复 Controller。
+- **自动权限**：根据服务、菜单、按钮自动维护权限编码。
+- **多租户与数据权限**：租户上下文、JWT 租户声明、部门数据范围过滤。
+- **多数据库**：SQL Server、MySQL、PostgreSQL、SQLite、Oracle，按项目部署环境切换。
+- **技术栈**：ASP.NET Core、SqlSugar、EF Core Migrator、SignalR、Quartz、Redis 可选缓存。
 
 ## 产品截图
 
@@ -71,11 +86,27 @@ CodeMasterAI 面向企业管理系统、内部业务平台和定制化软件交�
 
 ![实体设计器](CodeMaster.WebApi/wwwroot/site/images/product-entity-designer.png)
 
+## 演示视频
+
+[![CodeMasterAI 完整介绍视频：自带 Agent 的低代码快速开发平台](https://i0.hdslb.com/bfs/archive/d89000ccb3ac6bd309a2401c05144fc45913007d.jpg)](https://www.bilibili.com/video/BV1Cxg96nE73/)
+
+[在 Bilibili 观看《自带 Agent 的全新低代码快速开发平台》](https://www.bilibili.com/video/BV1Cxg96nE73/)（2 分 24 秒）
+
+视频展示可视化建模、Vue 3 页面设计、完整代码生成、增量更新、内置 Agent、MCP 连接和多数据库支持。视频发布时项目名为 CodeMaster，与现在的 CodeMasterAI 是同一项目。
+
+## 适用场景
+
+- 企业后台、ERP、CRM、MES、WMS 等数据密集型管理系统
+- 需要统一权限、菜单、字典、多租户和审计能力的内部平台
+- 希望沉淀自有开发框架、控件模板和代码规范的技术团队
+- 需要让 AI 通过结构化工具参与建模、生成和维护的工程场景
+
 ## 项目结构
 
 ```text
 CodeMaster.WebApi          ASP.NET Core API、动态 API、Controller、中间件
-CodeMaster.Application     应用服务、DTO、代码生成、模板和 MCP 相关业务
+CodeMaster.Application     应用服务、DTO、代码生成、模板相关业务
+CodeMaster.Agent           AI Agent：会话编排、工作计划、变更集、工具与业务规则
 CodeMaster.Domain          领域实体
 CodeMaster.Infrastructure  SqlSugar、仓储、认证授权、SignalR、Quartz、中间件
 CodeMaster.Core            基础实体、接口、公共抽象
@@ -85,21 +116,6 @@ CodeMaster.LocalAgent      桌面客户端使用的本地 sidecar 服务
 CodeMaster.McpServer       面向 AI 代码生成流程的 MCP 服务
 Templates                  生成项目使用的源码模板包
 ```
-
-## 技术栈
-
-- .NET SDK 10
-- ASP.NET Core Web API
-- SqlSugar 运行时 ORM
-- EF Core Migrator
-- Vue 3 + Element Plus + Vite
-- Pinia + vue-i18n
-- SignalR
-- Quartz
-- Tauri + LocalAgent
-- SQL Server / MySQL / PostgreSQL / SQLite / Oracle
-
-仓库中的快速开始配置以 MySQL 8 为例，但 MySQL 不是唯一选择。WebApi 运行时通过 `DbProvider` 切换数据库；Migrator 使用对应的编译属性加载 EF Core Provider。EF 迁移历史不提交到仓库，初始化或部署时应针对目标数据库重新生成并验证迁移。
 
 ## 快速开始
 
@@ -170,7 +186,7 @@ dotnet build -p:DbProvider=PostgreSQL
 dotnet run --no-build
 ```
 
-迁移程序的构建属性、Migrator 配置和 WebApi 配置必须指向同一种数据库。切换数据库后应重新构建迁移程序，并在目标数据库上验证迁移和种子数据。
+迁移程序的构建属性、Migrator 配置和 WebApi 配置必须指向同一种数据库。切换数据库后应重新构建迁移程序，并在目标数据库上验证迁移和种子数据。EF 迁移历史不提交到仓库，初始化或部署时应针对目标数据库重新生成并验证迁移。
 
 ## 配置说明
 
@@ -204,23 +220,10 @@ Vue/Tauri 客户端需要自定义服务地址时，可复制 `CodeMaster.Vue/.e
 - 实体设计器以 `.tree.json` 作为页面结构来源。
 - `.fields.json` 用于保留字段级脚本配置，支持增量生成。
 
-## MCP 场景
-
-CodeMasterAI MCP Server 面向自然语言代码生成工作流，例如：
-
-- 新增或编辑项目
-- 新增或编辑模块
-- 新增或编辑实体
-- 维护实体字段和控件属性
-- 初始化生成项目
-- 执行全量或增量代码生成
-- 启动生成项目的前后端服务
-- 查看生成项目的整体实体结构
-
-涉及项目元数据的操作，推荐通过 MCP 工具完成，而不是让智能体直接编辑生成项目的元数据文件。
-
 ## 桌面客户端
- :point_right: 特别注意，如果非本地部署，要使用远程服务器，请通过桌面客户端打开远程部署的vue前端地址，客户端有调用本地数据库和调用本地大模型的能力，并且所有的代码生成都是在本地电脑上的
+
+> 特别注意：如果服务端部署在远程服务器，请通过桌面客户端打开远程部署的 Vue 前端地址。客户端有调用本地数据库和本地大模型的能力，所有代码生成都在本地电脑上完成。
+
 CodeMasterAI 的 Tauri 客户端用于连接服务端前端，同时通过 LocalAgent 调用本地能力。典型场景：
 
 - 在客户端中打开部署在服务器上的 CodeMasterAI 前端
@@ -237,6 +240,19 @@ git push github v1.0.5
 
 客户端不内置项目模板 ZIP。安装后可在项目列表点击“下载模板”，由 LocalAgent 将服务器上的最新模板保存到本地模板目录。
 
+## MCP 场景
+
+CodeMasterAI MCP Server 面向自然语言代码生成工作流，例如：
+
+- 新增或编辑项目、模块、实体
+- 维护实体字段和控件属性
+- 初始化生成项目
+- 执行全量或增量代码生成
+- 启动生成项目的前后端服务
+- 查看生成项目的整体实体结构
+
+涉及项目元数据的操作，推荐通过 MCP 工具完成，而不是让智能体直接编辑生成项目的元数据文件。
+
 ## 安全提醒
 
 公开仓库或生产部署前请务必：
@@ -251,12 +267,11 @@ git push github v1.0.5
 
 ## 路线图
 
-- 完善代码生成模板稳定性
+- 提升 Agent 在复杂业务规则下的建模准确率
+- 完善业务规则模板库，覆盖更多行业
 - 完善 MCP 工具能力和文档
 - 改进 Tauri 客户端安装、升级和模板下载流程
-- 完善论坛、账号注册、GitHub 登录和租户初始化体验
 - 补充更多测试和示例项目
-- 移动端/小程序生成能力，敬请期待后续版本
 
 ## 参与贡献
 
@@ -267,3 +282,5 @@ git push github v1.0.5
 ## 开源协议
 
 CodeMasterAI 基于 [Apache License 2.0](LICENSE) 开源。
+
+> 项目品牌已由 CodeMaster 更新为 CodeMasterAI。为保持现有工程兼容性，解决方案、命名空间和部分客户端标识暂时保留 `CodeMaster.*`。

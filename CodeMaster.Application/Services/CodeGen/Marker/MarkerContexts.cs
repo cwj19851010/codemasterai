@@ -15,6 +15,12 @@ public class GenContext
     public string ModuleNameAllLower { get; set; } = string.Empty;
     public string TableName { get; set; } = string.Empty;
 
+    /// <summary>所属项目 ID（字符串形式，供打印按钮等按范围查询模板）</summary>
+    public string ProjectId { get; set; } = string.Empty;
+
+    /// <summary>所属模块 ID（字符串形式）</summary>
+    public string ModuleId { get; set; } = string.Empty;
+
     /// <summary>字段控件 HTML 拼接结果（按页面区域：addColumns / editColumns / searchColumns / listColumns / detailColumns）</summary>
     public Dictionary<string, string> ColumnHtml { get; set; } = new();
 

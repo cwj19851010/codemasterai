@@ -1,13 +1,16 @@
 using CodeMaster.Domain.Entities.CodeGen;
+using System.Text.Json;
 
 namespace CodeMaster.Application.Dtos.CodeGen;
 
 /// <summary>
 /// 客户端本地执行代码生成所需的服务端上下文快照。
 /// </summary>
-public class GenerationBundleDto
+public partial class GenerationBundleDto
 {
-    public int Version { get; set; } = 2;
+    public const int CurrentVersion = 4;
+
+    public int Version { get; set; } = CurrentVersion;
 
     public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
 
@@ -28,4 +31,8 @@ public class GenerationBundleDto
     public List<SysFieldControlTemplate> FieldControlTemplates { get; set; } = new();
 
     public List<SysChildTemplate> ChildTemplates { get; set; } = new();
+
+    public Dictionary<string, int> ExtensionVersions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public Dictionary<string, JsonElement> Extensions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

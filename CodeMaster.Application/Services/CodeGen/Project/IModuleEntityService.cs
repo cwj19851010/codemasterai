@@ -42,6 +42,17 @@ public interface IModuleEntityService : ICrudApplicationService<ModuleEntity, Mo
     Task<bool> GenerateProjectIncrementalCodeAsync(ProjectCodeGenerationDto input);
 
     /// <summary>
+    /// Generate an entity with the safe unified strategy: bootstrap missing output and merge existing output.
+    /// </summary>
+    Task<bool> GenerateSmartCodeAsync(long id);
+
+    /// <summary>
+    /// Generate a project with the safe unified strategy. When no entities are selected, only entities
+    /// affected by metadata changes, template changes, or missing output are regenerated.
+    /// </summary>
+    Task<bool> GenerateProjectSmartCodeAsync(ProjectCodeGenerationDto input);
+
+    /// <summary>
     /// 同步菜单到目标项目数据库
     /// </summary>
     Task<bool> SyncMenuToTargetAsync(long id);
@@ -65,6 +76,12 @@ public interface IModuleEntityService : ICrudApplicationService<ModuleEntity, Mo
     /// 获取页面模板内容（用于可视化设计器加载）
     /// </summary>
     Task<PageContentDto> GetPageContentAsync(long id, string pageType);
+
+    /// <summary>
+    /// 获取目标项目当前语言的多语言映射，供实体设计器预览 $t(...) 表达式。
+    /// 该接口只读目标项目已有语言数据，不修改实体或生成文件。
+    /// </summary>
+    Task<Dictionary<string, string>> GetProjectI18nMapAsync(long id, string? langCode = null);
 
     /// <summary>
     /// 保存页面模板内容（可视化设计器回写）

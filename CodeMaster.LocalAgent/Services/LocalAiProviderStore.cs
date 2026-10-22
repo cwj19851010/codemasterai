@@ -44,6 +44,7 @@ public sealed class LocalAiProviderStore
             }
 
             record.ProviderType = input.ProviderType.Trim();
+            record.CompatibilityMode = NormalizeCompatibilityMode(input.CompatibilityMode);
             record.BaseUrl = input.BaseUrl?.Trim();
             record.ModelName = input.ModelName.Trim();
             record.ExtraHeadersJson = input.ExtraHeadersJson?.Trim();
@@ -93,6 +94,7 @@ public sealed class LocalAiProviderStore
             return new AiProviderConnectionSettings
             {
                 ProviderType = record.ProviderType,
+                CompatibilityMode = NormalizeCompatibilityMode(record.CompatibilityMode),
                 BaseUrl = record.BaseUrl,
                 ApiKey = string.IsNullOrWhiteSpace(record.ProtectedApiKey)
                     ? null
@@ -141,6 +143,11 @@ public sealed class LocalAiProviderStore
         if (input.ProviderId <= 0) throw new ArgumentException("Provider id is required.");
         if (input.ProviderType is not (AiProviderTypes.OpenAiCompatible or AiProviderTypes.Anthropic))
             throw new ArgumentException("Unsupported AI provider type.");
+        if (!AiProviderCompatibilityModes.IsSupported(input.CompatibilityMode))
+            throw new ArgumentException("Unsupported AI provider compatibility mode.");
+        if (string.Equals(input.CompatibilityMode, AiProviderCompatibilityModes.OpenRouterReasoning, StringComparison.OrdinalIgnoreCase) &&
+            input.ProviderType != AiProviderTypes.OpenAiCompatible)
+            throw new ArgumentException("OpenRouter Reasoning compatibility requires an OpenAI-compatible provider.");
         if (string.IsNullOrWhiteSpace(input.ModelName)) throw new ArgumentException("Model name is required.");
         if (!string.IsNullOrWhiteSpace(input.BaseUrl) &&
             (!Uri.TryCreate(input.BaseUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")))
@@ -148,4 +155,9 @@ public sealed class LocalAiProviderStore
             throw new ArgumentException("AI provider base URL must be an absolute HTTP or HTTPS URL.");
         }
     }
+
+    private static string NormalizeCompatibilityMode(string? value) =>
+        string.Equals(value, AiProviderCompatibilityModes.OpenRouterReasoning, StringComparison.OrdinalIgnoreCase)
+            ? AiProviderCompatibilityModes.OpenRouterReasoning
+            : AiProviderCompatibilityModes.Standard;
 }

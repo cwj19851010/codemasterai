@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using CodeMaster.Agent.Contracts;
 using CodeMaster.LocalAgent.Services;
 
 namespace CodeMaster.LocalAgent.Tests.Services;
@@ -110,6 +112,41 @@ public class CodeMasterServerClientTests
         Assert.Equal("bundle failed", exception.Message);
     }
 
+    [Fact]
+    public async Task InvokeLocalAiToolAsync_sends_known_version_and_reads_cache_metadata()
+    {
+        var handler = new StubHttpMessageHandler(_ => JsonResponse("""
+            {
+              "code": 200,
+              "message": "ok",
+              "data": {
+                "output": "{\"notModified\":true}",
+                "projectStructureVersion": "ABC123",
+                "projectStructureNotModified": true
+              }
+            }
+            """));
+        var client = new CodeMasterServerClient(new HttpClient(handler));
+
+        var result = await client.InvokeLocalAiToolAsync(
+            "http://codemaster.test",
+            new InvokeLocalAiToolRequest
+            {
+                ConversationId = 42,
+                RequestId = "request-1",
+                ToolName = "get_project_summary",
+                KnownProjectStructureVersion = "ABC123",
+                Arguments = JsonDocument.Parse("{}").RootElement.Clone()
+            },
+            "server-token");
+
+        Assert.True(result.ProjectStructureNotModified);
+        Assert.Equal("ABC123", result.ProjectStructureVersion);
+        Assert.Contains("notModified", result.Output);
+        Assert.Contains("\"knownProjectStructureVersion\":\"ABC123\"", handler.RequestBody);
+        Assert.Equal("http://codemaster.test/api/agent/local/chat/invoke-tool", handler.RequestUri);
+    }
+
     private static HttpResponseMessage JsonResponse(string json)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
@@ -133,11 +170,14 @@ public class CodeMasterServerClientTests
 
         public string? AuthorizationParameter { get; private set; }
 
+        public string? RequestBody { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestUri = request.RequestUri?.ToString();
             AuthorizationScheme = request.Headers.Authorization?.Scheme;
             AuthorizationParameter = request.Headers.Authorization?.Parameter;
+            RequestBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
             return Task.FromResult(_handler(request));
         }
     }

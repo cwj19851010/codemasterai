@@ -22,6 +22,13 @@ public static class LocalAgentServiceCollectionExtensions
         var metadataRoot = string.IsNullOrWhiteSpace(configuredOptions.MetadataRoot)
             ? Path.Combine(localApplicationData, "CodeMaster", "LocalAgent")
             : configuredOptions.MetadataRoot;
+        var environmentLogRoot = Environment.GetEnvironmentVariable(
+            LocalAgentDiagnosticLog.LogDirectoryEnvironmentVariable);
+        var logRoot = !string.IsNullOrWhiteSpace(environmentLogRoot)
+            ? environmentLogRoot
+            : string.IsNullOrWhiteSpace(configuredOptions.LogRoot)
+                ? Path.Combine(metadataRoot, "logs")
+                : configuredOptions.LogRoot;
 
         var dataProtection = services.AddDataProtection()
             .SetApplicationName("CodeMaster.LocalAgent")
@@ -30,8 +37,10 @@ public static class LocalAgentServiceCollectionExtensions
             dataProtection.ProtectKeysWithDpapi();
 
         services.AddHttpClient<CodeMasterServerClient>();
+        services.AddSingleton(new LocalAgentDiagnosticLog(logRoot));
         services.AddSingleton<LocalMetadataStore>();
         services.AddSingleton<LocalAiProviderStore>();
+        services.AddSingleton<LocalAgentConversationSessionStore>();
         services.AddSingleton<LocalAgentChatService>();
         services.AddSingleton<LocalCodegenExecutionService>();
         return services;

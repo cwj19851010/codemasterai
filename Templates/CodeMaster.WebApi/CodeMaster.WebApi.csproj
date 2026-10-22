@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <!-- Optional printing runtime uses Microsoft.Playwright, which references
+         Microsoft.Bcl.AsyncInterfaces 6.0. Keep the generated host aligned so
+         the module can load in the default AssemblyLoadContext. -->
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="6.0.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
   </ItemGroup>
@@ -18,5 +22,32 @@
     <ProjectReference Include="..\CodeMaster.Application\CodeMaster.Application.csproj" />
     <ProjectReference Include="..\CodeMaster.Infrastructure\CodeMaster.Infrastructure.csproj" />
   </ItemGroup>
+
+  <!-- Generated projects keep optional runtime modules in the source-level
+       modules directory. Copy them beside the compiled WebApi so the module
+       loader can discover them after clean/rebuild. -->
+  <Target Name="CopyGeneratedModulesToWebApiOutput"
+          AfterTargets="Build"
+          Condition="'$(SkipPrintingWebApiCopy)' != 'true' and Exists('..\modules')">
+    <ItemGroup>
+      <GeneratedModuleFiles Include="..\modules\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(TargetDir)modules" />
+    <Copy SourceFiles="@(GeneratedModuleFiles)"
+          DestinationFiles="@(GeneratedModuleFiles->'$(TargetDir)modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyGeneratedModulesToWebApiPublish"
+          AfterTargets="Publish"
+          Condition="'$(SkipPrintingWebApiCopy)' != 'true' and Exists('..\modules')">
+    <ItemGroup>
+      <GeneratedModulePublishFiles Include="..\modules\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(PublishDir)modules" />
+    <Copy SourceFiles="@(GeneratedModulePublishFiles)"
+          DestinationFiles="@(GeneratedModulePublishFiles->'$(PublishDir)modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

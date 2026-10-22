@@ -1,6 +1,7 @@
 using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.Application.Services;
 using CodeMaster.Core.Entities;
+using CodeMaster.Core.Authorization;
 using CodeMaster.Core.MultiTenancy;
 using CodeMaster.Core.Repositories;
 using CodeMaster.Core.Services;
@@ -15,6 +16,8 @@ using SqlSugar;
 using System.Text;
 using CodeMaster.Application.Services.CodeGen.Marker;
 using CodeMaster.Application.Services.CodeGen.Relations;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.RegularExpressions;
 using Yitter.IdGenerator;
 
@@ -27,16 +30,78 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 {
     private readonly ISqlSugarClient _db;
     private readonly ITenantContext? _tenantContext;
+    private readonly IComponentTreeMergeService? _componentTreeMergeService;
+    private readonly IReadOnlyCollection<ICodeGenerationMetadataObserver> _metadataObservers;
+    private readonly IReadOnlyCollection<ICodeGenerationPageExtension> _pageGenerationExtensions;
+    private readonly IReadOnlyCollection<ICodeGenerationEntityExtension> _entityGenerationExtensions;
+    private readonly IReadOnlyCollection<IProjectCodeGenerationObserver> _projectCodeGenerationObservers;
+    private readonly IReadOnlyCollection<IEntityCodeGenerationObserver> _entityCodeGenerationObservers;
+    private readonly ProjectInitializationService? _initializationService;
 
     public ModuleEntityService(
         IRepository<ModuleEntity> repository,
         IExcelService excelService,
         ISqlSugarClient db,
         ITenantContext? tenantContext = null,
-        CodeMaster.Core.Services.ICacheService? cacheService = null) : base(repository, excelService, cacheService)
+        CodeMaster.Core.Services.ICacheService? cacheService = null,
+        IComponentTreeMergeService? componentTreeMergeService = null,
+        IEnumerable<ICodeGenerationMetadataObserver>? metadataObservers = null,
+        IEnumerable<ICodeGenerationPageExtension>? pageGenerationExtensions = null,
+        IEnumerable<ICodeGenerationEntityExtension>? entityGenerationExtensions = null,
+        IEnumerable<IProjectCodeGenerationObserver>? projectCodeGenerationObservers = null,
+        IConfiguration? configuration = null,
+        IServiceProvider? serviceProvider = null,
+        IEnumerable<IEntityCodeGenerationObserver>? entityCodeGenerationObservers = null) : base(repository, excelService, cacheService)
     {
         _db = db;
         _tenantContext = tenantContext;
+        _componentTreeMergeService = componentTreeMergeService;
+        _metadataObservers = metadataObservers?.ToArray() ?? Array.Empty<ICodeGenerationMetadataObserver>();
+        _pageGenerationExtensions = pageGenerationExtensions?.ToArray() ?? Array.Empty<ICodeGenerationPageExtension>();
+        _entityGenerationExtensions = entityGenerationExtensions?.ToArray() ?? Array.Empty<ICodeGenerationEntityExtension>();
+        _projectCodeGenerationObservers = projectCodeGenerationObservers?.ToArray() ?? Array.Empty<IProjectCodeGenerationObserver>();
+        _entityCodeGenerationObservers = entityCodeGenerationObservers?.ToArray() ?? Array.Empty<IEntityCodeGenerationObserver>();
+        // Mirrors how ProjectService builds it: the initializer service is not registered in DI,
+        // so generation creates it on demand and keeps working when configuration is unavailable
+        // (tests, out-of-process generators).
+        _initializationService = configuration == null || serviceProvider == null
+            ? null
+            : new ProjectInitializationService(
+                configuration,
+                serviceProvider.GetServices<IGeneratedProjectInitializer>());
+    }
+
+    /// <summary>
+    /// 通知「随主切片一起产出的附加产物」（小程序、打印布局之类的第二目标）某个实体刚生成完。
+    /// </summary>
+    /// <remarks>
+    /// 附加产物是可选的，它失败不能把一次成功的主生成变成失败，所以异常一律吞掉只记一行。
+    /// 也不要在这里做增量判断：哪个实现需要重算，它自己知道。
+    /// </remarks>
+    private async Task NotifyEntityGeneratedAsync(ModuleEntity entity, bool treeOnly)
+    {
+        if (_entityCodeGenerationObservers.Count == 0)
+            return;
+
+        var context = new EntityCodeGenerationContext
+        {
+            ProjectId = entity.ProjectId,
+            EntityId = entity.Id,
+            TreeOnly = treeOnly
+        };
+
+        foreach (var observer in _entityCodeGenerationObservers)
+        {
+            try
+            {
+                await observer.EntityGeneratedAsync(context);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    $"[CodeGen] {observer.GetType().Name} failed for entity {entity.Id}: {ex.Message}");
+            }
+        }
     }
 
     /// <summary>
@@ -55,7 +120,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     public async Task<List<ReferenceEntityDto>> GetReferenceEntitiesAsync([FromQuery] long? projectId = null)
     {
         var query = _db.Queryable<ModuleEntity>()
-            .Where(e => e.IsDeleted == false);
+            .Where(e => e.IsDeleted == false && e.GenerationMode == EntityGenerationMode.FullStack);
 
         if (projectId.HasValue)
         {
@@ -131,7 +196,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         dto.Fields = fields.Adapt<List<EntityFieldDto>>();
 
         // 加载一对多关系列表（兼容旧数据库：可能尚未创建该表）
-        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false))
         {
             var relations = await _db.Queryable<OneToManyRelation>()
                 .Where(r => r.ModuleEntityId == id)
@@ -155,9 +220,12 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     /// </summary>
     public override async Task<long> CreateAsync(CreateModuleEntityDto input)
     {
+        NormalizeDescriptions(input);
+        var ownsTransaction = _db.Ado.Transaction == null;
         try
         {
-            _db.Ado.BeginTran();
+            if (ownsTransaction)
+                _db.Ado.BeginTran();
 
             // 创建实体
             var entity = input.Adapt<ModuleEntity>();
@@ -195,6 +263,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 {
                     var relation = relationDto.Adapt<OneToManyRelation>();
                     relation.ModuleEntityId = entity.Id;
+                    await ValidateLegacyRelationEntitiesAsync(relation.ModuleEntityId, relation.ChildEntityId);
                     FillTenantInfo(relation);
                     relation.CreateTime = DateTime.UtcNow;
                     await _db.Insertable(relation).ExecuteReturnSnowflakeIdAsync();
@@ -215,14 +284,16 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             await ValidateSelectTableResultMappingsAsync(entity.Id, entity.ProjectId);
             await ValidateCalculatedFieldsAsync(entity.Id);
 
-            _db.Ado.CommitTran();
+            if (ownsTransaction)
+                _db.Ado.CommitTran();
 
             return entity.Id;
         }
-        catch
+        catch (Exception ex)
         {
-            _db.Ado.RollbackTran();
-            throw;
+            if (ownsTransaction)
+                _db.Ado.RollbackTran();
+            throw UniqueViolationGuard.Wrap(ex, $"项目下已存在同名实体 '{input.Name}'");
         }
     }
 
@@ -231,9 +302,17 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     /// </summary>
     public override async Task<int> UpdateAsync(long id, UpdateModuleEntityDto input)
     {
+        var businessDescriptionSpecified = input.BusinessDescription != null;
+        var fieldBusinessDescriptionsSpecified = (input.UpdatedFields ?? [])
+            .Where(field => field.BusinessDescription != null)
+            .Select(field => field.Id)
+            .ToHashSet();
+        NormalizeDescriptions(input);
+        var ownsTransaction = _db.Ado.Transaction == null;
         try
         {
-            _db.Ado.BeginTran();
+            if (ownsTransaction)
+                _db.Ado.BeginTran();
 
             // 更新实体基本信息
             var entity = await _db.Queryable<ModuleEntity>()
@@ -245,6 +324,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 throw new Exception($"实体不存在: {id}");
             }
 
+            EnsureMetadataOnlyUpdateHasNoRelations(entity, input);
+
             var finalHasPrimaryKey = input.HasPrimaryKey ?? entity.HasPrimaryKey;
             var finalIsTree = input.IsTree ?? entity.IsTree;
             var finalIsReadOnly = input.IsReadOnly ?? entity.IsReadOnly;
@@ -254,6 +335,9 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             var finalHasSoftDelete = input.HasSoftDelete ?? entity.HasSoftDelete;
             var finalGenerateFrontend = input.GenerateFrontend ?? entity.GenerateFrontend;
             var finalIsChildTable = input.IsChildTable ?? entity.IsChildTable;
+            var finalBusinessDescription = businessDescriptionSpecified
+                ? input.BusinessDescription
+                : entity.BusinessDescription;
             input.Adapt(entity);
             entity.HasPrimaryKey = finalHasPrimaryKey;
             entity.IsTree = finalIsTree;
@@ -264,6 +348,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             entity.HasSoftDelete = finalHasSoftDelete;
             entity.GenerateFrontend = finalGenerateFrontend;
             entity.IsChildTable = finalIsChildTable;
+            entity.BusinessDescription = finalBusinessDescription;
             ValidateEntityCapabilities(entity);
             entity.UpdateTime = DateTime.UtcNow;
             await _db.Updateable(entity).ExecuteCommandAsync();
@@ -302,7 +387,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
                     if (field != null)
                     {
+                        var finalFieldBusinessDescription = fieldBusinessDescriptionsSpecified.Contains(fieldDto.Id)
+                            ? fieldDto.BusinessDescription
+                            : field.BusinessDescription;
                         fieldDto.Adapt(field);
+                        field.BusinessDescription = finalFieldBusinessDescription;
                         field.DataType = CSharpDataTypeNormalizer.Normalize(field.DataType);
                         NormalizeCalculatedFieldMetadata(field);
                         field.UpdateTime = DateTime.UtcNow;
@@ -330,6 +419,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 {
                     var relation = relationDto.Adapt<OneToManyRelation>();
                     relation.ModuleEntityId = id;
+                    await ValidateLegacyRelationEntitiesAsync(relation.ModuleEntityId, relation.ChildEntityId);
                     FillTenantInfo(relation);
                     relation.CreateTime = DateTime.UtcNow;
                     await _db.Insertable(relation).ExecuteReturnSnowflakeIdAsync();
@@ -349,6 +439,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                     if (relation != null)
                     {
                         relationDto.Adapt(relation);
+                        relation.ModuleEntityId = id;
+                        await ValidateLegacyRelationEntitiesAsync(relation.ModuleEntityId, relation.ChildEntityId);
                         relation.UpdateTime = DateTime.UtcNow;
                         await _db.Updateable(relation).ExecuteCommandAsync();
                     }
@@ -407,14 +499,17 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             await ValidateFieldControlsAsync(id, entity.ProjectId);
             await ValidateSelectTableResultMappingsAsync(id, entity.ProjectId);
             await ValidateCalculatedFieldsAsync(id);
+            await NotifyMetadataObserversAsync(id);
 
-            _db.Ado.CommitTran();
+            if (ownsTransaction)
+                _db.Ado.CommitTran();
 
             return 1;
         }
         catch
         {
-            _db.Ado.RollbackTran();
+            if (ownsTransaction)
+                _db.Ado.RollbackTran();
             throw;
         }
     }
@@ -486,6 +581,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             throw new Exception($"实体不存在: {id}");
         }
 
+        EnsureStandardGenerationEntity(entity, "sync menus");
+
         var module = await _db.Queryable<ProjectModule>()
             .Where(m => m.Id == entity.ModuleId)
             .FirstAsync();
@@ -532,6 +629,12 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         return true;
     }
 
+    private async Task NotifyMetadataObserversAsync(long entityId)
+    {
+        foreach (var observer in _metadataObservers)
+            await observer.EntityChangedAsync(entityId);
+    }
+
     /// <summary>
     /// 同步字段多语言到目标项目数据库
     /// </summary>
@@ -543,6 +646,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
         if (entity == null)
             throw new Exception($"实体不存在: {id}");
+
+        EnsureStandardGenerationEntity(entity, "sync languages");
 
         var module = await _db.Queryable<ProjectModule>()
             .Where(m => m.Id == entity.ModuleId)
@@ -563,7 +668,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         await SyncModuleLanguageAsync(module, targetDb);
         await SyncEntityAndFieldLanguageAsync(entity, targetDb);
 
-        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation"))
+        if (_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false))
         {
             var relations = await _db.Queryable<OneToManyRelation>()
                 .Where(r => r.ModuleEntityId == id)
@@ -621,6 +726,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             throw new Exception($"实体不存在: {id}");
         }
 
+        EnsureStandardGenerationEntity(entity, "generate code");
+
         var graph = await new EntityRelationGraphBuilder(_db).BuildForProjectAsync(entity.ProjectId);
         var roots = graph.GetAffectedRoots(id);
         foreach (var rootId in roots)
@@ -629,7 +736,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     }
 
     public Task<bool> GenerateProjectCodeAsync(ProjectCodeGenerationDto input) =>
-        GenerateProjectEntitiesAsync(input, incremental: false);
+        GenerateProjectEntitiesAsync(input, incremental: false, smart: false);
 
     /// <summary>
     /// 增量生成代码
@@ -645,6 +752,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             throw new Exception($"实体不存在: {id}");
         }
 
+        EnsureStandardGenerationEntity(entity, "generate code incrementally");
+
         var graph = await new EntityRelationGraphBuilder(_db).BuildForProjectAsync(entity.ProjectId);
         var roots = graph.GetAffectedRoots(id);
         foreach (var rootId in roots)
@@ -653,15 +762,122 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     }
 
     public Task<bool> GenerateProjectIncrementalCodeAsync(ProjectCodeGenerationDto input) =>
-        GenerateProjectEntitiesAsync(input, incremental: true);
+        GenerateProjectEntitiesAsync(input, incremental: true, smart: false);
 
-    private async Task<bool> GenerateProjectEntitiesAsync(ProjectCodeGenerationDto input, bool incremental)
+    /// <summary>
+    /// Unified safe generation. Incremental mode already bootstraps files that do not exist while
+    /// preserving the merge behavior for existing page trees and field scripts.
+    /// </summary>
+    public async Task<bool> GenerateSmartCodeAsync(long id)
     {
+        var entity = await _db.Queryable<ModuleEntity>()
+            .Where(e => e.Id == id)
+            .FirstAsync();
+
+        if (entity == null)
+            throw new Exception($"Entity not found: {id}");
+
+        EnsureStandardGenerationEntity(entity, "generate code safely");
+
+        var graph = await new EntityRelationGraphBuilder(_db).BuildForProjectAsync(entity.ProjectId);
+        var roots = graph.GetAffectedRoots(id);
+        foreach (var rootId in roots)
+        {
+            var useIncremental = await ShouldUseIncrementalGenerationAsync(graph, rootId);
+            await GenerateAggregateCodeAsync(graph, rootId, useIncremental);
+        }
+
+        return true;
+    }
+
+    public Task<bool> GenerateProjectSmartCodeAsync(ProjectCodeGenerationDto input) =>
+        GenerateProjectEntitiesAsync(input, incremental: true, smart: true);
+
+    private async Task<bool> GenerateProjectEntitiesAsync(
+        ProjectCodeGenerationDto input,
+        bool incremental,
+        bool smart)
+    {
+        var generated = await GenerateProjectEntitiesCoreAsync(input, incremental, smart);
+
+        // 生成只写不删，实体被移除后旧文件会一直留在磁盘上，最后以 CS0104 的形式把整个工程编译搞红。
+        // 清理放在核心生成之后：此时存活集合已经确定，且失败也不影响本次生成结果。
+        await SweepOrphanGeneratedSlicesAsync(input.ProjectId);
+
+        // The entity pass finishes and returns early in several places (no entities, nothing
+        // changed). Complex pages must still get their shot on every one of those paths,
+        // otherwise the run that changes nothing also silently skips pages that some earlier
+        // field edit left on NeedsSync.
+        if (_projectCodeGenerationObservers.Count > 0)
+        {
+            var context = new ProjectCodeGenerationContext
+            {
+                ProjectId = input.ProjectId,
+                Incremental = incremental,
+                EntityIds = input.EntityIds ?? new List<long>()
+            };
+            foreach (var observer in _projectCodeGenerationObservers)
+                await observer.ProjectGeneratedAsync(context);
+        }
+
+        return generated;
+    }
+
+    /// <summary>
+    /// 清理元数据里已经不存在的实体所留下的生成文件（整条纵向切片）。
+    /// </summary>
+    /// <remarks>
+    /// 任何异常都吞掉：清理是收尾动作，不能让它把一次成功的生成变成失败。
+    /// </remarks>
+    private async Task SweepOrphanGeneratedSlicesAsync(long projectId)
+    {
+        try
+        {
+            var project = await _db.Queryable<Project>()
+                .Where(item => item.Id == projectId)
+                .FirstAsync();
+            if (project == null)
+                return;
+
+            var projectPath = ResolveProjectRootPath(project);
+            if (string.IsNullOrWhiteSpace(projectPath) || !Directory.Exists(projectPath))
+                return;
+
+            var modules = await _db.Queryable<ProjectModule>()
+                .Where(module => module.ProjectId == projectId && !module.IsDeleted)
+                .ToListAsync();
+            if (modules.Count == 0)
+                return;
+
+            var moduleMap = modules.ToDictionary(module => module.Id);
+            var entities = await _db.Queryable<ModuleEntity>()
+                .Where(entity => entity.ProjectId == projectId && !entity.IsDeleted)
+                .ToListAsync();
+
+            var liveEntities = entities
+                .Where(entity => moduleMap.ContainsKey(entity.ModuleId))
+                .Select(entity => new LiveEntityKey(moduleMap[entity.ModuleId].ModuleName, entity.Name));
+
+            GeneratedCodeOrphanSweeper.Sweep(projectPath, project.ProjectName, liveEntities);
+        }
+        catch (Exception)
+        {
+            // 清理失败不影响生成结果；下次生成会重试。
+        }
+    }
+
+    private async Task<bool> GenerateProjectEntitiesCoreAsync(
+        ProjectCodeGenerationDto input,
+        bool incremental,
+        bool smart)
+    {
+        ArgumentNullException.ThrowIfNull(input, nameof(input));
         input.EntityIds ??= new List<long>();
         var requestedAllEntities = input.EntityIds.All(id => id <= 0);
         var (project, requestedEntities) = await ResolveProjectEntitiesAsync(input);
         var projectEntities = await _db.Queryable<ModuleEntity>()
-            .Where(item => item.ProjectId == input.ProjectId && !item.IsDeleted)
+            .Where(item => item.ProjectId == input.ProjectId && !item.IsDeleted &&
+                           item.GenerationMode == EntityGenerationMode.FullStack)
             .OrderBy(item => item.OrderNum)
             .OrderBy(item => item.Id)
             .ToListAsync();
@@ -672,17 +888,20 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         }
 
         var targetEntities = requestedEntities;
-        if (incremental && requestedAllEntities)
+        if ((incremental || smart) && requestedAllEntities)
         {
             var modules = await _db.Queryable<ProjectModule>()
                 .Where(module => module.ProjectId == input.ProjectId && !module.IsDeleted)
                 .ToListAsync();
             var moduleMap = modules.ToDictionary(module => module.Id);
+            var latestTemplateChange = CodeGeneratorService.UseTemplateGenerator
+                ? await GetLatestTemplateChangeTimeAsync()
+                : null;
             var changedEntities = new List<ModuleEntity>();
             foreach (var entity in targetEntities)
             {
                 moduleMap.TryGetValue(entity.ModuleId, out var module);
-                if (await HasIncrementalChangesAsync(project, module, entity))
+                if (await HasIncrementalChangesAsync(project, module, entity, latestTemplateChange))
                     changedEntities.Add(entity);
             }
 
@@ -714,7 +933,12 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .ToList();
 
         foreach (var rootId in rootIds)
-            await GenerateAggregateCodeAsync(graph, rootId, incremental);
+        {
+            var useIncremental = smart
+                ? await ShouldUseIncrementalGenerationAsync(graph, rootId)
+                : incremental;
+            await GenerateAggregateCodeAsync(graph, rootId, useIncremental);
+        }
 
         return true;
     }
@@ -741,16 +965,29 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .Where(id => id > 0)
             .Distinct()
             .ToList();
-        var targetEntities = requestedIds.Count == 0
+        var requestedEntities = requestedIds.Count == 0
             ? projectEntities
             : projectEntities.Where(item => requestedIds.Contains(item.Id)).ToList();
 
-        if (requestedIds.Count != 0 && targetEntities.Count != requestedIds.Count)
+        if (requestedIds.Count != 0 && requestedEntities.Count != requestedIds.Count)
         {
-            var foundIds = targetEntities.Select(item => item.Id).ToHashSet();
+            var foundIds = requestedEntities.Select(item => item.Id).ToHashSet();
             var missingIds = requestedIds.Where(id => !foundIds.Contains(id));
             throw new Exception($"实体不存在或不属于当前项目: {string.Join(", ", missingIds)}");
         }
+
+        var metadataOnlyEntities = requestedEntities
+            .Where(item => item.GenerationMode == EntityGenerationMode.MetadataOnly)
+            .ToList();
+        if (requestedIds.Count > 0 && metadataOnlyEntities.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Metadata-only entities cannot generate or synchronize backend artifacts: {string.Join(", ", metadataOnlyEntities.Select(item => item.Name))}.");
+        }
+
+        var targetEntities = requestedEntities
+            .Where(item => item.GenerationMode == EntityGenerationMode.FullStack)
+            .ToList();
 
         return (project, targetEntities);
     }
@@ -758,8 +995,12 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     private async Task<bool> HasIncrementalChangesAsync(
         Project project,
         ProjectModule? module,
-        ModuleEntity entity)
+        ModuleEntity entity,
+        DateTime? latestTemplateChange = null)
     {
+        if (entity.GenerationMode == EntityGenerationMode.MetadataOnly)
+            return false;
+
         if (!entity.IsGenerated || !entity.LastGeneratedTime.HasValue)
             return true;
 
@@ -773,15 +1014,22 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             return true;
         }
 
-        if (GeneratedOutputMissing(project, module, entity))
+        if (entity.GenerateFrontend && !entity.IsChildTable &&
+            latestTemplateChange.HasValue && latestTemplateChange.Value > since)
+            return true;
+
+        if (await GeneratedOutputMissingAsync(project, module, entity))
             return true;
 
         var changes = await BuildIncrementalChangeSetAsync(entity);
         return changes.HasChanges;
     }
 
-    private static bool GeneratedOutputMissing(Project project, ProjectModule? module, ModuleEntity entity)
+    private async Task<bool> GeneratedOutputMissingAsync(Project project, ProjectModule? module, ModuleEntity entity)
     {
+        if (entity.GenerationMode == EntityGenerationMode.MetadataOnly)
+            return false;
+
         if (module == null)
             return true;
 
@@ -790,19 +1038,41 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             return true;
 
         var projectName = project.ProjectName;
-        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
-        var backendAutoPath = Path.Combine(
-            projectPath,
-            $"{projectName}.Domain",
-            "Entities",
-            module.ModuleName,
-            $"{entity.Name}.auto.cs");
-        if (!File.Exists(backendAutoPath))
+        var extensionContext = new CodeGenerationEntityContext
+        {
+            EntityId = entity.Id,
+            ProjectPath = projectPath,
+            ProjectName = projectName,
+            ModuleName = module.ModuleName,
+            EntityName = entity.Name,
+            Incremental = true
+        };
+        foreach (var extension in _entityGenerationExtensions)
+        {
+            if (await extension.CanHandleAsync(entity.Id))
+                return !await extension.IsOutputCurrentAsync(extensionContext);
+        }
+
+        var domainPath = Path.Combine(projectPath, $"{projectName}.Domain", "Entities", module.ModuleName);
+        var dtoPath = Path.Combine(projectPath, $"{projectName}.Application", "Dtos", module.ModuleName);
+        var servicePath = Path.Combine(projectPath, $"{projectName}.Application", "Services", module.ModuleName);
+        var requiredBackendFiles = new[]
+        {
+            Path.Combine(domainPath, $"{entity.Name}.auto.cs"),
+            Path.Combine(domainPath, $"{entity.Name}.cs"),
+            Path.Combine(dtoPath, $"{entity.Name}Dto.cs"),
+            Path.Combine(servicePath, $"I{entity.Name}Service.cs"),
+            Path.Combine(servicePath, $"{entity.Name}Service.cs")
+        };
+        if (requiredBackendFiles.Any(path => !File.Exists(path)))
             return true;
 
-        if (!entity.GenerateFrontend)
+        // Child-table composables may call the child service for remote-select
+        // options and label resolution even though the child has no standalone UI.
+        if (!entity.GenerateFrontend && !entity.IsChildTable)
             return false;
 
+        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
         var frontendSourcePath = Path.Combine(projectPath, $"{projectName}.Vue", "src");
         var apiPath = Path.Combine(
             frontendSourcePath,
@@ -812,12 +1082,136 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         if (!File.Exists(apiPath))
             return true;
 
-        return !entity.IsChildTable && !File.Exists(Path.Combine(
+        if (entity.IsChildTable)
+            return false;
+
+        var viewPath = Path.Combine(
             frontendSourcePath,
             "views",
             CodeGenNaming.ToPathSegment(module.ModuleName),
-            entityPath,
-            "index.vue"));
+            entityPath);
+        var entityLower = char.ToLowerInvariant(entity.Name[0]) + entity.Name[1..];
+        foreach (var pageType in GetFrontendPageTypes(entity))
+        {
+            if (!File.Exists(Path.Combine(viewPath, $"{pageType}.vue")))
+                return true;
+
+            if (CodeGeneratorService.UseTemplateGenerator &&
+                (!File.Exists(Path.Combine(viewPath, $"{entityLower}.{pageType}.auto.js")) ||
+                 !File.Exists(Path.Combine(viewPath, $"{entityLower}.{pageType}.tree.json"))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<bool> ShouldUseIncrementalGenerationAsync(EntityRelationGraph graph, long rootId)
+    {
+        var entityIds = graph.GetOwnedDescendants(rootId).Append(rootId).Distinct().ToList();
+        var entities = await _db.Queryable<ModuleEntity>()
+            .Where(entity => entityIds.Contains(entity.Id) && !entity.IsDeleted)
+            .ToListAsync();
+        if (entities.Count == 0)
+            return true;
+        if (entities.Any(entity => entity.IsGenerated || entity.LastGeneratedTime.HasValue))
+            return true;
+
+        var projectId = entities[0].ProjectId;
+        var project = await _db.Queryable<Project>()
+            .Where(item => item.Id == projectId && !item.IsDeleted)
+            .FirstAsync();
+        if (project == null)
+            return true;
+
+        var moduleIds = entities.Select(entity => entity.ModuleId).Distinct().ToList();
+        var modules = await _db.Queryable<ProjectModule>()
+            .Where(module => moduleIds.Contains(module.Id) && !module.IsDeleted)
+            .ToListAsync();
+        var moduleMap = modules.ToDictionary(module => module.Id);
+
+        foreach (var entity in entities)
+        {
+            if (!moduleMap.TryGetValue(entity.ModuleId, out var module))
+                return true;
+            if (await GeneratedOutputExistsAsync(project, module, entity))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> GeneratedOutputExistsAsync(Project project, ProjectModule module, ModuleEntity entity)
+    {
+        var projectPath = ResolveProjectRootPath(project);
+        if (string.IsNullOrWhiteSpace(projectPath))
+            return false;
+
+        foreach (var extension in _entityGenerationExtensions)
+        {
+            if (await extension.CanHandleAsync(entity.Id))
+                return true;
+        }
+
+        var domainPath = Path.Combine(projectPath, $"{project.ProjectName}.Domain", "Entities", module.ModuleName);
+        var dtoPath = Path.Combine(projectPath, $"{project.ProjectName}.Application", "Dtos", module.ModuleName);
+        var servicePath = Path.Combine(projectPath, $"{project.ProjectName}.Application", "Services", module.ModuleName);
+        var paths = new List<string>
+        {
+            Path.Combine(domainPath, $"{entity.Name}.auto.cs"),
+            Path.Combine(domainPath, $"{entity.Name}.cs"),
+            Path.Combine(dtoPath, $"{entity.Name}Dto.cs"),
+            Path.Combine(servicePath, $"I{entity.Name}Service.cs"),
+            Path.Combine(servicePath, $"{entity.Name}Service.cs")
+        };
+
+        if (entity.GenerateFrontend || entity.IsChildTable)
+        {
+            var modulePath = CodeGenNaming.ToPathSegment(module.ModuleName);
+            var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
+            var frontendSourcePath = Path.Combine(projectPath, $"{project.ProjectName}.Vue", "src");
+            paths.Add(Path.Combine(frontendSourcePath, "api", modulePath, $"{entityPath}.js"));
+
+            if (!entity.IsChildTable)
+            {
+                var viewPath = Path.Combine(frontendSourcePath, "views", modulePath, entityPath);
+                var entityLower = char.ToLowerInvariant(entity.Name[0]) + entity.Name[1..];
+                foreach (var pageType in GetFrontendPageTypes(entity))
+                {
+                    paths.Add(Path.Combine(viewPath, $"{pageType}.vue"));
+                    paths.Add(Path.Combine(viewPath, $"{entityLower}.{pageType}.auto.js"));
+                    paths.Add(Path.Combine(viewPath, $"{entityLower}.{pageType}.tree.json"));
+                    paths.Add(Path.Combine(viewPath, $"{entityLower}.{pageType}.fields.json"));
+                    paths.Add(Path.Combine(viewPath, $"{entityLower}.{pageType}.design.json"));
+                }
+            }
+        }
+
+        return paths.Any(File.Exists);
+    }
+
+    private async Task<DateTime?> GetLatestTemplateChangeTimeAsync()
+    {
+        var timestamps = new List<DateTime>();
+        AddAuditTimestamps(await _db.Queryable<SysPageTemplate>().ClearFilter().ToListAsync(), timestamps);
+        AddAuditTimestamps(await _db.Queryable<SysFieldControlTemplate>().ClearFilter().ToListAsync(), timestamps);
+        AddAuditTimestamps(await _db.Queryable<SysChildTemplate>().ClearFilter().ToListAsync(), timestamps);
+        return timestamps.Count == 0 ? null : timestamps.Max();
+    }
+
+    private static void AddAuditTimestamps<T>(IEnumerable<T> records, ICollection<DateTime> timestamps)
+        where T : EntityBase
+    {
+        foreach (var record in records)
+        {
+            if (record.CreateTime != default)
+                timestamps.Add(record.CreateTime);
+            if (record.UpdateTime.HasValue)
+                timestamps.Add(record.UpdateTime.Value);
+            if (record.DeleteTime.HasValue)
+                timestamps.Add(record.DeleteTime.Value);
+        }
     }
 
     private async Task GenerateAggregateCodeAsync(EntityRelationGraph graph, long rootId, bool incremental)
@@ -843,6 +1237,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .FirstAsync();
         if (entity == null) throw new Exception($"实体不存在: {id}");
 
+        EnsureStandardGenerationEntity(entity, treeOnly ? "generate a page tree" : "generate code");
         ValidateEntityCapabilities(entity);
         await SynchronizeSystemFieldsAsync(entity);
 
@@ -872,9 +1267,41 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             projectPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
         }
 
+        // Generation writes Core/Domain/Application files, so the framework has to exist first.
+        // A project created outside the initialization wizard (an Agent-produced project, for
+        // instance) reaches this point without it; bootstrap it here instead of failing the whole
+        // generation run. This is the single funnel every generation entry goes through.
+        if (_initializationService != null)
+            await _initializationService.EnsureProjectFrameworkAsync(project);
+
+        if (GeneratedProjectViewFrameworkSupport.IsManagedViewEntity(entity))
+            await GeneratedProjectViewFrameworkSupport.EnsureAsync(projectPath, project.ProjectName);
+
         // 创建代码生成器
-        var generator = new CodeGeneratorService(_db);
         var projectName = project.ProjectName;
+        var extensionContext = new CodeGenerationEntityContext
+        {
+            EntityId = entity.Id,
+            ProjectPath = projectPath,
+            ProjectName = projectName,
+            ModuleName = module.ModuleName,
+            EntityName = entity.Name,
+            TreeOnly = treeOnly,
+            Incremental = incremental
+        };
+        foreach (var extension in _entityGenerationExtensions)
+        {
+            if (!await extension.CanHandleAsync(entity.Id)) continue;
+            await extension.GenerateAsync(extensionContext);
+            entity.IsGenerated = true;
+            entity.LastGeneratedTime = DateTime.UtcNow;
+            await _db.Updateable(entity)
+                .UpdateColumns(item => new { item.IsGenerated, item.LastGeneratedTime })
+                .ExecuteCommandAsync();
+            return;
+        }
+
+        var generator = new CodeGeneratorService(_db);
 
         // 生成后端代码
         var entityAutoCode = await generator.GenerateEntityAutoAsync(id, projectName, module.ModuleName);
@@ -906,8 +1333,9 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         await File.WriteAllTextAsync(Path.Combine(servicePath, $"I{entity.Name}Service.cs"), serviceInterfaceCode);
         await File.WriteAllTextAsync(Path.Combine(servicePath, $"{entity.Name}Service.cs"), serviceImplCode);
 
-        // 生成前端 API 文件（子表也需要）
-        if (entity.GenerateFrontend)
+        // 子表不生成独立页面，但父表中的子表 composable 仍可能调用
+        // 子表服务来加载 remote-select 选项和批量标签。
+        if (entity.GenerateFrontend || entity.IsChildTable)
         {
             var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
             var vuePath = Path.Combine(projectPath, $"{projectName}.Vue", "src");
@@ -933,12 +1361,22 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                         : IncrementalChangeSet.Disabled;
                     var entityLower = char.ToLowerInvariant(entity.Name[0]) + entity.Name[1..];
                     var pageTypes = GetFrontendPageTypes(entity);
+                    var generatedRegionConflicts = new List<string>();
                     if (!treeOnly)
                         DeleteUnsupportedPageArtifacts(viewPath, pageTypes);
 
                     foreach (var pt in pageTypes)
                     {
                         var result = await tplGen.GeneratePageAsync(id, pt, projectName, module.ModuleName);
+                        foreach (var extension in _pageGenerationExtensions)
+                        {
+                            await extension.ProcessPageAsync(new CodeGenerationPageContext
+                            {
+                                EntityId = entity.Id,
+                                PageType = pt,
+                                Result = result
+                            });
+                        }
                         var vuePath2 = Path.Combine(viewPath, $"{pt}.vue");
                         var finalTemplateHtml = result.VueContent;
 
@@ -972,9 +1410,15 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                                 try
                                 {
                                     var oldTreeJson = await File.ReadAllTextAsync(treeJsonPath);
-                                    result.TreeJson = incrementalChanges.Enabled
-                                        ? MergeTreeIncremental(result.TreeJson, oldTreeJson, incrementalChanges)
-                                        : MergeTreeOrder(result.TreeJson, oldTreeJson);
+                                    if (_componentTreeMergeService != null)
+                                    {
+                                        result.TreeJson = incrementalChanges.Enabled
+                                            ? _componentTreeMergeService.MergeIncremental(
+                                                result.TreeJson,
+                                                oldTreeJson,
+                                                incrementalChanges.ToComponentTreeChangeSet())
+                                            : _componentTreeMergeService.MergeOrder(result.TreeJson, oldTreeJson);
+                                    }
                                     finalTemplateHtml = SerializeTreeJsonToTemplate(result.TreeJson, result.VueContent);
                                 }
                                 catch { }
@@ -1066,14 +1510,23 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                             if (!string.IsNullOrEmpty(result.ChildImportLine))
                                 imports += "\n" + result.ChildImportLine;
                             var vueWithScript = BuildVueFileContent(finalTemplateHtml, imports, pt);
-                            await WriteVueFileAsync(vuePath2, vueWithScript);
+                            var protection = await WriteVueFileAsync(vuePath2, vueWithScript);
+                            generatedRegionConflicts.AddRange(protection.Conflicts.Select(conflict =>
+                                $"{pt}:{conflict.GenId} ({conflict.Reason})"));
                         }
+                    }
+                    if (generatedRegionConflicts.Count > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Generated Vue regions contain external changes. Unaffected regions were updated and conflicted regions were preserved: " +
+                            string.Join("; ", generatedRegionConflicts));
                     }
                     if (incrementalChanges.Enabled)
                     {
                         foreach (var childName in incrementalChanges.DeletedRelationNames)
                             await DeleteChildGeneratedFilesAsync(entity, childName);
                     }
+                    await NotifyEntityGeneratedAsync(entity, treeOnly);
                     entity.IsGenerated = true;
                     entity.LastGeneratedTime = DateTime.UtcNow;
                     await _db.Updateable(entity).UpdateColumns(e => new { e.IsGenerated, e.LastGeneratedTime }).ExecuteCommandAsync();
@@ -1083,6 +1536,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             }
 
         }
+
+        await NotifyEntityGeneratedAsync(entity, treeOnly);
 
         // 更新实体状态
         entity.IsGenerated = true;
@@ -1106,16 +1561,13 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         var connectionString = project.ConnectionString ?? string.Empty;
         if (project.DatabaseType == Core.Enums.DatabaseType.SQLite)
         {
-            var match = Regex.Match(connectionString, @"Data Source\s*=\s*([^;]+)", RegexOptions.IgnoreCase);
-            if (match.Success)
+            var dataSource = ProjectService.ExtractSqliteDataSource(connectionString);
+            if (!string.IsNullOrWhiteSpace(dataSource) && !Path.IsPathRooted(dataSource))
             {
-                var dataSource = match.Groups[1].Value.Trim().Trim('"');
-                if (!string.IsNullOrWhiteSpace(dataSource) && !Path.IsPathRooted(dataSource))
-                {
-                    var projectPath = ResolveProjectRootPath(project);
-                    var absolutePath = Path.GetFullPath(Path.Combine(projectPath, $"{project.ProjectName}.Migrator", dataSource));
-                    connectionString = Regex.Replace(connectionString, @"Data Source\s*=\s*([^;]+)", "Data Source=" + absolutePath, RegexOptions.IgnoreCase);
-                }
+                var projectPath = ResolveProjectRootPath(project);
+                var absolutePath = ProjectService.EnsureSqliteDirectory(
+                    Path.GetFullPath(Path.Combine(projectPath, $"{project.ProjectName}.Migrator", dataSource)));
+                connectionString = Regex.Replace(connectionString, @"Data Source\s*=\s*([^;]+)", "Data Source=" + absolutePath, RegexOptions.IgnoreCase);
             }
         }
 
@@ -1155,7 +1607,11 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         // records may still contain the parent directory, so only append the project
         // name when that nested directory actually exists.
         var nestedProjectPath = Path.Combine(projectPath, project.ProjectName);
-        return Directory.Exists(nestedProjectPath) ? nestedProjectPath : projectPath;
+        var hasProjectMarkers = File.Exists(Path.Combine(nestedProjectPath, $"{project.ProjectName}.sln")) ||
+                                 Directory.Exists(Path.Combine(nestedProjectPath, $"{project.ProjectName}.WebApi")) ||
+                                 Directory.Exists(Path.Combine(nestedProjectPath, $"{project.ProjectName}.Application")) ||
+                                 Directory.Exists(Path.Combine(nestedProjectPath, $"{project.ProjectName}.Vue"));
+        return hasProjectMarkers ? nestedProjectPath : projectPath;
     }
 
     /// <summary>
@@ -1182,12 +1638,16 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 MenuName = module.ModuleDescription,
                 TitleKey = moduleTitleKey,
                 ParentId = null,
-                OrderNum = 0,
+                OrderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
+                    module.OrderNum,
+                    module.ModuleName,
+                    module.ModuleDescription,
+                    module.RoutePath),
                 Path = modulePath,
                 MenuType = "M",
                 Visible = true,
                 Status = 0,
-                Icon = "system",
+                Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon,
                 CreateTime = DateTime.UtcNow,
                 IsDeleted = false
             };
@@ -1197,8 +1657,12 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         {
             dirMenu.MenuName = module.ModuleDescription;
             dirMenu.TitleKey = moduleTitleKey;
-            dirMenu.OrderNum = module.OrderNum;
-            dirMenu.Icon = string.IsNullOrWhiteSpace(dirMenu.Icon) ? "system" : dirMenu.Icon;
+            dirMenu.OrderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
+                module.OrderNum,
+                module.ModuleName,
+                module.ModuleDescription,
+                module.RoutePath);
+            dirMenu.Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon;
             dirMenu.Path = modulePath;
             dirMenu.IsDeleted = false;
             dirMenu.DeleteTime = null;
@@ -1236,7 +1700,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             pageMenu.MenuName = entity.Description;
             pageMenu.OrderNum = entity.OrderNum;
             pageMenu.TitleKey = entityTitleKey;
-            pageMenu.Icon = entity.MenuIcon ?? "list";
+            pageMenu.Icon = string.IsNullOrWhiteSpace(entity.MenuIcon) ? "Document" : entity.MenuIcon;
             pageMenu.UpdateTime = DateTime.UtcNow;
             pageMenu.Path = entityPath;
             pageMenu.Component = $"{modulePath}/{entityPath}/index";
@@ -1619,9 +2083,32 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .ExecuteCommandAsync();
     }
 
-    private async Task WriteVueFileAsync(string filePath, string newContent)
+    private async Task ValidateLegacyRelationEntitiesAsync(long sourceEntityId, long targetEntityId)
     {
-        await File.WriteAllTextAsync(filePath, newContent);
+        if (sourceEntityId <= 0 || targetEntityId <= 0 || sourceEntityId == targetEntityId)
+            throw new InvalidOperationException("One-to-many relations require two distinct entities.");
+
+        var entities = await _db.Queryable<ModuleEntity>()
+            .ClearFilter()
+            .Where(item => item.Id == sourceEntityId || item.Id == targetEntityId)
+            .ToListAsync();
+        var source = entities.FirstOrDefault(item => item.Id == sourceEntityId && !item.IsDeleted);
+        var target = entities.FirstOrDefault(item => item.Id == targetEntityId && !item.IsDeleted);
+        if (source == null || target == null)
+            throw new InvalidOperationException("One-to-many relation source or target entity does not exist.");
+        if (source.ProjectId != target.ProjectId)
+            throw new InvalidOperationException("One-to-many relation entities must belong to the same project.");
+        if (source.GenerationMode == EntityGenerationMode.MetadataOnly ||
+            target.GenerationMode == EntityGenerationMode.MetadataOnly)
+        {
+            throw new InvalidOperationException(
+                "Metadata-only entities cannot participate in one-to-many entity relations.");
+        }
+    }
+
+    private async Task<GeneratedVueRegionAnalysis> WriteVueFileAsync(string filePath, string newContent)
+    {
+        return await new GeneratedVueRegionProtector().WriteAsync(filePath, newContent);
     }
 
     private static string BuildVueFileContent(string templateHtml, string scriptSetupContent, string pageType)
@@ -1721,6 +2208,52 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             TreeJson = treeJson,
             StyleContent = styleContent
         };
+    }
+
+    /// <summary>
+    /// 获取目标项目已有的语言文本。设计器只用它替换预览中的 $t('key')，
+    /// 不会把翻译值写回组件树，也不会影响生成代码。
+    /// </summary>
+    [Permission("codegen:entityDesigner:list")]
+    public async Task<Dictionary<string, string>> GetProjectI18nMapAsync(long id, string? langCode = null)
+    {
+        var entity = await _db.Queryable<ModuleEntity>()
+            .Where(item => item.Id == id && !item.IsDeleted)
+            .FirstAsync() ?? throw new Exception($"实体不存在: {id}");
+
+        var project = await _db.Queryable<Project>()
+            .Where(item => item.Id == entity.ProjectId && !item.IsDeleted)
+            .FirstAsync() ?? throw new Exception($"项目不存在: {entity.ProjectId}");
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var targetDb = GetTargetDbClient(project);
+            if (!targetDb.DbMaintenance.IsAnyTable("sys_lang_texts", false))
+                return result;
+
+            var code = string.IsNullOrWhiteSpace(langCode) ? "zh-CN" : langCode.Trim();
+            var rows = await targetDb.Queryable<SysLangText>()
+                .Where(item => item.LangCode == code && !item.IsDeleted)
+                .ToListAsync();
+
+            foreach (var row in rows)
+            {
+                if (string.IsNullOrWhiteSpace(row.LangKey)) continue;
+                result[row.LangKey] = row.LangValue;
+                var camel = ToCamelCase(row.LangKey);
+                if (!string.IsNullOrWhiteSpace(camel)) result[camel] = row.LangValue;
+                var pascal = ToPascalCase(row.LangKey);
+                if (!string.IsNullOrWhiteSpace(pascal)) result[pascal] = row.LangValue;
+            }
+        }
+        catch
+        {
+            // 未初始化项目或尚未创建语言表时，设计器仍应可正常编辑。
+            // 预览会回退显示 key，不阻塞保存设计。
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -2001,7 +2534,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .ToListAsync();
         CollectChangedFields(fields, since, changes);
 
-        var relations = _db.DbMaintenance.IsAnyTable("sys_one_to_many_relation")
+        var relations = _db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false)
             ? await _db.Queryable<OneToManyRelation>()
                 .ClearFilter()
                 .Where(r => r.ModuleEntityId == entity.Id)
@@ -2039,7 +2572,20 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 changes.ChangedRelationNames.Add(relationName);
         }
 
-        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+        if (_pageGenerationExtensions.Count > 0)
+        {
+            var extensionChanges = new ComponentTreeChangeSet
+            {
+                Enabled = true,
+                Since = since
+            };
+            foreach (var extension in _pageGenerationExtensions)
+                await extension.ContributeIncrementalChangesAsync(entity.Id, since, extensionChanges);
+            changes.ChangedDataSourceIds.UnionWith(extensionChanges.ChangedDataSourceIds);
+            changes.DeletedDataSourceIds.UnionWith(extensionChanges.DeletedDataSourceIds);
+        }
+
+        if (_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
         {
             var entityRelations = await _db.Queryable<EntityRelation>()
                 .ClearFilter()
@@ -2501,6 +3047,8 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         public HashSet<string> DeletedRelationNames { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<long> ChangedEntityRelationIds { get; } = new();
         public HashSet<long> DeletedEntityRelationIds { get; } = new();
+        public HashSet<long> ChangedDataSourceIds { get; } = new();
+        public HashSet<long> DeletedDataSourceIds { get; } = new();
 
         public bool HasChanges =>
             ChangedFieldIds.Count > 0 ||
@@ -2508,7 +3056,9 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             ChangedRelationNames.Count > 0 ||
             DeletedRelationNames.Count > 0 ||
             ChangedEntityRelationIds.Count > 0 ||
-            DeletedEntityRelationIds.Count > 0;
+            DeletedEntityRelationIds.Count > 0 ||
+            ChangedDataSourceIds.Count > 0 ||
+            DeletedDataSourceIds.Count > 0;
 
         public bool IsChangedGeneratedId(string genId)
         {
@@ -2562,6 +3112,24 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 end++;
 
             return end > start && long.TryParse(genId[start..end], out fieldId);
+        }
+
+        public ComponentTreeChangeSet ToComponentTreeChangeSet()
+        {
+            var result = new ComponentTreeChangeSet
+            {
+                Enabled = Enabled,
+                Since = Since
+            };
+            result.ChangedFieldIds.UnionWith(ChangedFieldIds);
+            result.DeletedFieldIds.UnionWith(DeletedFieldIds);
+            result.ChangedRelationNames.UnionWith(ChangedRelationNames);
+            result.DeletedRelationNames.UnionWith(DeletedRelationNames);
+            result.ChangedEntityRelationIds.UnionWith(ChangedEntityRelationIds);
+            result.DeletedEntityRelationIds.UnionWith(DeletedEntityRelationIds);
+            result.ChangedDataSourceIds.UnionWith(ChangedDataSourceIds);
+            result.DeletedDataSourceIds.UnionWith(DeletedDataSourceIds);
+            return result;
         }
 
         private static bool TryParseOwnedRelationId(string genId, out long relationId)
@@ -3234,7 +3802,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     /// </summary>
     public async Task<bool> DeleteChildRelationAsync(long entityId, string childEntityName)
     {
-        if (!_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation"))
+        if (!_db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false))
             return false;
 
         var relation = await _db.Queryable<OneToManyRelation>()
@@ -3368,7 +3936,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     /// </summary>
     public async Task<bool> DeleteEntityRelationAsync(long id, long relationId)
     {
-        if (!_db.DbMaintenance.IsAnyTable("sys_entity_relation")) return false;
+        if (!_db.DbMaintenance.IsAnyTable("sys_entity_relation", false)) return false;
         var relation = await _db.Queryable<EntityRelation>()
             .Where(item => item.Id == relationId && item.SourceEntityId == id)
             .FirstAsync();
@@ -3383,7 +3951,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         var hasCurrentReference = await _db.Queryable<EntityRelation>()
             .Where(item => item.TargetEntityId == relation.TargetEntityId && item.Id != relation.Id)
             .AnyAsync();
-        var hasLegacyReference = _db.DbMaintenance.IsAnyTable("sys_one_to_many_relation") &&
+        var hasLegacyReference = _db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false) &&
             await _db.Queryable<OneToManyRelation>()
                 .Where(item => item.ChildEntityId == relation.TargetEntityId)
                 .AnyAsync();
@@ -3550,10 +4118,122 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
     private static void ValidateEntityCapabilities(ModuleEntity entity)
     {
+        if (entity.GenerationMode == EntityGenerationMode.MetadataOnly)
+        {
+            if (entity.HasPrimaryKey || !entity.IsReadOnly || entity.IsTree ||
+                entity.HasTenant || entity.HasDataPermission || entity.HasAudit ||
+                entity.HasSoftDelete || entity.GenerateFrontend || entity.IsChildTable ||
+                !string.IsNullOrWhiteSpace(entity.TableName) ||
+                !string.IsNullOrWhiteSpace(entity.FrontendRoute) ||
+                !string.IsNullOrWhiteSpace(entity.MenuIcon))
+            {
+                throw new InvalidOperationException(
+                    $"Metadata-only entity '{entity.Name}' cannot enable database, backend, menu, relation, or standard frontend generation options.");
+            }
+
+            return;
+        }
+
         if (!entity.HasPrimaryKey && !entity.IsReadOnly)
             throw new InvalidOperationException($"Entity '{entity.Name}' must be read-only when the primary-key option is disabled.");
         if (entity.IsTree && !entity.HasPrimaryKey)
             throw new InvalidOperationException($"Tree entity '{entity.Name}' requires a primary key.");
+    }
+
+    private static void EnsureStandardGenerationEntity(ModuleEntity entity, string operation)
+    {
+        if (entity.GenerationMode == EntityGenerationMode.MetadataOnly)
+        {
+            throw new InvalidOperationException(
+                $"Entity '{entity.Name}' is metadata-only and cannot {operation}. It is available only for API contract field binding.");
+        }
+    }
+
+    private static void NormalizeDescriptions(CreateModuleEntityDto input)
+    {
+        input.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(input.Description, "实体");
+        input.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(input.BusinessDescription, "实体");
+        foreach (var field in input.Fields ?? [])
+        {
+            NormalizeDescriptions(field);
+            field.DataType = CanonicalFieldDataType(field.DataType);
+        }
+    }
+
+    private static void NormalizeDescriptions(UpdateModuleEntityDto input)
+    {
+        input.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(input.Description, "实体");
+        input.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(input.BusinessDescription, "实体");
+        foreach (var field in input.NewFields ?? [])
+        {
+            NormalizeDescriptions(field);
+            field.DataType = CanonicalFieldDataType(field.DataType);
+        }
+        foreach (var field in input.UpdatedFields ?? [])
+        {
+            NormalizeDescriptions(field);
+            field.DataType = CanonicalFieldDataType(field.DataType);
+        }
+    }
+
+    /// <summary>
+    /// Models routinely emit TypeScript- or SQL-flavoured type names ("number", "text", "int32").
+    /// They are unambiguous but they are not C# types, and a value that reaches storage makes field
+    /// control validation and code generation fail on metadata that was already accepted — the
+    /// "Field 'X' uses number and must have a numeric data type" dead end. Rewrite them at the door.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> FieldDataTypeAliases =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["number"] = "decimal",
+            ["numeric"] = "decimal",
+            ["money"] = "decimal",
+            ["currency"] = "decimal",
+            ["integer"] = "int",
+            ["int32"] = "int",
+            ["int64"] = "long",
+            ["bigint"] = "long",
+            ["float32"] = "float",
+            ["float64"] = "double",
+            ["text"] = "string",
+            ["varchar"] = "string",
+            ["nvarchar"] = "string",
+            ["boolean"] = "bool"
+        };
+
+    private static string CanonicalFieldDataType(string? value)
+    {
+        var trimmed = (value ?? string.Empty).Trim().TrimEnd('?');
+        return FieldDataTypeAliases.TryGetValue(trimmed, out var canonical) ? canonical : (value ?? string.Empty).Trim();
+    }
+
+    private static void NormalizeDescriptions(CreateEntityFieldDto input)
+    {
+        input.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(input.Description, "字段");
+        input.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(input.BusinessDescription, "字段");
+    }
+
+    private static void NormalizeDescriptions(UpdateEntityFieldDto input)
+    {
+        input.Description = MetadataDescriptionNormalizer.NormalizeDisplayName(input.Description, "字段");
+        input.BusinessDescription = MetadataDescriptionNormalizer.NormalizeBusinessDescription(input.BusinessDescription, "字段");
+    }
+
+    private static void EnsureMetadataOnlyUpdateHasNoRelations(ModuleEntity entity, UpdateModuleEntityDto input)
+    {
+        if (entity.GenerationMode != EntityGenerationMode.MetadataOnly) return;
+
+        var hasRelationChanges = input.NewRelations?.Count > 0 ||
+                                 input.UpdatedRelations?.Count > 0 ||
+                                 input.DeletedRelationIds?.Count > 0 ||
+                                 input.NewEntityRelations?.Count > 0 ||
+                                 input.UpdatedEntityRelations?.Count > 0 ||
+                                 input.DeletedEntityRelationIds?.Count > 0;
+        if (hasRelationChanges)
+        {
+            throw new InvalidOperationException(
+                $"Metadata-only entity '{entity.Name}' cannot participate in one-to-one or one-to-many entity relations.");
+        }
     }
 
     private static void MarkSystemFieldDeleted(EntityField field, ModuleEntity entity, DateTime now)
@@ -3582,7 +4262,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
     private async Task<List<EntityRelationDto>> LoadEntityRelationsAsync(long sourceEntityId)
     {
-        if (!_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+        if (!_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
             return new List<EntityRelationDto>();
 
         var relations = await _db.Queryable<EntityRelation>()
@@ -3626,7 +4306,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
     private void EnsureEntityRelationTable()
     {
-        if (!_db.DbMaintenance.IsAnyTable("sys_entity_relation"))
+        if (!_db.DbMaintenance.IsAnyTable("sys_entity_relation", false))
             throw new InvalidOperationException("Entity relation metadata table is missing. Run CodeMaster.Migrator before saving owned one-to-one relations.");
     }
 
@@ -3893,7 +4573,7 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
             .ToListAsync();
         var fieldMap = fields.ToDictionary(field => field.Name, StringComparer.OrdinalIgnoreCase);
 
-        var relations = _db.DbMaintenance.IsAnyTable("sys_one_to_many_relation")
+        var relations = _db.DbMaintenance.IsAnyTable("sys_one_to_many_relation", false)
             ? await _db.Queryable<OneToManyRelation>()
                 .Where(relation => relation.ModuleEntityId == entityId)
                 .ToListAsync()

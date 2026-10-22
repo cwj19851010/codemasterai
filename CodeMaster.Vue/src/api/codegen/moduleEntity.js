@@ -112,6 +112,16 @@ export function generateIncrementalCode(id) {
   )
 }
 
+export function generateSmartCode(id) {
+  return executeCodegenAction('generateSmartCode', { entityId: id, id }, () =>
+    request({
+      url: `/codegen/moduleentity/generatesmartcode/${id}`,
+      method: 'post',
+      timeout: CODE_GENERATION_TIMEOUT
+    })
+  )
+}
+
 export function generateProjectCode(projectId, entityIds = []) {
   const data = { projectId, entityIds }
   return executeCodegenAction('generateProjectCode', data, () =>
@@ -129,6 +139,18 @@ export function generateProjectIncrementalCode(projectId, entityIds = []) {
   return executeCodegenAction('generateProjectIncrementalCode', data, () =>
     request({
       url: '/codegen/moduleentity/generateprojectincrementalcode',
+      method: 'post',
+      data,
+      timeout: CODE_GENERATION_TIMEOUT
+    })
+  )
+}
+
+export function generateProjectSmartCode(projectId, entityIds = []) {
+  const data = { projectId, entityIds }
+  return executeCodegenAction('generateProjectSmartCode', data, () =>
+    request({
+      url: '/codegen/moduleentity/generateprojectsmartcode',
       method: 'post',
       data,
       timeout: CODE_GENERATION_TIMEOUT
@@ -210,6 +232,17 @@ export function deleteChildRelation(id, childEntityName) {
     url: `/codegen/moduleentity/deletechildrelation/${id}`,
     method: 'delete',
     params: { childEntityName }
+  })
+}
+
+/**
+ * 获取目标项目已有翻译，供实体设计器预览 $t('key') 表达式。
+ */
+export function getProjectI18nMap(id, langCode) {
+  return request({
+    url: `/codegen/moduleentity/getprojecti18nmap/${id}`,
+    method: 'get',
+    params: { langCode }
   })
 }
 

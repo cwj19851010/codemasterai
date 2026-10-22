@@ -10,8 +10,8 @@ namespace CodeMaster.Agent.Contracts;
 /// relations, views, complex pages). It never names CodeMaster internal ids,
 /// per-task definitions, dependency graph, or other execution concerns. The server-side
 /// <see cref="Services.BusinessPlanCompiler"/> translates this definition into the
-/// standard seven-stage executable plan (EntityFields, Views, Relations, FieldControls,
-/// ComplexPages, ConsistencyCheck, GenerateCode).
+/// standard six-stage executable plan (EntityFields, Views, Relations, FieldControls,
+/// ComplexPages, ConsistencyCheck). The plan ends at metadata; the agent never generates code.
 /// </summary>
 public sealed class BusinessPlanDefinition
 {

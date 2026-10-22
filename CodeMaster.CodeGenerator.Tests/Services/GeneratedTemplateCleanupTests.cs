@@ -148,6 +148,47 @@ onMounted(() => {
         Assert.Contains("password: 'admin123'", cleaned);
     }
 
+    [Fact]
+    public void RemoveLoginClientBridge_RemovesAsyncMountedHookAndClientConditional()
+    {
+        const string source = """
+<script setup>
+import { ref, reactive, onMounted } from 'vue'
+
+const isClientLogin = true
+const handleLogin = async () => {
+  if (isClientLogin && defaultServerBaseUrl) {
+    await saveOrderSystemClientConfig({
+      serverBaseUrl: defaultServerBaseUrl
+    })
+  }
+}
+
+onMounted(async () => {
+  if (isClientLogin && defaultServerBaseUrl) {
+    try {
+      await saveOrderSystemClientConfig({
+        serverBaseUrl: defaultServerBaseUrl
+      })
+    } catch (error) {
+      console.error(error)
+    }
+  }
+  completeExternalLogin()
+})
+</script>
+""";
+
+        var cleaned = InvokeRemoveLoginClientBridge(source);
+
+        Assert.DoesNotContain("onMounted", cleaned);
+        Assert.DoesNotContain("defaultServerBaseUrl", cleaned);
+        Assert.DoesNotContain("saveOrderSystemClientConfig", cleaned);
+        Assert.DoesNotContain("completeExternalLogin", cleaned);
+        Assert.Contains("const isClientLogin = false", cleaned);
+        Assert.Contains("const handleLogin = async () =>", cleaned);
+    }
+
     private static string InvokeRemoveLoginClientBridge(string content)
     {
         var type = typeof(CodeGeneratorService).Assembly.GetType(

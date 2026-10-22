@@ -133,10 +133,8 @@ public static class GlobalTranslations
             { "data_scope_self", new() { { "zh-CN", "仅本人数据权限" }, { "en-US", "Self Data Only" } } },
 
             // 项目相关
-            { "project_name", new() { { "zh-CN", "项目名称" }, { "en-US", "project name" } } },
             { "display_name", new() { { "zh-CN", "显示名称" }, { "en-US", "display name" } } },
             { "connection_string", new() { { "zh-CN", "连接字符串" }, { "en-US", "connection string" } } },
-            { "project_path", new() { { "zh-CN", "项目路径" }, { "en-US", "project path" } } },
             { "database_type", new() { { "zh-CN", "数据库类型" }, { "en-US", "database type" } } },
 
             // 菜单相关字段
@@ -211,54 +209,10 @@ public static class GlobalTranslations
             { "query_failed", new() { { "zh-CN", "查询失败" }, { "en-US", "Query Failed" } } },
             { "job_message", new() { { "zh-CN", "执行消息" }, { "en-US", "job message" } } },
 
-            // 项目管理相关
-            { "project_type", new() { { "zh-CN", "项目类型" }, { "en-US", "project type" } } },
-            { "server_version", new() { { "zh-CN", "服务端版本" }, { "en-US", "Server Version" } } },
-            { "client_version", new() { { "zh-CN", "客户端版本" }, { "en-US", "Client Version" } } },
-            { "mysql", new() { { "zh-CN", "MySQL" }, { "en-US", "MySQL" } } },
-            { "sqlserver", new() { { "zh-CN", "SQL Server" }, { "en-US", "SQL Server" } } },
-            { "postgresql", new() { { "zh-CN", "PostgreSQL" }, { "en-US", "PostgreSQL" } } },
-            { "sqlite", new() { { "zh-CN", "SQLite" }, { "en-US", "SQLite" } } },
-            { "oracle", new() { { "zh-CN", "Oracle" }, { "en-US", "Oracle" } } },
-            { "not_initialized", new() { { "zh-CN", "未初始化" }, { "en-US", "Not Initialized" } } },
-            { "initialized", new() { { "zh-CN", "已初始化" }, { "en-US", "Initialized" } } },
-            { "running", new() { { "zh-CN", "运行中" }, { "en-US", "Running" } } },
-            { "stopped", new() { { "zh-CN", "已停止" }, { "en-US", "Stopped" } } },
-            { "initialize_failed", new() { { "zh-CN", "初始化失败" }, { "en-US", "Initialize Failed" } } },
-            { "initialize", new() { { "zh-CN", "初始化" }, { "en-US", "Initialize" } } },
-            { "start", new() { { "zh-CN", "启动" }, { "en-US", "Start" } } },
-            { "stop", new() { { "zh-CN", "停止" }, { "en-US", "Stop" } } },
-            { "actions", new() { { "zh-CN", "操作" }, { "en-US", "Actions" } } },
-            { "add_project", new() { { "zh-CN", "新增项目" }, { "en-US", "Add Project" } } },
-            { "project_name_tip", new() { { "zh-CN", "项目名称必须以大写字母开头，只能包含字母和数字" }, { "en-US", "Project name must start with uppercase letter and contain only letters and numbers" } } },
-            { "display_name_en", new() { { "zh-CN", "显示名称(英文)" }, { "en-US", "display name (English)" } } },
-            { "project_description", new() { { "zh-CN", "项目描述" }, { "en-US", "project description" } } },
-            { "description_en", new() { { "zh-CN", "项目描述(英文)" }, { "en-US", "project description (English)" } } },
-            { "project_type_server", new() { { "zh-CN", "服务端项目" }, { "en-US", "Server Project" } } },
-            { "project_type_wpf", new() { { "zh-CN", "WPF客户端项目" }, { "en-US", "WPF Client Project" } } },
-            { "db_mysql", new() { { "zh-CN", "MySQL" }, { "en-US", "MySQL" } } },
-            { "db_sqlserver", new() { { "zh-CN", "SQL Server" }, { "en-US", "SQL Server" } } },
-            { "db_postgresql", new() { { "zh-CN", "PostgreSQL" }, { "en-US", "PostgreSQL" } } },
-            { "db_sqlite", new() { { "zh-CN", "SQLite" }, { "en-US", "SQLite" } } },
-            { "db_oracle", new() { { "zh-CN", "Oracle" }, { "en-US", "Oracle" } } },
-            { "connection_string_tip", new() { { "zh-CN", "数据库连接字符串" }, { "en-US", "Database connection string" } } },
-            { "project_path_tip", new() { { "zh-CN", "项目生成路径" }, { "en-US", "Project generation path" } } },
-            { "logo_path", new() { { "zh-CN", "Logo路径" }, { "en-US", "logo path" } } },
-            { "frontend_port", new() { { "zh-CN", "前端端口" }, { "en-US", "frontend port" } } },
-            { "backend_port", new() { { "zh-CN", "后端端口" }, { "en-US", "backend port" } } },
-            { "create_success", new() { { "zh-CN", "创建成功" }, { "en-US", "Create Success" } } },
-            { "create_failed", new() { { "zh-CN", "创建失败" }, { "en-US", "Create Failed" } } },
-
             // TabsView 右键菜单
             { "closeOthers", new() { { "zh-CN", "关闭其他" }, { "en-US", "Close Others" } } },
             { "closeAll", new() { { "zh-CN", "关闭所有" }, { "en-US", "Close All" } } },
 
-            // 模板生成相关
-            { "generate_template", new() { { "zh-CN", "生成模板" }, { "en-US", "Generate Template" } } },
-            { "confirm_generate_template", new() { { "zh-CN", "确定要生成项目模板吗？" }, { "en-US", "Are you sure you want to generate project template?" } } },
-            { "generate_template_success", new() { { "zh-CN", "模板生成成功" }, { "en-US", "Template Generated Successfully" } } },
-            { "generate_template_failed", new() { { "zh-CN", "模板生成失败" }, { "en-US", "Template Generation Failed" } } },
-            { "generating_template", new() { { "zh-CN", "正在生成模板..." }, { "en-US", "Generating template..." } } },
         };
     }
 }

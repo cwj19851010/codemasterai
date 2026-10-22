@@ -114,7 +114,7 @@ public class ProjectUiDesignServiceTests
     [Fact]
     public async Task ApplyEntityPageAsync_ReplacesTheOuterTemplateAndKeepsScriptBlock()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"codemaster-ui-{Guid.NewGuid():N}");
+        var root = Path.Combine(CodeMasterTestPaths.Root, $"codemaster-ui-{Guid.NewGuid():N}");
         try
         {
             var viewRoot = Path.Combine(root, "Demo.Vue", "src", "views", "sales", "order");

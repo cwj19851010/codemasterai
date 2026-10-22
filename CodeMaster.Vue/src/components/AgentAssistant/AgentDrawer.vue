@@ -28,6 +28,21 @@
       </div>
     </template>
 
+    <div class="agent-mode-bar">
+      <el-radio-group
+        v-model="agentMode"
+        size="small"
+        :disabled="sending || switchingMode"
+        @change="handleAgentModeChange"
+      >
+        <el-radio-button :value="AGENT_MODE.REQUIREMENTS">需求设计</el-radio-button>
+        <el-radio-button :value="AGENT_MODE.CODE">生成代码</el-radio-button>
+      </el-radio-group>
+      <span class="agent-mode-hint" :class="{ 'is-code': isCodeModeActive }">
+        {{ agentModeCopyText.hint }}
+      </span>
+    </div>
+
     <div class="agent-layout">
       <div class="context-panel">
         <div class="context-field project-field">
@@ -59,7 +74,7 @@
             v-if="enabledProviders.length"
             v-model="selectedProviderId"
             style="width: 100%"
-            :disabled="sending || confirmingWorkPlan || applyingWorkPlanMetadata || materializingProject"
+            :disabled="sending || confirmingWorkPlan || applyingWorkPlanMetadata"
             @change="handleProviderChange"
           >
             <el-option
@@ -86,7 +101,7 @@
             <el-switch
               v-model="autoApproveApprovals"
               size="small"
-              :disabled="sending || confirmingWorkPlan || applyingWorkPlanMetadata || materializingProject"
+              :disabled="sending || confirmingWorkPlan || applyingWorkPlanMetadata"
               @change="handleWorkflowPreferencesChange"
             />
           </div>
@@ -126,15 +141,8 @@
           </el-tooltip>
         </div>
 
-        <div v-if="selectedProjectId" class="project-materialization-field">
-          <el-button
-            type="success"
-            plain
-            :loading="materializingProject"
-            :disabled="sending || confirmingWorkPlan || applyingWorkPlanMetadata"
-            @click="materializeCurrentProject"
-          >重新生成并验证</el-button>
-          <span>备用入口；正常流程会在元数据完成后自动执行</span>
+        <div v-if="selectedProjectId" class="agent-scope-hint">
+          <span>元数据由 Agent 准备；源代码请在项目页面手动生成</span>
         </div>
       </div>
 
@@ -528,12 +536,12 @@
           :rows="3"
           resize="none"
           maxlength="4000"
-          placeholder="描述要分析或创建的模块、实体和字段"
+          :placeholder="agentModeCopyText.placeholder"
           :disabled="!canSend"
           @keydown.ctrl.enter.prevent="handleSend"
         />
         <div class="composer-footer">
-          <span>Ctrl + Enter</span>
+          <span>{{ isCodeModeActive ? 'Ctrl + Enter' : agentModeCopyText.emptyTip }}</span>
           <el-button
             type="primary"
             :icon="Promotion"
@@ -544,6 +552,20 @@
             发送
           </el-button>
         </div>
+      </div>
+
+      <div v-if="!isCodeModeActive" class="generate-action">
+        <el-button
+          type="primary"
+          size="large"
+          :icon="MagicStick"
+          :loading="switchingMode"
+          :disabled="!canSwitchToCodeMode || sending"
+          @click="handleStartGeneration"
+        >
+          生成代码
+        </el-button>
+        <span class="generate-action-tip">{{ generateActionTip }}</span>
       </div>
     </div>
 
@@ -571,15 +593,21 @@ import {
   EditPen,
   FolderOpened,
   InfoFilled,
+  MagicStick,
   Promotion,
   Setting,
   WarningFilled
 } from '@element-plus/icons-vue'
 import { buildProject, testProject, enhanceUiPage, getList as getProjectList, migrateDatabase } from '@/api/codegen/project'
-import { generate as generateComplexPage, getList as getProjectPageList } from '@/api/codegen/projectPage'
 import { takePendingDraft } from './wizardDraft'
 import { buildConversationTimeline } from './conversationTimeline'
-import { PROJECT_MATERIALIZATION_ACTIONS } from './projectMaterialization'
+import {
+  AGENT_MODE,
+  DEFAULT_AGENT_MODE,
+  agentModeCopy,
+  isCodeMode,
+  normalizeAgentMode
+} from './agentMode'
 import {
   DEFAULT_AGENT_WORKFLOW_MODE,
   executionProgressKey,
@@ -613,6 +641,7 @@ import {
   resumeWorkPlan,
   retryWorkPlanTask,
   streamMessage,
+  switchAgentMode,
   updateConversationPreferences,
   updateConversationProvider
 } from '@/api/agent'
@@ -647,6 +676,11 @@ const selectedProviderId = ref('')
 const activeConversationId = ref('')
 const workflowMode = ref(DEFAULT_AGENT_WORKFLOW_MODE)
 const autoApproveApprovals = ref(false)
+// The mode the user is working in. It is persisted on the conversation by the server, so
+// reloading the drawer or switching machines keeps the same page. Requirements is the safe
+// default: nothing generates code until the user presses the generate action.
+const agentMode = ref(DEFAULT_AGENT_MODE)
+const switchingMode = ref(false)
 const draft = ref('')
 const sending = ref(false)
 const retryRequestId = ref('')
@@ -661,8 +695,6 @@ const metadataApplicationIds = ref(new Set())
 const retryingTaskId = ref('')
 const confirmingWorkPlan = ref(false)
 const applyingWorkPlanMetadata = ref(false)
-const materializingProject = ref(false)
-const materializationRecoveryRunning = ref(false)
 const automaticApprovalRunning = ref(false)
 const automaticClientRecoveryRunning = ref(false)
 const automaticPlanRepairKeys = ref(new Set())
@@ -731,6 +763,50 @@ const approvalScrollSignature = computed(() => [
 ].join('|'))
 const streamingMessageVisible = computed(() => messages.value.some(message => message.isStreaming))
 const canSend = computed(() => Boolean(selectedProviderId.value && !sending.value))
+const isCodeModeActive = computed(() => isCodeMode(agentMode.value))
+const agentModeCopyText = computed(() => agentModeCopy(agentMode.value))
+// Generation only makes sense once the user has actually described something. Without this
+// the button would happily start a run built from an empty conversation.
+const hasRequirementContent = computed(() => messages.value.some(message =>
+  String(message.role || '').toLowerCase() === 'user' && String(message.content || '').trim()
+))
+const canSwitchToCodeMode = computed(() => Boolean(
+  selectedProviderId.value && !switchingMode.value && hasRequirementContent.value
+))
+const activeConversation = computed(() => conversations.value.find(
+  item => String(item.id) === String(activeConversationId.value)
+))
+// True when the last successful generation is older than every requirement message. A re-run
+// in that state would rebuild the same metadata and generate nothing, so the server refuses
+// the switch until the client acknowledges it.
+const hasNewRequirementSinceGeneration = computed(() => {
+  const lastGeneratedAt = activeConversation.value?.lastGeneratedAt
+  if (!lastGeneratedAt) return true
+  const since = new Date(lastGeneratedAt).getTime()
+  if (!Number.isFinite(since)) return true
+  return messages.value.some(message => {
+    if (String(message.role || '').toLowerCase() !== 'user') return false
+    if (!String(message.content || '').trim()) return false
+    const created = new Date(message.createTime || 0).getTime()
+    return Number.isFinite(created) && created > since
+  })
+})
+const lastGeneratedAtLabel = computed(() => {
+  const value = activeConversation.value?.lastGeneratedAt
+  if (!value) return ''
+  const parsed = new Date(value)
+  return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : ''
+})
+// The button states what it will do instead of just saying "generate", because this is the
+// one place the user knowingly authorizes writes.
+const generateActionTip = computed(() => {
+  if (!selectedProviderId.value) return '请先选择模型'
+  if (!hasRequirementContent.value) return '请先描述需求，描述后即可生成代码'
+  if (!hasNewRequirementSinceGeneration.value) {
+    return `上次生成后没有新需求（${lastGeneratedAtLabel.value}），重新生成不会有变化`
+  }
+  return '将把当前对话中确认的需求写入项目元数据，然后生成代码'
+})
 
 const openDiagnosticLogs = async () => {
   try {
@@ -873,8 +949,7 @@ const applyConfirmedWorkPlanMetadata = async initialExecution => {
       }
       return
     }
-    ElMessage.info('全部元数据已应用，开始统一生成、迁移、构建和测试')
-    await materializeCurrentProject()
+    ElMessage.success('元数据已全部应用；源代码请在项目页面手动生成')
   } catch (error) {
     ElMessage.error(error?.message || '应用工作计划元数据失败')
     await loadWorkPlan()
@@ -985,15 +1060,16 @@ const loadConversation = async () => {
     selectedProviderId.value = conversation.providerId
   }
   workflowMode.value = normalizeWorkflowMode(conversation?.workflowMode)
+  agentMode.value = normalizeAgentMode(conversation?.agentMode)
   autoApproveApprovals.value = Boolean(conversation?.autoApproveApprovals)
   await scrollToBottom()
   if (autoApprovalEnabled.value) scheduleAutomaticApprovalProcessing()
   scheduleAutomaticClientActionRecovery()
-  scheduleMaterializationRecovery()
 }
 
 const resetWorkflowPreferences = () => {
   workflowMode.value = DEFAULT_AGENT_WORKFLOW_MODE
+  agentMode.value = DEFAULT_AGENT_MODE
   autoApproveApprovals.value = false
 }
 
@@ -1024,10 +1100,12 @@ const ensureConversation = async () => {
     projectId: selectedProjectId.value,
     providerId: selectedProviderId.value,
     workflowMode: workflowMode.value,
+    agentMode: agentMode.value,
     autoApproveApprovals: autoApproveApprovals.value
   })
   activeConversationId.value = conversation.id
   workflowMode.value = normalizeWorkflowMode(conversation.workflowMode || workflowMode.value)
+  agentMode.value = normalizeAgentMode(conversation.agentMode || agentMode.value)
   autoApproveApprovals.value = Boolean(conversation.autoApproveApprovals)
   conversations.value.unshift(conversation)
   return conversation.id
@@ -1115,6 +1193,86 @@ const waitForServerCompletion = async (conversationId, requestId, streamingMessa
     await new Promise(resolve => setTimeout(resolve, 1500))
   }
   return null
+}
+
+const persistAgentMode = async (target, force = false) => {
+  // A conversation is only created on the first message, so a mode chosen before that is
+  // carried into createConversation instead of needing its own request.
+  if (!activeConversationId.value) {
+    agentMode.value = target
+    return true
+  }
+  const conversation = await switchAgentMode(activeConversationId.value, target, force)
+  agentMode.value = normalizeAgentMode(conversation?.agentMode || target)
+  conversations.value = conversations.value.map(item =>
+    String(item.id) === String(activeConversationId.value)
+      ? { ...item, agentMode: agentMode.value, lastGeneratedAt: conversation?.lastGeneratedAt }
+      : item
+  )
+  return true
+}
+
+const handleAgentModeChange = async value => {
+  const target = normalizeAgentMode(value)
+  const previous = agentMode.value
+  if (target === previous) return
+  try {
+    switchingMode.value = true
+    await persistAgentMode(target)
+  } catch (error) {
+    agentMode.value = previous
+    ElMessage.error(error?.message || '切换 Agent 页面失败')
+  } finally {
+    switchingMode.value = false
+  }
+}
+
+/**
+ * The single authorization action in the workflow. Everything before it is read-only, so
+ * this confirmation is the one place the user knowingly hands over write access. The server
+ * independently refuses the switch when the conversation holds no requirement.
+ */
+const handleStartGeneration = async () => {
+  if (!canSwitchToCodeMode.value || sending.value) return
+
+  // Ask once more when nothing new arrived, because a re-run would not change anything.
+  let force = false
+  if (!hasNewRequirementSinceGeneration.value) {
+    try {
+      await ElMessageBox.confirm(
+        `上次生成时间是 ${lastGeneratedAtLabel.value}，此后没有新的需求内容，强制重新生成不会带来变化。确定继续吗？`,
+        '没有检测到新需求',
+        { type: 'warning', confirmButtonText: '仍然生成', cancelButtonText: '返回需求设计' }
+      )
+    } catch {
+      return
+    }
+    force = true
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '接下来会依据当前对话中已确认的需求写入项目元数据，然后生成代码。这一步会真正修改项目，确定继续吗？',
+      '确认生成代码',
+      { type: 'warning', confirmButtonText: '开始生成', cancelButtonText: '再想想' }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    switchingMode.value = true
+    await persistAgentMode(AGENT_MODE.CODE, force)
+  } catch (error) {
+    ElMessage.error(error?.message || '切换到生成代码页失败')
+    return
+  } finally {
+    switchingMode.value = false
+  }
+
+  // Code mode is the authorization itself, so this message starts the real work without
+  // asking the user to confirm again.
+  await handleSend('确认，按已讨论的需求开始生成代码')
 }
 
 const handleSend = async (contentOverride = null, requestIdOverride = '') => {
@@ -1510,6 +1668,7 @@ const kindLabels = {
   Infrastructure: '通道失败',
   Authorization: '权限不足',
   NotFound: '目标不存在',
+  Validation: '元数据校验失败',
   ToolExecution: '工具异常',
   Unknown: '未知错误'
 }
@@ -1519,6 +1678,7 @@ const kindTone = key => ({
   Infrastructure: 'warning',
   Authorization: 'warning',
   NotFound: 'danger',
+  Validation: 'warning',
   ToolExecution: 'danger',
   Unknown: 'info'
 }[key] || 'danger')
@@ -1773,8 +1933,7 @@ const processAutomaticApprovals = async () => {
     }
 
     if (appliedStandaloneMetadata && autoApproveApprovals.value) {
-      ElMessage.info('元数据已完成，开始统一生成、迁移、构建和测试')
-      await materializeCurrentProject()
+      ElMessage.success('元数据已完成；源代码请在项目页面手动生成')
     }
   } catch (error) {
     ElMessage.error(error?.message || '自动应用变更失败，可手动继续')
@@ -1941,139 +2100,6 @@ const executeClientActions = async execution => {
       // Keep the original generation error visible to the user.
     }
     throw error
-  }
-}
-
-const materializationStorageKey = (projectId, structureVersion) =>
-  `codemaster-agent-materialization:${projectId}:${structureVersion || 'standalone'}`
-
-const readMaterializationState = (projectId, structureVersion) => {
-  try {
-    const raw = localStorage.getItem(materializationStorageKey(projectId, structureVersion))
-    const parsed = raw ? JSON.parse(raw) : null
-    return parsed && Array.isArray(parsed.completed) ? parsed : { completed: [] }
-  } catch {
-    return { completed: [] }
-  }
-}
-
-const writeMaterializationState = (projectId, structureVersion, completed) => {
-  localStorage.setItem(materializationStorageKey(projectId, structureVersion), JSON.stringify({
-    projectId: String(projectId),
-    structureVersion: structureVersion || 'standalone',
-    completed,
-    updatedAt: new Date().toISOString()
-  }))
-}
-
-const clearMaterializationState = (projectId, structureVersion) => {
-  localStorage.removeItem(materializationStorageKey(projectId, structureVersion))
-}
-
-const scheduleMaterializationRecovery = () => {
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => void recoverMaterialization())
-  } else {
-    setTimeout(() => void recoverMaterialization(), 0)
-  }
-}
-
-const recoverMaterialization = async () => {
-  if (materializationRecoveryRunning.value || materializingProject.value || !selectedProjectId.value) return
-  const structureVersion = workPlan.value?.structureVersion || 'standalone'
-  const state = readMaterializationState(selectedProjectId.value, structureVersion)
-  if (!state.completed.length) return
-  materializationRecoveryRunning.value = true
-  try {
-    await materializeCurrentProject()
-  } finally {
-    materializationRecoveryRunning.value = false
-  }
-}
-
-const materializeCurrentProject = async () => {
-  if (!selectedProjectId.value || materializingProject.value) return
-  materializingProject.value = true
-  const projectId = selectedProjectId.value
-  const structureVersion = workPlan.value?.structureVersion || 'standalone'
-  const materializationState = readMaterializationState(projectId, structureVersion)
-  const completedSet = new Set(materializationState.completed)
-  const startedAt = performance.now()
-  await writeClientDiagnostic('agent.project_materialization.started', {
-    projectId,
-    stage: 'project-materialization'
-  })
-  try {
-    const generateAllComplexPages = async () => {
-      let pages
-      try {
-        pages = await getProjectPageList({ projectId })
-      } catch (error) {
-        // UI Composition is optional in public-only installations.
-        if (error?.response?.status === 404) return { success: true, pageCount: 0 }
-        throw error
-      }
-
-      const generated = []
-      for (const page of Array.isArray(pages) ? pages : []) {
-        const result = await generateComplexPage(page.id, projectId, true)
-        ensureClientActionSucceeded({ action: 'generateComplexPage' }, result)
-        generated.push(page.pageKey || page.id)
-      }
-      return { success: true, pageCount: generated.length, pages: generated }
-    }
-    const runners = {
-      generateProjectIncrementalCode: () => generateProjectIncrementalCode(projectId, []),
-      generateComplexPages: generateAllComplexPages,
-      buildProject: () => buildProject(projectId),
-      testProject: () => testProject(projectId)
-    }
-    const steps = PROJECT_MATERIALIZATION_ACTIONS.map(action => ({ action, run: runners[action] }))
-    const completed = [...completedSet]
-    for (const step of steps) {
-      if (completedSet.has(step.action)) continue
-      const result = await step.run()
-      ensureClientActionSucceeded({ action: step.action }, result)
-      completed.push(step.action)
-      completedSet.add(step.action)
-      writeMaterializationState(projectId, structureVersion, completed)
-    }
-
-    const legacyPending = toolExecutions.value.filter(item => item.status === 'AwaitingClientExecution')
-    for (const execution of legacyPending) {
-      const completion = await completeToolClientActions(execution.id, {
-        success: true,
-        output: `Project-level materialization completed: ${completed.join(', ')}`
-      })
-      updateExecution(completion.execution || completion)
-    }
-
-    if (activeConversationId.value) {
-      try {
-        await invalidateLocalAgentContext(activeConversationId.value)
-      } catch {
-        // The next request can rebuild context after successful materialization.
-      }
-    }
-    await loadConversation()
-    await writeClientDiagnostic('agent.project_materialization.completed', {
-      projectId,
-      stage: 'project-materialization',
-      durationMs: performance.now() - startedAt
-    })
-    clearMaterializationState(projectId, structureVersion)
-    ElMessage.success('当前项目已统一完成生成、迁移、构建和测试')
-  } catch (error) {
-    await writeClientDiagnostic('agent.project_materialization.failed', {
-      level: 'error',
-      projectId,
-      stage: 'project-materialization',
-      durationMs: performance.now() - startedAt,
-      message: getClientActionDiagnostic(error)
-    })
-    ElMessage.error(error?.message || '项目生成与验证失败')
-  } finally {
-    materializingProject.value = false
   }
 }
 
@@ -2507,7 +2533,8 @@ const formatTime = value => {
 }
 
 .agent-layout {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--app-bg, #f4f7fb);
@@ -2603,14 +2630,14 @@ const formatTime = value => {
   flex: 0 0 auto;
 }
 
-.project-materialization-field {
+.agent-scope-hint {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.project-materialization-field span {
+.agent-scope-hint span {
   color: var(--app-text-muted, #64748b);
   font-size: 11px;
 }
@@ -3360,6 +3387,46 @@ const formatTime = value => {
   font-size: 11px;
 }
 
+/* Mode switch: requirements is the read-only page, code is the authorized page. */
+.agent-mode-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--app-border, #dbe4ef);
+  background: var(--app-header-bg, #fff);
+}
+
+.agent-mode-hint {
+  color: var(--app-text-muted, #94a3b8);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.agent-mode-hint.is-code {
+  color: #b45309;
+}
+
+.generate-action {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px 14px;
+  background: var(--app-header-bg, #fff);
+}
+
+.generate-action .el-button {
+  width: 100%;
+}
+
+.generate-action-tip {
+  color: var(--app-text-muted, #94a3b8);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 @keyframes typing {
   0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-3px); }
@@ -3391,6 +3458,8 @@ const formatTime = value => {
 .codemaster-agent-drawer .el-drawer__body {
   padding: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 @media (max-width: 640px) {

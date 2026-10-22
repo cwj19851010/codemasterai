@@ -168,8 +168,8 @@ export function getProjectStatus(projectId) {
   return executeCodegenAction('getProjectStatus', { projectId }, () =>
     request({
       url: '/codegen/project/getstatus',
-      method: 'post',
-      data: { projectId }
+      method: 'get',
+      params: { projectId }
     })
   )
 }
@@ -234,7 +234,8 @@ export function exportTemplate(outputPath = '') {
   return request({
     url: '/codegen/project/export-template',
     method: 'post',
-    data: { outputPath }
+    data: { outputPath },
+    timeout: 300000 // 模板包含打印运行时，压缩过程可能需要数分钟
   })
 }
 

@@ -133,7 +133,7 @@ public class BaseDataModule : ISeedModule
                 UserName = "admin",
                 NickName = "管理员",
                 Password = BCrypt.Net.BCrypt.HashPassword("admin123"),
-                Email = "admin@codemaster.com",
+                Email = "admin@example.com",
                 PhoneNumber = "13800138000",
                 Sex = 0,
                 Status = 0,

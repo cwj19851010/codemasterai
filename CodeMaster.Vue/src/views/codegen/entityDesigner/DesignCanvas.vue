@@ -4,7 +4,7 @@
       <!-- 寄生子组件（不挂拖拽条） -->
       <el-table-column v-if="node.tag==='el-table-column'" v-bind="buildProps(node)" :ref="(el) => trackRef(node.id, el)">
         <template v-if="hasSlot(node,'default')" #default="scope">
-          <DesignCanvas :list="getSlotComps(node,'default')" :slotScope="scope" @select="(id)=>emit('select',id)" />
+          <DesignCanvas :list="getSlotComps(node,'default')" :slotScope="scope" :translation-map="translationMap" :translation-enabled="translationEnabled" @select="(id)=>emit('select',id)" />
         </template>
       </el-table-column>
       <el-option v-else-if="node.tag==='el-option'" v-bind="buildProps(node)" />
@@ -15,7 +15,7 @@
         <template v-for="(cn,i) in (node.children||[])" :key="cn.id||i">
           <el-table-column v-if="cn.tag==='el-table-column'" v-bind="buildProps(cn)" :ref="(el) => trackRef(cn.id, el)">
             <template v-if="hasSlot(cn,'default')" #default="scope">
-              <DesignCanvas :list="getSlotComps(cn,'default')" :slotScope="scope" @select="(id)=>emit('select',id)" />
+              <DesignCanvas :list="getSlotComps(cn,'default')" :slotScope="scope" :translation-map="translationMap" :translation-enabled="translationEnabled" @select="(id)=>emit('select',id)" />
             </template>
           </el-table-column>
         </template>
@@ -38,13 +38,13 @@
       </el-descriptions>
       <!-- 通用组件（挂 ref 追踪） -->
       <component v-else :is="resolveTag(node.tag)" v-bind="buildProps(node)" :ref="(el) => trackRef(node.id, el)" @click.stop="emit('select', node.id)">
-        <span v-if="node.content && (!node.children||(node.children||[]).length===0)">{{ node.content }}</span>
+        <span v-if="node.content && (!node.children||(node.children||[]).length===0)">{{ resolveDesignTranslation(node.content, translationMap, translationEnabled) }}</span>
         <EditorPreview v-if="isEditorNode(node)" :fieldName="getFieldName(node)" />
         <DesignCanvas v-else-if="node.children && (node.children||[]).length>0 && !isEditorChild(node)"
-          :list="node.children" :selectedId="selectedId" @select="(id)=>emit('select',id)" />
+          :list="node.children" :selectedId="selectedId" :translation-map="translationMap" :translation-enabled="translationEnabled" @select="(id)=>emit('select',id)" />
         <!-- 通用 slot 渲染 -->
         <template v-for="s in (node.useSlots||[])" :key="s.name" #[s.name]="scope">
-          <DesignCanvas :list="s.components||[]" :selectedId="selectedId" :slotScope="scope" @select="(id)=>emit('select',id)" />
+          <DesignCanvas :list="s.components||[]" :selectedId="selectedId" :slotScope="scope" :translation-map="translationMap" :translation-enabled="translationEnabled" @select="(id)=>emit('select',id)" />
         </template>
       </component>
       </template>
@@ -54,12 +54,15 @@
 <script setup>
 import { onMounted, nextTick, watch } from 'vue'
 import EditorPreview from './EditorPreview.vue'
+import { resolveDesignTranslation } from './translationPreview'
 
 defineOptions({ name: 'DesignCanvas' })
 const props = defineProps({
   list: { type: Array, default: () => [] },
   selectedId: { type: String, default: null },
-  slotScope: { type: Object, default: null }
+  slotScope: { type: Object, default: null },
+  translationMap: { type: Object, default: () => ({}) },
+  translationEnabled: { type: Boolean, default: true }
 })
 const emit = defineEmits(['select', 'sort'])
 
@@ -274,7 +277,7 @@ function buildProps(node) {
 
       // 设计器没有运行时 setup 上下文。文本属性显示原绑定表达式；
       // 非文本属性不伪造字符串值，让 Element Plus 使用组件默认值。
-      if (isDesignTextProp(p.key)) r[p.key] = String(p.value ?? '')
+      if (isDesignTextProp(p.key)) r[p.key] = resolveDesignTranslation(String(p.value ?? ''), props.translationMap, props.translationEnabled)
       continue
     }
     let v=p.value
@@ -282,7 +285,9 @@ function buildProps(node) {
     else if (v==='false'||v===false) v=false
     else if (/^\d+$/.test(String(v))) v=Number(v)
     else if (v===null||v===undefined) v=true
-    r[p.key]=v
+    r[p.key] = typeof v === 'string' && isDesignTextProp(p.key)
+      ? resolveDesignTranslation(v, props.translationMap, props.translationEnabled)
+      : v
   }
   // 兜底：el-form 必须提供 model，防止子 el-form-item 访问 undefined
   if (node.tag==='el-form'&&!('model' in r)) r.model={}

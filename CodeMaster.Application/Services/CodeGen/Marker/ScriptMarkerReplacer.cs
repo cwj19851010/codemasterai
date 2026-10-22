@@ -21,6 +21,8 @@ public static class ScriptMarkerReplacer
                 "moduleName" => ctx.ModuleName,
                 "moduleNameLower" => ctx.ModuleNameLower,
                 "moduleNameAllLower" => ctx.ModuleNameAllLower,
+                "projectId" => ctx.ProjectId,
+                "moduleId" => ctx.ModuleId,
                 "onlineSelectListSupport" => ctx.OnlineSelectListSupport,
                 "onlineSelectDetailSupport" => ctx.OnlineSelectDetailSupport,
                 _ => m.Value

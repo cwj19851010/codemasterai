@@ -37,7 +37,7 @@ public class ManualTesterSeeder
         {
             Id = DateTime.UtcNow.Ticks + 1,
             ProjectName = "AITestProject",
-            ProjectPath = Path.Combine(Path.GetTempPath(), "AITestProject"),
+            ProjectPath = Path.Combine(CodeMasterTestPaths.Root, "AITestProject"),
             DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
             ConnectionString = "Data Source=../AITestProject.Migrator/TargetDb.sqlite",
             Description = "本地AI辅助植入的测试项目"

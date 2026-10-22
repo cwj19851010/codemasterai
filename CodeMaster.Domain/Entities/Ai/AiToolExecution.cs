@@ -18,6 +18,15 @@ public class AiToolExecution : EntityBaseWithTenant
     [SugarColumn(ColumnName = "project_id", IsNullable = false)]
     public long ProjectId { get; set; }
 
+    [SugarColumn(ColumnName = "work_plan_id", IsNullable = true)]
+    public long? WorkPlanId { get; set; }
+
+    [SugarColumn(ColumnName = "work_batch_id", IsNullable = true)]
+    public long? WorkBatchId { get; set; }
+
+    [SugarColumn(ColumnName = "work_task_id", IsNullable = true)]
+    public long? WorkTaskId { get; set; }
+
     [SugarColumn(ColumnName = "request_id", Length = 64, IsNullable = true)]
     public string? RequestId { get; set; }
 
@@ -30,8 +39,21 @@ public class AiToolExecution : EntityBaseWithTenant
     [SugarColumn(ColumnName = "input_json", Length = 8000, IsNullable = true)]
     public string? InputJson { get; set; }
 
+    /// <summary>
+    /// Gzip-compressed UTF-8 tool input. New executions use this provider-neutral binary column;
+    /// InputJson remains as a compact summary and as a legacy payload fallback.
+    /// </summary>
+    [SugarColumn(ColumnName = "input_payload", IsNullable = true)]
+    public byte[]? InputPayload { get; set; }
+
     [SugarColumn(ColumnName = "output_json", Length = 8000, IsNullable = true)]
     public string? OutputJson { get; set; }
+
+    /// <summary>
+    /// Gzip-compressed UTF-8 execution output. OutputJson remains available for legacy records.
+    /// </summary>
+    [SugarColumn(ColumnName = "output_payload", IsNullable = true)]
+    public byte[]? OutputPayload { get; set; }
 
     [SugarColumn(ColumnName = "status", Length = 30, IsNullable = false)]
     public string Status { get; set; } = "PendingApproval";

@@ -1,7 +1,8 @@
 namespace CodeMaster.Agent.PlatformConstraints;
 
 /// <summary>
-/// Hard rules for the seven-stage plan pipeline.
+/// Hard rules for the metadata-only plan pipeline. The plan ends at ConsistencyCheck:
+/// code generation is a manual user action, so the agent never schedules it.
 /// </summary>
 public sealed record WorkflowConvention
 {
@@ -12,12 +13,11 @@ public sealed record WorkflowConvention
         "Relations",
         "FieldControls",
         "ComplexPages",
-        "ConsistencyCheck",
-        "GenerateCode"
+        "ConsistencyCheck"
     };
 
     public string GenerateCodeHardRule =>
-        "GenerationMode=Incremental; do NOT request EF migration, runtime startup, or service initialization from the Agent. The user confirms and the WebApi owns those steps.";
+        "The agent never generates code and never schedules a GenerateCode stage. It only writes metadata rows (sys_*). Code generation is a manual action the user triggers from the UI; the generator then diffs the metadata and edits the existing source in place. Do not call generation, build, EF migration, or startup tools.";
 
     public string StagesSixGenerationMode => "None";
 
@@ -36,8 +36,8 @@ public sealed record WorkflowConvention
     public string RenderForPrompt() =>
         $"""
         Workflow conventions:
-        - Seven stages, fixed order: {string.Join(" -> ", StageOrder)}
-        - First six stages use GenerationMode={StagesSixGenerationMode}; only the final GenerateCode task uses GenerationMode=Incremental
+        - Six metadata stages, fixed order: {string.Join(" -> ", StageOrder)}
+        - Every stage uses GenerationMode={StagesSixGenerationMode}; no stage requests generation or build
         - {GenerateCodeHardRule}
         - {DependencyRule}
         - {ConfirmationRule}

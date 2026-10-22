@@ -10,6 +10,12 @@
       <el-button size="small" @click="handleRedo" :disabled="redoStack.length===0">↪ 重做</el-button>
       <el-button size="small" @click="showScriptDialog = true">📜 Script</el-button>
       <el-button size="small" @click="showSelectedScriptDialog = true">🎯 选中 Script</el-button>
+      <el-button size="small" :type="translationEnabled ? 'primary' : ''" :loading="translationLoading" @click="toggleTranslationPreview">
+        🌐 {{ translationEnabled ? '显示原文' : '翻译预览' }}
+      </el-button>
+      <span v-if="translationKeyCount" class="translation-status">
+        已识别 {{ translationKeyCount }} 个翻译键<span v-if="missingTranslationKeys.length">，缺少 {{ missingTranslationKeys.length }} 个</span>
+      </span>
       <el-button type="primary" size="small" @click="handleSave" :loading="saving">保存</el-button>
     </div>
 
@@ -56,9 +62,9 @@
           <template #default="{ node, data }">
             <span class="tree-node" :class="{ 'is-text': data.tag==='text', 'is-slot': data.tag==='slot' }"
               @contextmenu.prevent.stop="onTreeContextMenu($event, data)">
-              <span v-if="data.tag==='text'" class="tree-text-content" 
-                @dblclick.stop="startEditText(data)"
-                :title="data.content">{{ data.label }}</span>
+                <span v-if="data.tag==='text'" class="tree-text-content"
+                  @dblclick.stop="startEditText(data)"
+                  :title="displayDesignText(data.content)">{{ displayDesignText(data.label || data.content) }}</span>
               <template v-else>
                 <span class="tree-tag">{{ data.tag }}</span>
                 <span v-if="data.genId" class="tree-genid">{{ data.genId.replace('gen_','') }}</span>
@@ -85,8 +91,15 @@
       </teleport>
 
       <!-- 画布 -->
-      <div ref="canvasAreaRef" class="canvas-area" @scroll.passive="scheduleRefresh">
-        <DesignCanvas v-if="tree.length" :list="tree" :selectedId="selectedId" @select="onSelect" />
+      <div
+        ref="canvasAreaRef"
+        class="canvas-area"
+        @scroll.passive="scheduleRefresh"
+        @dragover.prevent="onCanvasDragOver"
+        @drop.prevent.stop="onCanvasDrop"
+      >
+        <DesignCanvas v-if="tree.length" :list="tree" :selectedId="selectedId"
+          :translation-map="translationMap" :translation-enabled="translationEnabled" @select="onSelect" />
       </div>
       <!-- 属性栏 -->
       <aside v-if="drawerVisible" class="property-sidebar">
@@ -126,7 +139,8 @@
                 <div class="prop-list">
                   <div v-for="prop in filteredProps" :key="prop.propName" class="prop-row" :class="{ inactive: !prop.isActive }">
                     <el-checkbox :model-value="prop.isActive" @change="v => { prop.isActive = v; applyPropToNode(prop); onTreeChange() }" size="small" />
-                    <span class="prop-name" :title="prop.description">{{ prop.propName }}</span>
+                    <el-input v-if="prop.isCustom" v-model="prop.propName" size="small" class="prop-name-input" @change="onCustomPropRename(prop)" />
+                    <span v-else class="prop-name" :title="prop.description">{{ prop.propName }}</span>
                     <template v-if="prop.isActive">
                       <el-select v-if="prop.valueType === 'boolean'" model-value="true" size="small" class="prop-value" disabled />
                       <el-select v-else-if="prop.enumValues" v-model="prop.currentValue" size="small" class="prop-value" @change="() => { applyPropToNode(prop); onTreeChange() }" clearable>
@@ -150,7 +164,12 @@
                         </template>
                       </el-dropdown>
                     </template>
+                    <el-button v-if="prop.isCustom" :icon="Delete" size="small" circle title="删除自定义属性" @click="removeCustomProp(prop)" />
                   </div>
+                </div>
+                <div class="custom-add">
+                  <el-input v-model="newPropName" size="small" placeholder="自定义属性名，如 data-role" @keyup.enter="addCustomProp" />
+                  <el-button size="small" type="primary" @click="addCustomProp">+ 属性</el-button>
                 </div>
               </el-tab-pane>
               <el-tab-pane :label="`指令 ${panelData.directives.filter(d=>d.isActive).length}/${panelData.directives.length}`" name="instructions">
@@ -160,11 +179,17 @@
                 <div class="prop-list">
                   <div v-for="d in filteredDirectives" :key="d.directiveName" class="prop-row" :class="{ inactive: !d.isActive }">
                     <el-checkbox :model-value="d.isActive" @change="v => { d.isActive = v; applyDirectiveToNode(d); onTreeChange() }" size="small" />
-                    <span class="prop-name" :title="d.description">{{ d.directiveName }}</span>
+                    <el-input v-if="d.isCustom" v-model="d.directiveName" size="small" class="prop-name-input" @change="onCustomDirectiveRename(d)" />
+                    <span v-else class="prop-name" :title="d.description">{{ d.directiveName }}</span>
                     <template v-if="d.isActive && d.hasValue">
                       <el-input v-model="d.currentValue" size="small" class="prop-value" @input="() => { applyDirectiveToNode(d); onTreeChange() }" placeholder="expression" />
                     </template>
+                    <el-button v-if="d.isCustom" :icon="Delete" size="small" circle title="删除自定义指令" @click="removeCustomDirective(d)" />
                   </div>
+                </div>
+                <div class="custom-add">
+                  <el-input v-model="newDirName" size="small" placeholder="自定义指令名，如 v-my-dir" @keyup.enter="addCustomDirective" />
+                  <el-button size="small" type="primary" @click="addCustomDirective">+ 指令</el-button>
                 </div>
               </el-tab-pane>
               <el-tab-pane :label="`事件 ${panelData.events.filter(e=>e.isActive).length}/${panelData.events.length}`" name="events">
@@ -174,14 +199,20 @@
                 <div class="prop-list">
                   <div v-for="evt in filteredEvents" :key="evt.eventName" class="prop-row" :class="{ inactive: !evt.isActive }">
                     <el-checkbox :model-value="evt.isActive" @change="v => { evt.isActive = v; applyEventToNode(evt); onTreeChange() }" size="small" />
-                    <span class="prop-name" :title="evt.description">@{{ evt.eventName }}</span>
+                    <el-input v-if="evt.isCustom" v-model="evt.eventName" size="small" class="prop-name-input" @change="onCustomEventRename(evt)" />
+                    <span v-else class="prop-name" :title="evt.description">@{{ evt.eventName }}</span>
                     <template v-if="evt.isActive && !evt.isSingleActive">
                       <el-input v-model="evt.currentValue" size="small" class="prop-value" @input="() => { applyEventToNode(evt); onTreeChange() }" placeholder="handler" />
                     </template>
                     <template v-if="evt.isActive">
                       <el-button size="small" class="mode-btn" :type="evt.isSingleActive ? 'primary' : ''" @click="evt.isSingleActive = !evt.isSingleActive; applyEventToNode(evt); onTreeChange()">@</el-button>
                     </template>
+                    <el-button v-if="evt.isCustom" :icon="Delete" size="small" circle title="删除自定义事件" @click="removeCustomEvent(evt)" />
                   </div>
+                </div>
+                <div class="custom-add">
+                  <el-input v-model="newEvtName" size="small" placeholder="自定义事件名，如 row-click" @keyup.enter="addCustomEvent" />
+                  <el-button size="small" type="primary" @click="addCustomEvent">+ 事件</el-button>
                 </div>
               </el-tab-pane>
               <el-tab-pane :label="`插槽 ${panelData.slots.filter(s=>s.isActive).length}/${panelData.slots.length}`" name="slots">
@@ -190,10 +221,16 @@
                 </div>
                 <div class="prop-list">
                   <div v-for="s in filteredSlots" :key="s.slotName" class="prop-row" :class="{ inactive: !s.isActive }">
-                    <el-checkbox :model-value="s.isActive" @change="v => { s.isActive = v; applySlotToNode(s); onTreeChange() }" size="small" />
-                    <span class="prop-name" :title="s.description">#{{ s.slotName }}</span>
+                    <el-checkbox :model-value="s.isActive" @change="v => setSlotActive(s, v)" size="small" />
+                    <el-input v-if="s.isCustom" :model-value="s.slotName" size="small" class="prop-name-input" @change="v => onCustomSlotRename(s, v)" />
+                    <span v-else class="prop-name" :title="s.description">#{{ s.slotName }}</span>
                     <el-input v-if="s.isActive" v-model="s.parameter" size="small" class="prop-value" placeholder="scope" @change="onSlotParamChange(s)" />
+                    <el-button v-if="s.isCustom" :icon="Delete" size="small" circle title="删除自定义插槽" @click="removeCustomSlot(s)" />
                   </div>
+                </div>
+                <div class="custom-add">
+                  <el-input v-model="newSlotName" size="small" placeholder="自定义插槽名，如 footer" @keyup.enter="addCustomSlot" />
+                  <el-button size="small" type="primary" @click="addCustomSlot">+ 插槽</el-button>
                 </div>
               </el-tab-pane>
             </el-tabs>
@@ -236,7 +273,7 @@
               </el-tab-pane>
               <el-tab-pane label="指令" name="instructions">
                 <div v-for="(ins,i) in (selectedNode.instructions||[])" :key="'v'+i" class="prop-row">
-                  <el-select v-model="ins.name" size="small" style="width:80px" @change="onTreeChange">
+                  <el-select v-model="ins.name" size="small" style="width:80px" filterable allow-create default-first-option @change="onTreeChange">
                     <el-option v-for="d in dirs" :key="d" :label="d" :value="d" />
                   </el-select>
                   <el-input v-model="ins.value" placeholder="expr" size="small" style="flex:1" @change="onTreeChange" />
@@ -262,7 +299,7 @@
         class="drag-handle" :class="{ selected: h.id === selectedId, 'drag-over': dragOverId === h.id }"
         :style="{ left: h.x + 'px', top: h.y + 'px' }"
         draggable="true"
-        @mousedown.stop="onSelect(h.id)"
+        @click.stop="onHandleClick(h.id)"
         @dragstart="onDragStart($event, h.id)"
         @dragover.prevent="onDragOver($event, h.id)"
         @dragleave="onDragLeave(h.id)"
@@ -441,9 +478,11 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close, Delete } from '@element-plus/icons-vue'
-import { getPageContent, savePageContent, deleteChildRelation, deleteEntityRelation, getPageScript, savePageScript, getFieldScripts, saveFieldScripts } from '@/api/codegen/moduleEntity'
+import { getPageContent, savePageContent, deleteChildRelation, deleteEntityRelation, getPageScript, savePageScript, getFieldScripts, saveFieldScripts, getProjectI18nMap } from '@/api/codegen/moduleEntity'
 import { getFieldPropertyPanel } from '@/api/system/component'
+import i18n from '@/i18n'
 import DesignCanvas from './DesignCanvas.vue'
+import { collectDesignTranslationKeys, resolveDesignTranslation } from './translationPreview'
 
 const router = useRouter()
 const route = useRoute()
@@ -451,6 +490,35 @@ const entityId = ref(route.query.entityId)
 const entityName = ref(route.query.entityName||'')
 const pageType = ref(route.query.pageType||'index')
 const pageLabel = ref({index:'列表页',add:'新增页',edit:'编辑页',detail:'详情页'}[pageType.value]||'')
+
+// 设计器预览翻译：只替换画布显示，不改写 tree.json/.vue 内容
+const translationMap = ref({})
+const translationEnabled = ref(true)
+const translationLoading = ref(false)
+const translationLanguage = computed(() => i18n.global.locale.value || 'zh-CN')
+const translationKeys = computed(() => [...collectDesignTranslationKeys(tree.value)])
+const translationKeyCount = computed(() => translationKeys.value.length)
+const missingTranslationKeys = computed(() => translationKeys.value.filter(key => !translationMap.value[key]))
+const displayDesignText = value => resolveDesignTranslation(value, translationMap.value, translationEnabled.value)
+
+async function loadProjectTranslations() {
+  if (!entityId.value) return
+  translationLoading.value = true
+  try {
+    const result = await getProjectI18nMap(entityId.value, translationLanguage.value)
+    translationMap.value = result && typeof result === 'object' ? result : {}
+  } catch (e) {
+    // 翻译仅影响设计器预览，目标项目未初始化时保持编辑功能可用
+    translationMap.value = {}
+  } finally {
+    translationLoading.value = false
+  }
+}
+
+async function toggleTranslationPreview() {
+  translationEnabled.value = !translationEnabled.value
+  if (translationEnabled.value && !Object.keys(translationMap.value).length) await loadProjectTranslations()
+}
 
 const tree = ref([])
 const loading = ref(true), error = ref(''), saving = ref(false)
@@ -1082,7 +1150,7 @@ let wasDragging = false
         }
         ;(node.props || []).forEach(p => {
           if (!p.key || p.key === 'data-gen-id') return
-          propMap[p.key] = { value: p.value, isBind: p.isBind, isSingle: p.isSingle }
+          propMap[p.key] = { value: p.value, isBind: p.isBind, isSingle: p.isSingle, isCustom: p.isCustom }
         })
         Object.entries(propMap).forEach(([name, existing]) => {
           if (!panelData.value.properties.find(p => p.propName === name)) {
@@ -1096,7 +1164,9 @@ let wasDragging = false
               isAdvanced: false,
               isActive: false,
               currentValue: null,
-              valueType: 'static'
+              valueType: 'static',
+              isCustom: existing.isCustom === true,
+              _appliedName: name
             })
           }
         })
@@ -1106,7 +1176,9 @@ let wasDragging = false
             p.isActive = true
             p.currentValue = existing.value
             p.valueType = existing.isBind ? 'bind' : existing.isSingle ? 'boolean' : 'static'
+            if (existing.isCustom) p.isCustom = true
           }
+          p._appliedName = p.propName
         })
         // 事件
         const evtMap = {}
@@ -1120,22 +1192,31 @@ let wasDragging = false
             e.currentValue = existing.body
             e.isSingleActive = existing.isSingle
           }
+          e._appliedName = e.eventName
         })
         // 补充节点中已有但 API 未返回的事件
         ;(node.events || []).forEach(e => {
           if (!panelData.value.events.find(x => x.eventName === e.name)) {
-            panelData.value.events.push({ eventName: e.name, description: '', isCommon: false, isSingle: e.isSingle, isActive: true, currentValue: e.body, isSingleActive: e.isSingle })
+            panelData.value.events.push({ eventName: e.name, description: '', isCommon: false, isSingle: e.isSingle, isActive: true, currentValue: e.body, isSingleActive: e.isSingle, isCustom: e.isCustom === true, _appliedName: e.name })
+          } else {
+            const hit = panelData.value.events.find(x => x.eventName === e.name)
+            if (e.isCustom) hit.isCustom = true
           }
         })
         // 插槽
         const slotSet = new Set((node.useSlots || []).map(s => s.name))
         panelData.value.slots.forEach(s => {
           if (slotSet.has(s.slotName)) s.isActive = true
+          if (s.isCustom) s._appliedName = s._appliedName || s.slotName
+          else s._appliedName = s.slotName
         })
         // 补充节点中已有但 API 未返回的插槽
         ;(node.useSlots || []).forEach(s => {
           if (!panelData.value.slots.find(x => x.slotName === s.name)) {
-            panelData.value.slots.push({ slotName: s.name, description: '', isCommon: false, isActive: true })
+            panelData.value.slots.push({ slotName: s.name, description: '', isCommon: false, isActive: true, isCustom: s.isCustom === true, _appliedName: s.name })
+          } else {
+            const hit = panelData.value.slots.find(x => x.slotName === s.name)
+            if (s.isCustom) hit.isCustom = true
           }
         })
         // 指令
@@ -1148,6 +1229,7 @@ let wasDragging = false
             d.isActive = true
             d.currentValue = instMap[d.directiveName]
           }
+          d._appliedName = d.directiveName
         })
         // Add directives that exist on the node but are missing from metadata.
         ;(node.instructions || []).forEach(i => {
@@ -1158,8 +1240,13 @@ let wasDragging = false
               hasValue: !i.isSingle,
               isCommon: false,
               isActive: true,
-              currentValue: i.value
+              currentValue: i.value,
+              isCustom: i.isCustom === true,
+              _appliedName: i.name
             })
+          } else {
+            const hit = panelData.value.directives.find(x => x.directiveName === i.name)
+            if (i.isCustom) hit.isCustom = true
           }
         })
       }
@@ -1191,6 +1278,11 @@ const showAdvanced = ref(false)
 const showOnlyActiveDir = ref(false)
 const showOnlyActiveEvt = ref(false)
 const showOnlyActiveSlot = ref(false)
+// 智能面板「自定义新增」输入框
+const newPropName = ref('')
+const newDirName = ref('')
+const newEvtName = ref('')
+const newSlotName = ref('')
 
 const filteredProps = computed(() => {
   if (!panelData.value) return []
@@ -1330,11 +1422,10 @@ function onTreeDragEnd() {
   dragOverId.value = null
 }
 
-function onTreeNodeDrop(draggingNode, dropNode, dropType, ev) {
-  const sourceId = draggingNode.data.id
-  const targetId = dropNode.data.id
-  if (!sourceId || sourceId === targetId) return
-  if (moveDesignerNode(sourceId, targetId, dropType)) onTreeChange()
+function onTreeNodeDrop() {
+  // el-tree has already updated the bound data before emitting node-drop.
+  // Only refresh the designer; moving the node again causes duplicate moves.
+  onTreeChange()
 }
 
 
@@ -1431,10 +1522,24 @@ function findParentNode(nodes, childId) {
   return findNodeLocation(nodes, childId)?.parentNode || null
 }
 
+let selectionTimer = null
+let lastDragEndedAt = 0
+
+function onHandleClick(id) {
+  if (Date.now() - lastDragEndedAt < 250) return
+  onSelect(id)
+}
+
 async function onSelect(id) {
+  if (wasDragging) return
   selectedId.value = id
-  wasDragging = false
-  setTimeout(() => { if (wasDragging) return; selectedNode.value = id ? findNode(tree.value, id) : null; openDrawer() }, 0)
+  if (selectionTimer) clearTimeout(selectionTimer)
+  selectionTimer = setTimeout(() => {
+    selectionTimer = null
+    if (wasDragging) return
+    selectedNode.value = id ? findNode(tree.value, id) : null
+    openDrawer()
+  }, 0)
 
 }
 function onTreeChange() { tree.value = [...tree.value]; scheduleRefresh() }
@@ -1463,6 +1568,12 @@ function applyPropToNode(prop) {
   } else {
     node.props = node.props.filter(p => p.key !== prop.propName)
   }
+  // 记录自定义标记与已应用名称，重新加载面板后仍可编辑/删除
+  if (prop.isActive) {
+    const applied = node.props.find(p => p.key === prop.propName)
+    if (applied) applied.isCustom = prop.isCustom === true
+  }
+  prop._appliedName = prop.propName
 }
 
 function applyDirectiveToNode(d) {
@@ -1476,6 +1587,11 @@ function applyDirectiveToNode(d) {
   } else {
     node.instructions = node.instructions.filter(i => i.name !== d.directiveName)
   }
+  if (d.isActive) {
+    const applied = node.instructions.find(i => i.name === d.directiveName)
+    if (applied) applied.isCustom = d.isCustom === true
+  }
+  d._appliedName = d.directiveName
 }
 
 function applyEventToNode(evt) {
@@ -1489,6 +1605,11 @@ function applyEventToNode(evt) {
   } else {
     node.events = node.events.filter(e => e.name !== evt.eventName)
   }
+  if (evt.isActive) {
+    const applied = node.events.find(e => e.name === evt.eventName)
+    if (applied) applied.isCustom = evt.isCustom === true
+  }
+  evt._appliedName = evt.eventName
 }
 
 function applySlotToNode(s) {
@@ -1497,10 +1618,15 @@ function applySlotToNode(s) {
   node.useSlots = node.useSlots || []
   const existing = node.useSlots.find(sl => sl.name === s.slotName)
   if (s.isActive) {
-    if (!existing) node.useSlots.push({ name: s.slotName, parameter: null, components: [] })
+    if (!existing) node.useSlots.push({ name: s.slotName, parameter: null, components: [], isCustom: s.isCustom === true })
   } else {
     node.useSlots = node.useSlots.filter(sl => sl.name !== s.slotName)
   }
+  if (s.isActive) {
+    const applied = node.useSlots.find(sl => sl.name === s.slotName)
+    if (applied) applied.isCustom = s.isCustom === true
+  }
+  s._appliedName = s.slotName
 }
 
 function onSlotParamChange(s) {
@@ -1522,6 +1648,190 @@ function removeSlot(i) { selectedNode.value.useSlots.splice(i,1); onTreeChange()
 // Instructions
 function addIns() { (selectedNode.value.instructions = selectedNode.value.instructions||[]).push({name:'v-if',value:''}); onTreeChange() }
 function removeIns(i) { selectedNode.value.instructions.splice(i,1); onTreeChange() }
+
+// ---------- 智能面板：自定义新增（元数据之外的属性/指令/事件）----------
+// self 用于排除自身，避免重命名时把自己判为重名
+function isDup(list, keyName, name, self) {
+  return (list || []).some(x => x !== self && x[keyName] === name)
+}
+
+// 属性
+function addCustomProp() {
+  if (!panelData.value) return
+  const name = (newPropName.value || '').trim()
+  if (!name) return ElMessage.warning('请输入属性名')
+  panelData.value.properties = panelData.value.properties || []
+  if (isDup(panelData.value.properties, 'propName', name, null)) return ElMessage.warning(`属性已存在: ${name}`)
+  const prop = {
+    propName: name, propType: 'string', enumValues: null, defaultValue: null,
+    description: '自定义属性', isCommon: false, isAdvanced: false,
+    isActive: true, currentValue: '', valueType: 'static',
+    isCustom: true, _appliedName: name
+  }
+  panelData.value.properties.push(prop)
+  newPropName.value = ''
+  applyPropToNode(prop)
+  onTreeChange()
+}
+function removeCustomProp(prop) {
+  if (!panelData.value) return
+  panelData.value.properties = (panelData.value.properties || []).filter(p => p !== prop)
+  const node = panelNode || selectedNode.value
+  if (node && node.props) node.props = node.props.filter(p => p.key !== (prop._appliedName ?? prop.propName))
+  onTreeChange()
+}
+function onCustomPropRename(prop) {
+  const prev = prop._appliedName
+  const next = (prop.propName || '').trim()
+  if (!next) { prop.propName = prev; return }
+  if (isDup(panelData.value?.properties, 'propName', next, prop)) {
+    prop.propName = prev
+    return ElMessage.warning(`属性已存在: ${next}`)
+  }
+  const node = panelNode || selectedNode.value
+  if (node && node.props) {
+    const existing = node.props.find(p => p.key === prev)
+    if (existing) { existing.key = next; existing.isCustom = true }
+  }
+  prop.propName = next
+  prop._appliedName = next
+  onTreeChange()
+}
+
+// 指令（名称需含 v- 前缀，序列化时原样输出）
+function addCustomDirective() {
+  if (!panelData.value) return
+  const name = (newDirName.value || '').trim()
+  if (!name) return ElMessage.warning('请输入指令名')
+  panelData.value.directives = panelData.value.directives || []
+  if (isDup(panelData.value.directives, 'directiveName', name, null)) return ElMessage.warning(`指令已存在: ${name}`)
+  const d = {
+    directiveName: name, description: '自定义指令', hasValue: true,
+    isCommon: false, isActive: true, currentValue: '',
+    isCustom: true, _appliedName: name
+  }
+  panelData.value.directives.push(d)
+  newDirName.value = ''
+  applyDirectiveToNode(d)
+  onTreeChange()
+}
+function removeCustomDirective(d) {
+  if (!panelData.value) return
+  panelData.value.directives = (panelData.value.directives || []).filter(x => x !== d)
+  const node = panelNode || selectedNode.value
+  if (node && node.instructions) node.instructions = node.instructions.filter(i => i.name !== (d._appliedName ?? d.directiveName))
+  onTreeChange()
+}
+function onCustomDirectiveRename(d) {
+  const prev = d._appliedName
+  const next = (d.directiveName || '').trim()
+  if (!next) { d.directiveName = prev; return }
+  if (isDup(panelData.value?.directives, 'directiveName', next, d)) {
+    d.directiveName = prev
+    return ElMessage.warning(`指令已存在: ${next}`)
+  }
+  const node = panelNode || selectedNode.value
+  if (node && node.instructions) {
+    const existing = node.instructions.find(i => i.name === prev)
+    if (existing) { existing.name = next; existing.isCustom = true }
+  }
+  d.directiveName = next
+  d._appliedName = next
+  onTreeChange()
+}
+
+// 事件（名称不含 @，序列化时自动加 @）
+function addCustomEvent() {
+  if (!panelData.value) return
+  const name = (newEvtName.value || '').trim()
+  if (!name) return ElMessage.warning('请输入事件名')
+  panelData.value.events = panelData.value.events || []
+  if (isDup(panelData.value.events, 'eventName', name, null)) return ElMessage.warning(`事件已存在: ${name}`)
+  const evt = {
+    eventName: name, description: '自定义事件', isCommon: false,
+    isSingle: false, isActive: true, currentValue: '', isSingleActive: false,
+    isCustom: true, _appliedName: name
+  }
+  panelData.value.events.push(evt)
+  newEvtName.value = ''
+  applyEventToNode(evt)
+  onTreeChange()
+}
+function removeCustomEvent(evt) {
+  if (!panelData.value) return
+  panelData.value.events = (panelData.value.events || []).filter(x => x !== evt)
+  const node = panelNode || selectedNode.value
+  if (node && node.events) node.events = node.events.filter(e => e.name !== (evt._appliedName ?? evt.eventName))
+  onTreeChange()
+}
+function onCustomEventRename(evt) {
+  const prev = evt._appliedName
+  const next = (evt.eventName || '').trim()
+  if (!next) { evt.eventName = prev; return }
+  if (isDup(panelData.value?.events, 'eventName', next, evt)) {
+    evt.eventName = prev
+    return ElMessage.warning(`事件已存在: ${next}`)
+  }
+  const node = panelNode || selectedNode.value
+  if (node && node.events) {
+    const existing = node.events.find(e => e.name === prev)
+    if (existing) { existing.name = next; existing.isCustom = true }
+  }
+  evt.eventName = next
+  evt._appliedName = next
+  onTreeChange()
+}
+
+// 插槽（序列化为 <template #name>）
+// 注意：filteredSlots 用 map 生成拷贝，故统一按名称（而非对象引用）定位
+function addCustomSlot() {
+  if (!panelData.value) return
+  const name = (newSlotName.value || '').trim()
+  if (!name) return ElMessage.warning('请输入插槽名')
+  panelData.value.slots = panelData.value.slots || []
+  if (isDup(panelData.value.slots, 'slotName', name, null)) return ElMessage.warning(`插槽已存在: ${name}`)
+  const s = {
+    slotName: name, description: '自定义插槽', isCommon: false,
+    isActive: true, parameter: '', isCustom: true, _appliedName: name
+  }
+  panelData.value.slots.push(s)
+  newSlotName.value = ''
+  applySlotToNode(s)
+  onTreeChange()
+}
+// 插槽勾选：filteredSlots 返回拷贝，需回写源对象，否则页签计数/「仅启用」与勾选状态不同步
+function setSlotActive(s, v) {
+  const list = panelData.value?.slots || []
+  const key = s._appliedName ?? s.slotName
+  const src = list.find(x => (x._appliedName ?? x.slotName) === key)
+  if (src) src.isActive = v
+  s.isActive = v
+  applySlotToNode(src || s)
+  onTreeChange()
+}
+function removeCustomSlot(s) {
+  if (!panelData.value) return
+  const name = s._appliedName ?? s.slotName
+  panelData.value.slots = (panelData.value.slots || []).filter(x => (x._appliedName ?? x.slotName) !== name)
+  const node = panelNode || selectedNode.value
+  if (node && node.useSlots) node.useSlots = node.useSlots.filter(sl => sl.name !== name)
+  onTreeChange()
+}
+function onCustomSlotRename(s, nextRaw) {
+  const prev = s._appliedName ?? s.slotName
+  const next = (nextRaw || '').trim()
+  if (!next || next === prev) return
+  const list = panelData.value?.slots || []
+  const src = list.find(x => (x._appliedName ?? x.slotName) === prev)
+  if (isDup(list, 'slotName', next, src)) return ElMessage.warning(`插槽已存在: ${next}`)
+  if (src) { src.slotName = next; src._appliedName = next }
+  const node = panelNode || selectedNode.value
+  if (node && node.useSlots) {
+    const existing = node.useSlots.find(sl => sl.name === prev)
+    if (existing) { existing.name = next; existing.isCustom = true }
+  }
+  onTreeChange()
+}
 
 // Delete
 async function handleDelete() {
@@ -1620,6 +1930,53 @@ function onDragEnd() {
   dragId.value = null
   dragOverId.value = null
   paletteDragTag = null
+  wasDragging = false
+  lastDragEndedAt = Date.now()
+}
+
+function onCanvasDragOver(e) {
+  if (previewMode.value) {
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'
+    return
+  }
+
+  const paletteTag = paletteDragTag || e.dataTransfer?.getData('application/x-codemaster-component')
+  const hasExistingNode = !!dragId.value
+  if (!paletteTag && !hasExistingNode) return
+  if (e.dataTransfer) e.dataTransfer.dropEffect = paletteTag ? 'copy' : 'move'
+}
+
+function onCanvasDrop(e) {
+  if (previewMode.value) return
+
+  const paletteTag = paletteDragTag || e.dataTransfer?.getData('application/x-codemaster-component')
+  if (paletteTag) {
+    pushUndo()
+    const newNode = createDesignerNode(paletteTag)
+    tree.value.push(newNode)
+    paletteDragTag = null
+    dragId.value = null
+    dragOverId.value = null
+    selectDesignerNode(newNode)
+    return
+  }
+
+  const sourceId = dragId.value
+  dragId.value = null
+  dragOverId.value = null
+  if (!sourceId) return
+
+  const sourceLocation = findNodeLocation(tree.value, sourceId)
+  if (!sourceLocation) return
+  if (sourceLocation.collection === tree.value && sourceLocation.index === tree.value.length - 1) return
+
+  const sourceNode = sourceLocation.node
+  sourceLocation.collection.splice(sourceLocation.index, 1)
+  tree.value.push(sourceNode)
+  onTreeChange()
+  selectedId.value = null
+  selectedNode.value = null
+  drawerVisible.value = false
 }
 
 function onDrop(e, targetId, explicitPos) {
@@ -1665,6 +2022,7 @@ document.addEventListener('keydown', onKeyDown)
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeyDown)
   if (refreshFrame !== null) cancelAnimationFrame(refreshFrame)
+  if (selectionTimer) clearTimeout(selectionTimer)
 })
 
 onMounted(async () => {
@@ -1680,8 +2038,13 @@ onMounted(async () => {
     // 加载字段级 ScriptSection
     try { const fs = await getFieldScripts(entityId.value, pageType.value); if (fs) fieldScripts.value = typeof fs === 'string' ? JSON.parse(fs) : fs }
     catch {}
+    await loadProjectTranslations()
   } catch(e) { error.value=e.message }
   finally { loading.value=false }
+})
+
+watch(translationLanguage, () => {
+  if (translationEnabled.value && entityId.value) loadProjectTranslations()
 })
 </script>
 
@@ -1692,6 +2055,7 @@ onMounted(async () => {
   isolation: isolate;
 }
 .toolbar { display:flex; align-items:center; gap:12px; padding:8px 16px; background:var(--app-surface-soft, #f5f7fa); border-bottom:1px solid var(--app-border, #e4e7ed); }
+.translation-status { font-size:12px; color:var(--app-text-muted, #909399); white-space:nowrap; }
 .main-area { display:flex; height:calc(100vh - 42px); background:var(--app-bg, #fff); overflow:hidden; }
 .tree-panel {
   width: 260px;
@@ -1805,6 +2169,12 @@ onMounted(async () => {
 .prop-list .prop-name { flex:0 0 105px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:monospace; font-size:12px; }
 .prop-list .prop-value { flex:1; min-width:50px; }
 .prop-list .mode-btn { padding:2px 4px; min-width:28px; font-size:12px; }
+/* 智能面板「自定义新增」：底部输入行 + 自定义项可编辑名称 */
+.custom-add { display:flex; align-items:center; gap:4px; padding:6px 8px; border-top:1px solid var(--app-border, #ebeef5); background:var(--app-surface-soft, #f5f7fa); }
+.custom-add > :deep(.el-input) { flex:1; min-width:0; }
+.custom-add > :deep(.el-button) { flex:0 0 auto; }
+.prop-list .prop-name-input { flex:0 0 105px; }
+.prop-list .prop-name-input :deep(.el-input__inner) { font-family:monospace; font-size:12px; padding:0 4px; }
 :deep(.el-tabs--border-card){box-shadow:none;border:1px solid var(--app-border, #dcdfe6);background:var(--app-surface, #fff)}
 :deep(.el-tabs--border-card>.el-tabs__header){margin:0;background:var(--app-surface-soft, #f5f7fa);border-bottom:1px solid var(--app-border, #e4e7ed)}
 :deep(.el-tabs--border-card>.el-tabs__header .el-tabs__item){color:var(--app-text-muted, #64748b)}

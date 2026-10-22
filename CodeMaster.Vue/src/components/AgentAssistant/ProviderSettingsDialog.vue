@@ -58,6 +58,13 @@
             <el-option label="Anthropic Claude" value="Anthropic" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="form.providerType === 'OpenAICompatible'" label="兼容模式" prop="compatibilityMode">
+          <el-select v-model="form.compatibilityMode" style="width: 100%">
+            <el-option label="标准 OpenAI Compatible" value="Standard" />
+            <el-option label="OpenRouter Reasoning" value="OpenRouterReasoning" />
+          </el-select>
+          <div class="field-tip">OpenRouter 推理模型请选择此模式；普通 OpenAI、Ollama 或其他兼容服务使用标准模式。</div>
+        </el-form-item>
         <el-form-item label="运行位置" prop="executionMode">
           <el-tag :type="clientMode ? 'warning' : 'info'">
             {{ clientMode ? '客户端' : '服务端' }}
@@ -131,6 +138,7 @@ const formRef = ref()
 const createDefaultForm = () => ({
   name: '',
   providerType: 'OpenAICompatible',
+  compatibilityMode: 'Standard',
   executionMode: clientMode ? 'Local' : 'Server',
   baseUrl: 'https://api.openai.com/v1',
   modelName: '',
@@ -158,6 +166,7 @@ const providerTypeLabel = type => type === 'Anthropic' ? 'Anthropic Claude' : 'O
 const resetForm = value => {
   Object.assign(form, createDefaultForm(), value || {})
   form.executionMode = clientMode ? 'Local' : 'Server'
+  form.compatibilityMode = form.compatibilityMode || 'Standard'
   form.apiKey = ''
   form.clearApiKey = false
 }
@@ -180,6 +189,7 @@ const handleProviderTypeChange = value => {
   form.baseUrl = value === 'Anthropic'
     ? 'https://api.anthropic.com'
     : 'https://api.openai.com/v1'
+  if (value === 'Anthropic') form.compatibilityMode = 'Standard'
 }
 
 const handleSave = async () => {
@@ -202,6 +212,7 @@ const handleSave = async () => {
         await executeCodegenAction('saveAiProvider', {
           providerId: savedProvider.id,
           providerType: payload.providerType,
+          compatibilityMode: payload.compatibilityMode,
           baseUrl: payload.baseUrl,
           modelName: payload.modelName,
           apiKey: payload.apiKey,
@@ -234,9 +245,19 @@ const handleTest = async row => {
       )
       : await testProvider(row.id)
     if (result.success) {
-      ElMessage.success(result.message)
+      ElMessage.success([result.message, result.route].filter(Boolean).join(' · '))
     } else {
-      ElMessage.warning(result.message)
+      // A connectivity failure is only actionable with the full exception chain and the route
+      // the request actually took, so show them in a dialog instead of a truncated toast.
+      await ElMessageBox.alert(
+        [
+          result.diagnostic || result.message,
+          result.endpoint ? `目标地址：${result.endpoint}` : '',
+          result.route ? `实际路由：${result.route}` : ''
+        ].filter(Boolean).join('\n\n'),
+        '模型连接测试失败',
+        { type: 'error', confirmButtonText: '知道了' }
+      )
     }
     emit('refresh')
   } finally {
@@ -270,5 +291,12 @@ const handleDelete = async row => {
 .provider-count {
   color: var(--app-text-muted, #64748b);
   font-size: 13px;
+}
+
+.field-tip {
+  margin-top: 4px;
+  color: var(--app-text-muted, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

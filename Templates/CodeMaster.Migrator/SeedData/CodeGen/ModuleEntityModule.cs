@@ -20,7 +20,7 @@ public class ModuleEntityModule : ISeedModule
     {
         // 查找代码管理目录
         var codegenMenu = await dbContext.Set<Domain.Entities.System.SysMenu>()
-            .FirstOrDefaultAsync(m => m.Path == "/codegen" && m.MenuType == "M");
+            .FirstOrDefaultAsync(m => m.Path == "codegen" && m.MenuType == "M");
 
         if (codegenMenu == null)
         {

@@ -27,6 +27,12 @@ using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var runtimeModules = RuntimeWebModuleLoader.Load(
+    AppContext.BaseDirectory,
+    Environment.GetEnvironmentVariable("APP_RUNTIME_MODULE_PATHS"));
+foreach (var runtimeModule in runtimeModules)
+    runtimeModule.ConfigureServices(builder.Services, builder.Configuration);
+
 Console.WriteLine($"[Config] Environment: {builder.Environment.EnvironmentName}");
 Console.WriteLine($"[Config] ContentRoot: {builder.Environment.ContentRootPath}");
 Console.WriteLine($"[Config] appsettings.json exists: {File.Exists(Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"))}");
@@ -107,11 +113,11 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title = "CodeMaster API",
         Version = "v1",
-        Description = "CodeMaster 代码大师 - 企业级快速开发平台API文档",
+        Description = "CodeMaster ASP.NET Core Web API",
         Contact = new OpenApiContact
         {
             Name = "CodeMaster Team",
-            Email = "support@codemaster.com"
+            Email = "support@example.com"
         }
     });
 
@@ -355,6 +361,8 @@ app.UseStaticFiles(new StaticFileOptions
     FileProvider = new PhysicalFileProvider(webRootPath)
 });
 
+app.UseBusinessExceptionHandling();
+
 // HTTP请求日志中间件
 app.UseRequestLogging();
 
@@ -364,6 +372,8 @@ app.UseMiddleware<TenantMiddleware>();
 app.UseDataPermission();
 app.UseAuthorization();
 app.MapControllers();
+foreach (var runtimeModule in runtimeModules)
+    runtimeModule.MapEndpoints(app);
 app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=Index}/{id?}");

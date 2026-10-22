@@ -32,8 +32,16 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="实体描述" prop="description">
-              <el-input v-model="form.description" placeholder="如：客户" />
+            <el-form-item label="显示名称" prop="description">
+              <el-input v-model="form.description" maxlength="50" show-word-limit placeholder="如：客户（用于菜单和页面标题）" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="24">
+            <el-form-item label="业务说明">
+              <el-input v-model="form.businessDescription" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="建议使用中文说明实体用途、业务边界、生命周期及租户或软删除规则，供 Agent 和文档分析使用" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -120,7 +128,8 @@
           </template>
         </el-table-column>
         <el-table-column prop="name" label="字段名" width="130" />
-        <el-table-column prop="description" label="描述" width="120" />
+        <el-table-column prop="description" label="显示名称" width="120" />
+        <el-table-column prop="businessDescription" label="业务说明" min-width="180" show-overflow-tooltip />
         <el-table-column prop="dataType" label="类型" width="90" />
         <el-table-column prop="formControlType" label="控件" width="110" />
         <el-table-column label="显示" width="200">
@@ -247,8 +256,8 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="描述" prop="description">
-              <el-input v-model="fieldForm.description" placeholder="如 用户名" />
+            <el-form-item label="显示名称" prop="description">
+              <el-input v-model="fieldForm.description" maxlength="50" show-word-limit placeholder="如 用户名" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -262,6 +271,14 @@
                 <el-option label="DateTime" value="DateTime" />
                 <el-option label="double" value="double" />
               </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="24">
+            <el-form-item label="业务说明">
+              <el-input v-model="fieldForm.businessDescription" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="建议使用中文说明业务含义、单位、取值规则、关联关系和约束，供 Agent 分析使用" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -677,7 +694,7 @@ const resultMappingRows = ref([])
 
 const form = reactive({
   id: null, projectId: null, moduleId: null,
-  name: '', description: '', tableName: '',
+  name: '', description: '', businessDescription: '', tableName: '',
   generationMode: 0,
   hasPrimaryKey: true, isTree: false, isReadOnly: false,
   hasDataPermission: false, hasTenant: false,
@@ -690,7 +707,7 @@ const rules = {
   projectId: [{ required: true, message: '请选择项目', trigger: 'change' }],
   moduleId: [{ required: true, message: '请选择模块', trigger: 'change' }],
   name: [{ required: true, message: '请输入实体名称', trigger: 'blur' }],
-  description: [{ required: true, message: '请输入实体描述', trigger: 'blur' }]
+  description: [{ required: true, message: '请输入实体显示名称', trigger: 'blur' }]
 }
 
 // ===== 字段变更追踪 =====
@@ -1058,7 +1075,7 @@ const editingFieldIsNew = ref(false)
 const editingFieldOriginalName = ref('')
 
 const defaultFieldForm = {
-  name: '', description: '', dataType: 'string', maxLength: 0, defaultValue: '',
+  name: '', description: '', businessDescription: '', dataType: 'string', maxLength: 0, defaultValue: '',
   formControlType: 'input', isPrimaryKey: false, isRequired: false,
   isNullable: false, isIgnore: false, isSystemField: false, isMultiple: false,
   showInList: true, showInDetail: true, showInAddForm: true, showInEditForm: true, showInSearch: false,

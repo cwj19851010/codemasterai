@@ -2,6 +2,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
+const apiProxyTarget = process.env.CODEMASTER_API_PROXY_TARGET || 'http://localhost:5000'
+
 export default defineConfig(({ mode }) => ({
   plugins: [vue()],
   resolve: {
@@ -20,12 +22,12 @@ export default defineConfig(({ mode }) => ({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: apiProxyTarget,
         changeOrigin: true,
         secure: false
       },
       '/hubs': {
-        target: 'http://localhost:5000',
+        target: apiProxyTarget,
         changeOrigin: true,
         ws: true
       }

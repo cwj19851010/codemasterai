@@ -1,3 +1,5 @@
+using CodeMaster.Agent.BusinessTemplates;
+
 namespace CodeMaster.Agent.Contracts;
 
 public sealed class AiProjectBlueprintDto
@@ -280,4 +282,10 @@ public sealed class AiPlatformConstraintsDto
     public string Controls { get; set; } = string.Empty;
     public string Workflow { get; set; } = string.Empty;
     public string Generation { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 可挂载的跨实体业务规则目录。框架约束（Frontend/Backend/Controls...）描述"怎么建"，
+    /// 这里描述"业务上必须成立什么"，两者互补。
+    /// </summary>
+    public IReadOnlyList<BusinessRuleTemplate> BusinessRules { get; set; } = [];
 }

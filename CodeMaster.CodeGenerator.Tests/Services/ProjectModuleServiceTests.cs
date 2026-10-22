@@ -14,7 +14,7 @@ public class ProjectModuleServiceTests : IDisposable
 
     public ProjectModuleServiceTests()
     {
-        _databasePath = Path.Combine(Path.GetTempPath(), $"codemaster_project_module_{Guid.NewGuid():N}.db");
+        _databasePath = Path.Combine(CodeMasterTestPaths.Root, $"codemaster_project_module_{Guid.NewGuid():N}.db");
         _db = new SqlSugarClient(new ConnectionConfig
         {
             ConnectionString = $"Data Source={_databasePath};Mode=ReadWriteCreate;",
@@ -54,6 +54,25 @@ public class ProjectModuleServiceTests : IDisposable
         Assert.Equal(2, result.Total);
         Assert.All(result.Items, module => Assert.Equal(100, module.ProjectId));
         Assert.Equal(new[] { "SalesReport", "Sales" }, result.Items.Select(module => module.ModuleName));
+    }
+
+    [Fact]
+    public void ModuleOrderPolicy_ReservesSystemMonitorAndReportsSlots()
+    {
+        Assert.Equal(5, ProjectModuleOrderPolicy.ResolveAvailable(0, new[] { 3, 4 }));
+        Assert.Equal(4, ProjectModuleOrderPolicy.ResolveAvailable(1, new[] { 3 }));
+        Assert.Equal(3, ProjectModuleOrderPolicy.ResolveAvailable(2, Array.Empty<int>()));
+        Assert.Equal(3, ProjectModuleOrderPolicy.ResolveAvailable(9999, Array.Empty<int>()));
+        Assert.Equal(20, ProjectModuleOrderPolicy.ResolveAvailable(20, new[] { 3, 4 }));
+        Assert.Equal(3, ProjectModuleOrderPolicy.NormalizeForMenu(1));
+        Assert.Equal(3, ProjectModuleOrderPolicy.NormalizeForMenu(9999));
+        Assert.Equal(9998, ProjectModuleOrderPolicy.NormalizeForMenu(9998));
+        Assert.Equal(
+            9999,
+            ProjectModuleOrderPolicy.ResolveModuleOrder(0, new[] { 3, 4 }, "Reporting", "报表管理"));
+        Assert.Equal(
+            9999,
+            ProjectModuleOrderPolicy.NormalizeForMenu(6, "Reporting", "报表管理"));
     }
 
     public void Dispose()

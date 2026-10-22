@@ -49,12 +49,31 @@ public sealed class GeneratedVueRegionProtector
         List<Component> currentTree;
         Dictionary<string, RegionSnapshot> generatedRegions;
         Dictionary<string, RegionSnapshot> currentRegions;
+        var generatedDuplicates = new List<string>();
+        var currentDuplicates = new List<string>();
         try
         {
             generatedTree = _parser.Parse(generatedVue);
             currentTree = _parser.Parse(currentVue);
-            generatedRegions = ExtractRegions(generatedTree);
-            currentRegions = ExtractRegions(currentTree);
+            generatedRegions = ExtractRegions(generatedTree, generatedDuplicates);
+            currentRegions = ExtractRegions(currentTree, currentDuplicates);
+
+            // 现有页面里的重复锚点是历史写入留下的脏数据，就地修掉再合并，文件就能自愈；
+            // 生成结果里的重复锚点则说明模板或合并逻辑本身有问题，降级为整文件冲突更安全。
+            if (currentDuplicates.Count > 0)
+            {
+                DedupeGenIds(currentTree);
+                currentRegions = ExtractRegions(currentTree);
+            }
+
+            if (generatedDuplicates.Count > 0)
+            {
+                return CreateWholeFileConflict(
+                    generatedVue,
+                    currentVue,
+                    generatedWholeHash,
+                    $"生成结果重复了 data-gen-id '{string.Join("', '", generatedDuplicates.Distinct(StringComparer.OrdinalIgnoreCase))}'，无法安全跟踪区块。");
+            }
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -213,33 +232,83 @@ public sealed class GeneratedVueRegionProtector
         };
     }
 
-    private Dictionary<string, RegionSnapshot> ExtractRegions(List<Component> roots)
+    private Dictionary<string, RegionSnapshot> ExtractRegions(List<Component> roots, List<string>? duplicateGenIds = null)
     {
         var result = new Dictionary<string, RegionSnapshot>(StringComparer.OrdinalIgnoreCase);
         foreach (var root in roots)
-            CollectRegions(root, result);
+            CollectRegions(root, result, duplicateGenIds);
         return result;
     }
 
-    private void CollectRegions(Component component, Dictionary<string, RegionSnapshot> result)
+    private void CollectRegions(
+        Component component,
+        Dictionary<string, RegionSnapshot> result,
+        List<string>? duplicateGenIds,
+        HashSet<Component>? visited = null)
     {
+        // 同一个节点可能既挂在 Children 上、又能从 UseSlots 走到（插槽内容与子节点共用实例）。
+        // 按对象引用去重，避免把“同一个节点被走了两遍”误判成“文件里有两个相同锚点”。
+        visited ??= new HashSet<Component>(ReferenceEqualityComparer.Instance);
+        if (!visited.Add(component))
+            return;
+
         if (!string.IsNullOrWhiteSpace(component.GenId))
         {
+            // 同一个锚点出现两次是数据问题，不是编程错误：此前某次写入把同一区块写重复了。
+            // 这里只记录、保留第一次出现的快照，由调用方决定是修复文件还是降级为冲突。
+            // 原来直接抛异常，而 GetRegionHashes 没有兜底，异常会一路穿出去让整次代码生成失败。
             if (!result.TryAdd(component.GenId, CreateSnapshot(component)))
-                throw new InvalidOperationException($"Duplicate data-gen-id '{component.GenId}' prevents safe region tracking.");
+                duplicateGenIds?.Add(component.GenId);
         }
 
         if (component.Children != null)
         {
             foreach (var child in component.Children)
-                CollectRegions(child, result);
+                CollectRegions(child, result, duplicateGenIds, visited);
         }
         if (component.UseSlots == null) return;
         foreach (var slot in component.UseSlots)
         {
             if (slot.Components == null) continue;
             foreach (var child in slot.Components)
-                CollectRegions(child, result);
+                CollectRegions(child, result, duplicateGenIds, visited);
+        }
+    }
+
+    /// <summary>
+    /// 就地移除重复的 data-gen-id 锚点，保留第一次出现的那一个。
+    /// 已生成页面里出现重复锚点说明此前写入把同一区块写了两次，删掉多余副本即可让合并继续。
+    /// </summary>
+    private static void DedupeGenIds(List<Component> roots)
+    {
+        DedupeGenIds(roots, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static void DedupeGenIds(List<Component> components, HashSet<string> seen)
+    {
+        for (var index = 0; index < components.Count; index++)
+        {
+            var genId = components[index].GenId;
+            if (string.IsNullOrWhiteSpace(genId))
+                continue;
+            if (seen.Add(genId))
+                continue;
+
+            components.RemoveAt(index);
+            index--;
+        }
+
+        foreach (var component in components)
+        {
+            if (component.Children != null)
+                DedupeGenIds(component.Children, seen);
+            if (component.UseSlots == null)
+                continue;
+            foreach (var slot in component.UseSlots)
+            {
+                if (slot.Components != null)
+                    DedupeGenIds(slot.Components, seen);
+            }
         }
     }
 

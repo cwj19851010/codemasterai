@@ -61,9 +61,11 @@ public sealed class PlatformConstraintsTests
         Assert.Contains("sys_one_to_many_relation", prompt);
         Assert.Contains("ConsistencyCheck", prompt);
         Assert.Contains("EntityFields", prompt);
-        Assert.Contains("GenerateCode", prompt);
-        Assert.Contains("GenerationMode=Incremental", prompt);
-        Assert.Contains("EntityFields, Views, Relations, FieldControls, ComplexPages, ConsistencyCheck, GenerateCode".Replace(", ", " -> "), prompt);
+        Assert.Contains("Six metadata stages", prompt);
+        Assert.Contains("GenerationMode=None", prompt);
+        Assert.Contains("EntityFields, Views, Relations, FieldControls, ComplexPages, ConsistencyCheck".Replace(", ", " -> "), prompt);
+        Assert.Contains("never generates code", prompt);
+        Assert.DoesNotContain("GenerationMode=Incremental", prompt);
         Assert.Contains("FullStack", prompt);
         Assert.Contains("MetadataOnly", prompt);
         Assert.Contains("sys_project_page", prompt);

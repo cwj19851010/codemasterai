@@ -19,6 +19,7 @@ namespace CodeMaster.SourceGenerator
         {
             var compilation = context.Compilation;
             var entityClasses = new List<EntityInfo>();
+            var allEntityClasses = new List<EntityInfo>(); // 去重前，用于判断类名歧义
             var tableNames = new HashSet<string>(); // 用于检测重复的表名
 
             // 扫描所有引用的程序集中的类型
@@ -39,6 +40,7 @@ namespace CodeMaster.SourceGenerator
                                 ImplementsIEntity(type))
                             {
                                 var entityInfo = AnalyzeEntity(type);
+                                allEntityClasses.Add(entityInfo);
 
                                 // 检查表名是否重复
                                 if (!tableNames.Contains(entityInfo.TableName))
@@ -55,15 +57,36 @@ namespace CodeMaster.SourceGenerator
             if (entityClasses.Count == 0)
                 return;
 
+            // 类名歧义必须按“扫描到的全部实体”判断，不能看去重后的列表：
+            // 两个模块各有一个 Material 时，它们往往连表名都相同，会被按表名去重成一个，
+            // 于是输出列表看起来毫无冲突，但两个命名空间都被 using 引入，
+            // 未限定的 DbSet<Material> 照样报 CS0104。
+            var ambiguousClassNames = FindAmbiguousClassNames(allEntityClasses);
+
+            // 分部类的落点必须与项目里真正使用的 DbContext 一致。类名与命名空间都不能写死：
+            // 模板会按项目名替换（CodeMaster → 项目名），写死会让生成结果落到另一个类型上 ——
+            // 既报 CS0759（实现没有对应的声明），又让 DbSet 压根没挂进真正使用的上下文。
+            var dbContextType = FindDbContextType(compilation);
+            var dbContextNamespace = dbContextType != null
+                ? dbContextType.ContainingNamespace.ToDisplayString()
+                : "CodeMaster.Migrator.Persistence.EfCore";
+            var dbContextClassName = dbContextType != null ? dbContextType.Name : "CodeMasterDbContext";
+            var configurationNamespace = dbContextNamespace + ".Configurations";
+
             // 生成 DbContext partial class
-            var dbContextSource = GenerateDbContextPartial(entityClasses);
+            var dbContextSource = GenerateDbContextPartial(
+                entityClasses, ambiguousClassNames, dbContextNamespace, dbContextClassName, configurationNamespace);
             context.AddSource("CodeMasterDbContext.g.cs", SourceText.From(dbContextSource, Encoding.UTF8));
 
             // 生成 EntityConfiguration 类
             foreach (var entity in entityClasses)
             {
-                var configSource = GenerateEntityConfiguration(entity);
-                context.AddSource($"{entity.ClassName}Configuration.g.cs", SourceText.From(configSource, Encoding.UTF8));
+                var configSource = GenerateEntityConfiguration(entity, ambiguousClassNames, configurationNamespace);
+                // hint 名必须唯一：两个模块各有一个同名实体时，只用简单类名会撞名，
+                // AddSource 遇到重复 hint 会直接抛异常，整个生成器失效。
+                context.AddSource(
+                    $"{entity.Namespace}.{entity.ClassName}Configuration.g.cs",
+                    SourceText.From(configSource, Encoding.UTF8));
             }
         }
 
@@ -115,7 +138,8 @@ namespace CodeMaster.SourceGenerator
             {
                 ClassName = typeSymbol.Name,
                 Namespace = typeSymbol.ContainingNamespace.ToDisplayString(),
-                InheritsEntityBase = InheritsFromEntityBase(typeSymbol)
+                InheritsEntityBase = InheritsFromEntityBase(typeSymbol),
+                IsView = typeSymbol.AllInterfaces.Any(i => i.Name == "IViewEntity")
             };
 
             // 1. 检查 SugarTable 特性获取表名
@@ -232,12 +256,113 @@ namespace CodeMaster.SourceGenerator
             return result.ToLower();
         }
 
-        private string GenerateDbContextPartial(List<EntityInfo> entities)
+        /// <summary>
+        /// 在编译中找出真正使用的 DbContext 类型（继承 Microsoft.EntityFrameworkCore.DbContext 的类）。
+        /// 找不到时返回 null，调用方回退到历史默认值，保证框架自身不受影响。
+        /// </summary>
+        private static INamedTypeSymbol FindDbContextType(Compilation compilation)
+        {
+            return FindDbContextIn(compilation.Assembly.GlobalNamespace);
+        }
+
+        private static INamedTypeSymbol FindDbContextIn(INamespaceSymbol namespaceSymbol)
+        {
+            foreach (var type in namespaceSymbol.GetTypeMembers())
+            {
+                if (type.TypeKind == TypeKind.Class && IsDbContextType(type))
+                    return type;
+            }
+
+            foreach (var childNamespace in namespaceSymbol.GetNamespaceMembers())
+            {
+                var found = FindDbContextIn(childNamespace);
+                if (found != null)
+                    return found;
+            }
+
+            return null;
+        }
+
+        private static bool IsDbContextType(INamedTypeSymbol type)
+        {
+            var baseType = type.BaseType;
+            while (baseType != null)
+            {
+                if (baseType.ToDisplayString() == "Microsoft.EntityFrameworkCore.DbContext")
+                    return true;
+                baseType = baseType.BaseType;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 找出简单类名重复的实体。
+        /// 两个模块各有一个 Material 是合法建模，但 DbSet 属性名与配置类名会因此冲突，
+        /// 而 DbSet 用简单类名引用时会产生 CS0104（引用不明确）导致整个生成工程编译不过。
+        /// 先把这类实体标出来，后面按需限定命名空间。
+        /// </summary>
+        private static HashSet<string> FindAmbiguousClassNames(List<EntityInfo> entities)
+        {
+            var counts = new Dictionary<string, int>(System.StringComparer.Ordinal);
+            foreach (var entity in entities)
+            {
+                int current;
+                counts.TryGetValue(entity.ClassName, out current);
+                counts[entity.ClassName] = current + 1;
+            }
+
+            var ambiguous = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var pair in counts)
+            {
+                if (pair.Value > 1)
+                    ambiguous.Add(pair.Key);
+            }
+
+            return ambiguous;
+        }
+
+        /// <summary>
+        /// 歧义实体的去重前缀取命名空间末段（模块名）；不歧义时为空，保持原有可读输出。
+        /// </summary>
+        private static string DisambiguatingPrefix(EntityInfo entity, HashSet<string> ambiguousClassNames)
+        {
+            if (!ambiguousClassNames.Contains(entity.ClassName))
+                return string.Empty;
+
+            var ns = entity.Namespace ?? string.Empty;
+            var separator = ns.LastIndexOf('.');
+            return separator >= 0 ? ns.Substring(separator + 1) : ns;
+        }
+
+        private static string QualifiedTypeName(EntityInfo entity, HashSet<string> ambiguousClassNames)
+        {
+            return ambiguousClassNames.Contains(entity.ClassName)
+                ? entity.Namespace + "." + entity.ClassName
+                : entity.ClassName;
+        }
+
+        private static string DbSetPropertyName(EntityInfo entity, HashSet<string> ambiguousClassNames)
+        {
+            return DisambiguatingPrefix(entity, ambiguousClassNames) + entity.ClassName + "s";
+        }
+
+        private static string ConfigurationClassName(EntityInfo entity, HashSet<string> ambiguousClassNames)
+        {
+            return DisambiguatingPrefix(entity, ambiguousClassNames) + entity.ClassName + "Configuration";
+        }
+
+        private string GenerateDbContextPartial(
+            List<EntityInfo> entities,
+            HashSet<string> ambiguousClassNames,
+            string dbContextNamespace,
+            string dbContextClassName,
+            string configurationNamespace)
         {
             var sb = new StringBuilder();
             sb.AppendLine("// <auto-generated />");
             sb.AppendLine("using Microsoft.EntityFrameworkCore;");
-            sb.AppendLine("using CodeMaster.Migrator.Persistence.EfCore.Configurations;");
+            sb.AppendLine($"using {configurationNamespace};");
 
             // 添加所有实体的命名空间
             var namespaces = entities.Select(e => e.Namespace).Distinct().OrderBy(n => n);
@@ -247,15 +372,15 @@ namespace CodeMaster.SourceGenerator
             }
 
             sb.AppendLine();
-            sb.AppendLine("namespace CodeMaster.Migrator.Persistence.EfCore");
+            sb.AppendLine($"namespace {dbContextNamespace}");
             sb.AppendLine("{");
-            sb.AppendLine("    public partial class CodeMasterDbContext");
+            sb.AppendLine($"    public partial class {dbContextClassName}");
             sb.AppendLine("    {");
 
             // 生成 DbSet 属性
             foreach (var entity in entities.OrderBy(e => e.ClassName))
             {
-                sb.AppendLine($"        public DbSet<{entity.ClassName}> {entity.ClassName}s {{ get; set; }}");
+                sb.AppendLine($"        public DbSet<{QualifiedTypeName(entity, ambiguousClassNames)}> {DbSetPropertyName(entity, ambiguousClassNames)} {{ get; set; }}");
             }
 
             sb.AppendLine();
@@ -265,7 +390,7 @@ namespace CodeMaster.SourceGenerator
             // 应用所有配置
             foreach (var entity in entities.OrderBy(e => e.ClassName))
             {
-                sb.AppendLine($"            modelBuilder.ApplyConfiguration(new {entity.ClassName}Configuration());");
+                sb.AppendLine($"            modelBuilder.ApplyConfiguration(new {ConfigurationClassName(entity, ambiguousClassNames)}());");
             }
 
             sb.AppendLine("        }");
@@ -275,24 +400,31 @@ namespace CodeMaster.SourceGenerator
             return sb.ToString();
         }
 
-        private string GenerateEntityConfiguration(EntityInfo entity)
+        private string GenerateEntityConfiguration(
+            EntityInfo entity,
+            HashSet<string> ambiguousClassNames,
+            string configurationNamespace)
         {
+            var typeName = QualifiedTypeName(entity, ambiguousClassNames);
             var sb = new StringBuilder();
             sb.AppendLine("// <auto-generated />");
             sb.AppendLine("using Microsoft.EntityFrameworkCore;");
             sb.AppendLine("using Microsoft.EntityFrameworkCore.Metadata.Builders;");
             sb.AppendLine($"using {entity.Namespace};");
             sb.AppendLine();
-            sb.AppendLine("namespace CodeMaster.Migrator.Persistence.EfCore.Configurations");
+            sb.AppendLine($"namespace {configurationNamespace}");
             sb.AppendLine("{");
-            sb.AppendLine($"    public class {entity.ClassName}Configuration : IEntityTypeConfiguration<{entity.ClassName}>");
+            sb.AppendLine($"    public class {ConfigurationClassName(entity, ambiguousClassNames)} : IEntityTypeConfiguration<{typeName}>");
             sb.AppendLine("    {");
-            sb.AppendLine($"        public void Configure(EntityTypeBuilder<{entity.ClassName}> builder)");
+            sb.AppendLine($"        public void Configure(EntityTypeBuilder<{typeName}> builder)");
             sb.AppendLine("        {");
 
-            // 配置表名
-            sb.AppendLine($"            // 配置表名");
-            sb.AppendLine($"            builder.ToTable(\"{entity.TableName}\");");
+            // Database views must not become CREATE TABLE operations in EF migrations.
+            sb.AppendLine($"            // 配置数据源");
+            if (entity.IsView)
+                sb.AppendLine($"            builder.ToView(\"{entity.TableName}\");");
+            else
+                sb.AppendLine($"            builder.ToTable(\"{entity.TableName}\");");
             sb.AppendLine();
 
             // 配置主键
@@ -360,6 +492,7 @@ namespace CodeMaster.SourceGenerator
             public string Namespace { get; set; }
             public string TableName { get; set; }
             public bool InheritsEntityBase { get; set; }
+            public bool IsView { get; set; }
             public List<string> PrimaryKeys { get; set; } = new List<string>();
             public List<string> IgnoredProperties { get; set; } = new List<string>();
             public Dictionary<string, string> PropertyColumns { get; set; } = new Dictionary<string, string>();
