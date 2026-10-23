@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -84,10 +84,10 @@
     </None>
   </ItemGroup>
 
-  <Target Name="ValidateFullEditionMigratorModule"
+  <Target Name="ValidateUiCompositionMigratorModule"
           BeforeTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
-    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+          Condition="!Exists('..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
+    <Error Text="Missing CodeMaster.UiComposition.Migrator project; the working tree is incomplete." />
   </Target>
 
   <Target Name="ValidatePrintingMigratorModule"
@@ -98,8 +98,8 @@
 
   <Target Name="BuildUiCompositionMigratorModule"
           BeforeTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
-    <MSBuild Projects="..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj"
+          Condition="Exists('..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
+    <MSBuild Projects="..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);DbProvider=$(DbProvider);SkipUiCompositionWebApiCopy=true" />
   </Target>
@@ -114,13 +114,13 @@
 
   <Target Name="PublishUiCompositionMigratorModule"
           AfterTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
+          Condition="Exists('..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
     <ItemGroup>
-      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.Private\UiComposition.Migrator\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Migrator.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition.Migrator\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Migrator.dll" />
     </ItemGroup>
     <MakeDir Directories="$(PublishDir)modules" />
     <Copy SourceFiles="@(UiCompositionMigratorFiles)" DestinationFolder="$(PublishDir)modules" />

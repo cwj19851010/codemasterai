@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.18" />
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
+    <ProjectReference Include="..\CodeMaster.Migrator\CodeMaster.Migrator.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyUiCompositionToMigrator"
+          AfterTargets="Build"
+          Condition="'$(SkipUiCompositionWebApiCopy)' != 'true'">
+    <MakeDir Directories="..\CodeMaster.Migrator\bin\$(Configuration)\$(TargetFramework)\modules" />
+    <Copy SourceFiles="$(TargetPath);..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll"
+          DestinationFolder="..\CodeMaster.Migrator\bin\$(Configuration)\$(TargetFramework)\modules" />
+  </Target>
+
+</Project>

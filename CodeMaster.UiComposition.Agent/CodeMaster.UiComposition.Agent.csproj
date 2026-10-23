@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
+    <ProjectReference Include="..\CodeMaster.Agent\CodeMaster.Agent.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyUiCompositionAgentToWebApi"
+          AfterTargets="Build"
+          Condition="'$(SkipUiCompositionWebApiCopy)' != 'true'">
+    <MakeDir Directories="..\CodeMaster.WebApi\bin\$(Configuration)\$(TargetFramework)\modules" />
+    <Copy SourceFiles="$(TargetPath);..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll"
+          DestinationFolder="..\CodeMaster.WebApi\bin\$(Configuration)\$(TargetFramework)\modules" />
+  </Target>
+
+</Project>

@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
+    <ProjectReference Include="..\CodeMaster.LocalAgent\CodeMaster.LocalAgent.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyUiCompositionToLocalAgent"
+          AfterTargets="Build"
+          Condition="'$(SkipUiCompositionWebApiCopy)' != 'true'">
+    <MakeDir Directories="..\CodeMaster.LocalAgent\bin\$(Configuration)\$(TargetFramework)\modules" />
+    <Copy SourceFiles="$(TargetPath);..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll"
+          DestinationFolder="..\CodeMaster.LocalAgent\bin\$(Configuration)\$(TargetFramework)\modules" />
+  </Target>
+
+</Project>

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -20,10 +20,10 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="ValidateFullEditionLocalAgentModule"
+  <Target Name="ValidateUiCompositionLocalAgentModule"
           BeforeTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
-    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+          Condition="!Exists('..\CodeMaster.UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
+    <Error Text="Missing CodeMaster.UiComposition.LocalAgent project; the working tree is incomplete." />
   </Target>
 
   <Target Name="ValidatePrintingLocalAgentModule"
@@ -34,8 +34,8 @@
 
   <Target Name="BuildUiCompositionLocalAgentModule"
           BeforeTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
-    <MSBuild Projects="..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj"
+          Condition="Exists('..\CodeMaster.UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
+    <MSBuild Projects="..\CodeMaster.UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true"
              RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;SelfContained;PublishSingleFile;PublishTrimmed;IncludeNativeLibrariesForSelfExtract" />
@@ -52,13 +52,13 @@
 
   <Target Name="PublishUiCompositionLocalAgentModule"
           AfterTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
+          Condition="Exists('..\CodeMaster.UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj')">
     <ItemGroup>
-      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
-      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
-      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
-      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
-      <UiCompositionLocalAgentFiles Include="..\CodeMaster.Private\UiComposition.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.LocalAgent.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiCompositionLocalAgentFiles Include="..\CodeMaster.UiComposition.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.LocalAgent.dll" />
     </ItemGroup>
     <MakeDir Directories="$(PublishDir)modules" />
     <Copy SourceFiles="@(UiCompositionLocalAgentFiles)" DestinationFolder="$(PublishDir)modules" />

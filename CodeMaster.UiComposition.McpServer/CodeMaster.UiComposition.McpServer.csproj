@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
+    <ProjectReference Include="..\CodeMaster.UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj" />
+    <ProjectReference Include="..\CodeMaster.McpServer\CodeMaster.McpServer.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyUiCompositionMcpToMcpServer"
+          AfterTargets="Build"
+          Condition="'$(SkipUiCompositionWebApiCopy)' != 'true'">
+    <MakeDir Directories="..\CodeMaster.McpServer\bin\$(Configuration)\$(TargetFramework)\modules" />
+    <Copy
+      SourceFiles="$(TargetPath);..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll;..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll;..\CodeMaster.UiComposition.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.LocalAgent.dll"
+      DestinationFolder="..\CodeMaster.McpServer\bin\$(Configuration)\$(TargetFramework)\modules" />
+  </Target>
+
+</Project>

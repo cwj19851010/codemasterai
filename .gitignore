@@ -114,14 +114,14 @@ docs/ProjectSummary.md
 docs/public-portal-auth-community.md
 
 # Private modules (never committed; local-only closed-source additions)
+# 2026-10-23 起这里只剩打印、小程序、生成物内 AI 和它们的测试；
+# 复杂页（UiComposition）已开源，是仓库根目录下的独立项目。
 /CodeMaster.Private/
 CodeMaster.Private.sln
 
-# Private front end: the complex-page designer and the print designer.
-# Their back ends are modules under CodeMaster.Private/, so the UI goes with them.
-# viewModules.public.js already excludes projectPage from the public build.
-CodeMaster.Vue/src/views/codegen/projectPage/
-CodeMaster.Vue/src/api/codegen/projectPage.js
+# Private front end: the print designer.
+# Its back end is a module under CodeMaster.Private/, so the UI goes with it.
+# （复杂页的 views/codegen/projectPage 与 api/codegen/projectPage.js 已开源，不要再加回来。）
 CodeMaster.Vue/src/views/codegen/print/
 CodeMaster.Vue/src/views/codegen/printTemplate/
 CodeMaster.Vue/src/components/PrintDesigner/

@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeMaster.Application\CodeMaster.Application.csproj" />
+    <ProjectReference Include="..\CodeMaster.Domain\CodeMaster.Domain.csproj" />
+    <ProjectReference Include="..\CodeMaster.Infrastructure\CodeMaster.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.OpenApi.Readers" Version="1.6.22" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.OpenApi" Version="1.6.22" GeneratePathProperty="true" />
+    <PackageReference Include="SharpYaml" Version="2.1.1" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(PkgMicrosoft_OpenApi_Readers)\lib\netstandard2.0\Microsoft.OpenApi.Readers.dll"
+          Link="Microsoft.OpenApi.Readers.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(PkgMicrosoft_OpenApi)\lib\netstandard2.0\Microsoft.OpenApi.dll"
+          Link="Microsoft.OpenApi.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(PkgSharpYaml)\lib\netstandard2.0\SharpYaml.dll"
+          Link="SharpYaml.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyUiCompositionToWebApi"
+          AfterTargets="Build"
+          Condition="'$(SkipUiCompositionWebApiCopy)' != 'true'">
+    <ItemGroup>
+      <UiCompositionModuleFiles Include="$(TargetPath)" />
+      <UiCompositionModuleFiles Include="$(TargetDir)Microsoft.OpenApi.dll" />
+      <UiCompositionModuleFiles Include="$(TargetDir)Microsoft.OpenApi.Readers.dll" />
+      <UiCompositionModuleFiles Include="$(TargetDir)SharpYaml.dll" />
+    </ItemGroup>
+    <MakeDir Directories="..\CodeMaster.WebApi\bin\$(Configuration)\$(TargetFramework)\modules" />
+    <Copy SourceFiles="@(UiCompositionModuleFiles)"
+          DestinationFolder="..\CodeMaster.WebApi\bin\$(Configuration)\$(TargetFramework)\modules" />
+  </Target>
+
+</Project>

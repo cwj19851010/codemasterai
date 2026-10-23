@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -87,10 +87,11 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="ValidateFullEditionModules"
+  <!-- 复杂页（UiComposition）自 2026-10-23 起是公共项目，全量版与公共版都要带。 -->
+  <Target Name="ValidateUiCompositionModule"
           BeforeTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and !Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
-    <Error Text="CodeMaster Full edition requires the CodeMaster.Private directory." />
+          Condition="!Exists('..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj')">
+    <Error Text="Missing CodeMaster.UiComposition project; the working tree is incomplete." />
   </Target>
 
   <Target Name="ValidatePrintingModule"
@@ -101,11 +102,11 @@
 
   <Target Name="BuildUiCompositionModules"
           BeforeTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
-    <MSBuild Projects="..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj"
+          Condition="Exists('..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj')">
+    <MSBuild Projects="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
-    <MSBuild Projects="..\CodeMaster.Private\UiComposition.Agent\CodeMaster.UiComposition.Agent.csproj"
+    <MSBuild Projects="..\CodeMaster.UiComposition.Agent\CodeMaster.UiComposition.Agent.csproj"
              Targets="Build"
              Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
   </Target>
@@ -139,13 +140,13 @@
 
   <Target Name="PublishUiCompositionModules"
           AfterTargets="Publish"
-          Condition="'$(IncludePrivateModules)' == 'true' and Exists('..\CodeMaster.Private\UiComposition\CodeMaster.UiComposition.csproj')">
+          Condition="Exists('..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj')">
     <ItemGroup>
-      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
-      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
-      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
-      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
-      <UiModuleFiles Include="..\CodeMaster.Private\UiComposition.Agent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Agent.dll" />
+      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
+      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
+      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
+      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
+      <UiModuleFiles Include="..\CodeMaster.UiComposition.Agent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Agent.dll" />
     </ItemGroup>
     <MakeDir Directories="$(PublishDir)modules" />
     <Copy SourceFiles="@(UiModuleFiles)" DestinationFolder="$(PublishDir)modules" />
@@ -162,17 +163,7 @@
           SkipUnchangedFiles="true" />
   </Target>
 
-  <Target Name="RemoveUiCompositionModulesFromPublicPublish"
-          AfterTargets="Publish"
-          Condition="'$(IncludePrivateModules)' != 'true'">
-    <ItemGroup>
-      <PublicPublishPrivateFiles Include="$(PublishDir)modules\CodeMaster.UiComposition.dll" />
-      <PublicPublishPrivateFiles Include="$(PublishDir)modules\CodeMaster.UiComposition.Agent.dll" />
-      <PublicPublishPrivateFiles Include="$(PublishDir)modules\Microsoft.OpenApi.dll" />
-      <PublicPublishPrivateFiles Include="$(PublishDir)modules\Microsoft.OpenApi.Readers.dll" />
-      <PublicPublishPrivateFiles Include="$(PublishDir)modules\SharpYaml.dll" />
-    </ItemGroup>
-    <Delete Files="@(PublicPublishPrivateFiles)" />
-  </Target>
+  <!-- 复杂页开源后，公共版发布不再需要剥离 UiComposition 的 DLL。
+       原来这里有个 RemoveUiCompositionModulesFromPublicPublish 目标专门删它们。 -->
 
 </Project>
