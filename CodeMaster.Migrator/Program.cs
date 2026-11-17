@@ -5,7 +5,9 @@ using CodeMaster.Migrator.SeedData;
 using CodeMaster.Migrator.SeedData.Core;
 using CodeMaster.Migrator.SeedData.System;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 #if DB_MYSQL
@@ -67,8 +69,9 @@ try
 {
     // 4. 执行迁移
     Console.WriteLine("【步骤 1】执行数据库迁移...");
-#if DB_MYSQL
-    if (await IsEmptyMySqlDatabaseAsync(dbContext))
+    // 迁移文件不入库：空库按当前模型建表，已有库才执行迁移
+    var databaseCreator = dbContext.Database.GetService<IRelationalDatabaseCreator>();
+    if (!await databaseCreator.HasTablesAsync())
     {
         await dbContext.Database.EnsureCreatedAsync();
         await MarkAllMigrationsAppliedAsync(dbContext);
@@ -77,9 +80,6 @@ try
     {
         await dbContext.Database.MigrateAsync();
     }
-#else
-    await dbContext.Database.MigrateAsync();
-#endif
     await ApplyModuleMigrationsAsync(dbProvider, connectionString);
     Console.WriteLine("✓ 数据库迁移完成\n");
 
@@ -204,36 +204,7 @@ static string EscapeMySqlIdentifier(string value)
     return value.Replace("`", "``");
 }
 
-static async Task<bool> IsEmptyMySqlDatabaseAsync(CodeMasterDbContext dbContext)
-{
-    var connection = dbContext.Database.GetDbConnection();
-    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
-    if (shouldClose)
-    {
-        await connection.OpenAsync();
-    }
-
-    try
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-              AND table_type = 'BASE TABLE'
-              AND table_name <> '__EFMigrationsHistory'
-            """;
-        var result = await command.ExecuteScalarAsync();
-        return Convert.ToInt32(result) == 0;
-    }
-    finally
-    {
-        if (shouldClose)
-        {
-            await connection.CloseAsync();
-        }
-    }
-}
+#endif
 
 static async Task MarkAllMigrationsAppliedAsync(CodeMasterDbContext dbContext)
 {
@@ -249,23 +220,18 @@ static async Task MarkAllMigrationsAppliedAsync(CodeMasterDbContext dbContext)
         ?? typeof(Migration).Assembly.GetName().Version?.ToString()
         ?? "9.0.0";
 
-    await dbContext.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS `__EFMigrationsHistory` (
-            `MigrationId` varchar(150) NOT NULL,
-            `ProductVersion` varchar(32) NOT NULL,
-            CONSTRAINT `PK___EFMigrationsHistory` PRIMARY KEY (`MigrationId`)
-        );
-        """);
+    var history = dbContext.GetService<IHistoryRepository>();
+    await dbContext.Database.ExecuteSqlRawAsync(history.GetCreateIfNotExistsScript());
 
-    foreach (var migration in migrations)
+    var applied = (await history.GetAppliedMigrationsAsync())
+        .Select(row => row.MigrationId)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    foreach (var migration in migrations.Where(m => !applied.Contains(m)))
     {
-        await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT IGNORE INTO `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`)
-            VALUES ({migration}, {productVersion});
-            """);
+        await dbContext.Database.ExecuteSqlRawAsync(
+            history.GetInsertScript(new HistoryRow(migration, productVersion)));
     }
 }
-#endif
 
 /// <summary>
 /// 种子数据初始化主流程

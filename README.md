@@ -160,6 +160,12 @@ npm install
 npm run dev
 ```
 
+不想安装数据库时可用 SQLite 零依赖体验：
+
+1. 两份 `appsettings.json` 的 `DbProvider` 都改为 `Sqlite`，连接串改为 `Data Source=../CodeMaster.db`（两个项目目录是同级，会指向同一个库文件）。
+2. `cd CodeMaster.Migrator && dotnet build -p:DbProvider=Sqlite && dotnet run --no-build`
+3. 后端与前端启动方式不变。
+
 默认开发账号：
 
 ```text
@@ -186,7 +192,9 @@ dotnet build -p:DbProvider=PostgreSQL
 dotnet run --no-build
 ```
 
-迁移程序的构建属性、Migrator 配置和 WebApi 配置必须指向同一种数据库。切换数据库后应重新构建迁移程序，并在目标数据库上验证迁移和种子数据。EF 迁移历史不提交到仓库，初始化或部署时应针对目标数据库重新生成并验证迁移。
+迁移程序的构建属性、Migrator 配置和 WebApi 配置必须指向同一种数据库。切换数据库后应重新构建迁移程序，并在目标数据库上验证迁移和种子数据。
+
+EF 迁移文件不提交到仓库。首次初始化依赖空库检测：空库直接按当前模型建表并写入种子数据，因此克隆后无需生成迁移；只有对已有数据的库做结构升级时，才需要自行生成并验证迁移。
 
 ## 配置说明
 
