@@ -4,6 +4,17 @@ import { useUserStore } from '@/stores/user'
 import { usePermissionStore } from '@/stores/permission'
 import { modules } from '@view-modules'
 
+// 打印预览页属于私有打印模块，公共版不存在该文件时跳过注册
+const printPreviewPages = import.meta.glob('../views/codegen/print/preview.vue')
+const printPreviewRoute = printPreviewPages['../views/codegen/print/preview.vue']
+  ? {
+      path: 'print-preview/:templateId',
+      name: 'PrintPreview',
+      component: printPreviewPages['../views/codegen/print/preview.vue'],
+      meta: { title: '打印预览', hidden: true, noCache: true }
+    }
+  : null
+
 // 静态路由（不需要权限）
 export const constantRoutes = [
   {
@@ -40,13 +51,8 @@ export const constantRoutes = [
         component: () => import('@/views/profile/mcpToken/index.vue'),
         meta: { title: 'MCP Token', hidden: true, noCache: true }
       },
-      // 通用打印报表运行页（任务 5.5）：所有模板共用，按 templateId + 参数加载
-      {
-        path: 'print-preview/:templateId',
-        name: 'PrintPreview',
-        component: () => import('@/views/codegen/print/preview.vue'),
-        meta: { title: '打印预览', hidden: true, noCache: true }
-      },
+      // 通用打印报表运行页（任务 5.5）：全量版按 templateId + 参数加载
+      ...(printPreviewRoute ? [printPreviewRoute] : []),
       // EntityDesigner 路由由菜单数据库动态加载
     ]
   }
