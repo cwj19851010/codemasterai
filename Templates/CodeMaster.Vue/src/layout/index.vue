@@ -56,7 +56,7 @@
       <el-main class="main-content">
         <router-view v-slot="{ Component }">
           <keep-alive :include="cachedViews" :max="20">
-            <component :is="Component" />
+            <component :is="Component" :key="viewKey" />
           </keep-alive>
         </router-view>
       </el-main>
@@ -105,6 +105,8 @@ const activeMenu = computed(() => {
 })
 
 const cachedViews = computed(() => tagsViewStore.cachedViews)
+// 不进缓存的页面按完整路径挂载，同路由不同 query（如 edit?id=1 / id=2）各自重载自己的数据
+const viewKey = computed(() => (route.name && cachedViews.value.includes(route.name) ? undefined : route.fullPath))
 
 const toggleSidebar = () => {
   isCollapse.value = !isCollapse.value

@@ -773,6 +773,138 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.All(childMenus, menu => Assert.StartsWith("masterdata/devicebinding/", menu.Component));
     }
 
+    /// <summary>
+    /// 目录菜单就是项目模块，所以模块下没有实体时也必须建出目录。
+    /// 目录以前是挂在实体循环里顺手建的，空模块会被整段跳过。
+    /// </summary>
+    [Fact]
+    public async Task SyncProjectMenus_CreatesDirectoryForModuleWithoutEntities()
+    {
+        var project = new Project
+        {
+            Id = 801,
+            ProjectName = "EmptyModuleProject",
+            ProjectPath = _tempProjectPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile}",
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var module = new ProjectModule
+        {
+            Id = 802,
+            ProjectId = project.Id,
+            ModuleName = "Warehouse",
+            ModuleDescription = "Warehouse management",
+            Icon = "Box",
+            OrderNum = 3,
+            RoutePath = "/warehouse",
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+
+        _db.Insertable(project).ExecuteCommand();
+        _db.Insertable(module).ExecuteCommand();
+
+        var targetDb = new SqlSugarClient(new ConnectionConfig
+        {
+            ConnectionString = project.ConnectionString,
+            DbType = DbType.Sqlite,
+            IsAutoCloseConnection = true,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
+        });
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+        Assert.True(await service.SyncProjectMenusToTargetAsync(
+            new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+
+        var directory = Assert.Single(
+            targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == null && menu.MenuType == "M").ToList());
+        Assert.Equal("warehouse", directory.Path);
+        Assert.Equal("Warehouse management", directory.MenuName);
+        Assert.Equal("Box", directory.Icon);
+        Assert.Equal(3, directory.OrderNum);
+    }
+
+    /// <summary>
+    /// 模块改名会同时改掉 Path 和 TitleKey，目录必须被复用，不能每次改名都多一个孤儿目录。
+    /// </summary>
+    [Fact]
+    public async Task SyncProjectMenus_ReusesDirectoryAfterModuleRename()
+    {
+        var project = new Project
+        {
+            Id = 811,
+            ProjectName = "RenameModuleProject",
+            ProjectPath = _tempProjectPath,
+            DatabaseType = CodeMaster.Core.Enums.DatabaseType.SQLite,
+            ConnectionString = $"Data Source={_sqliteFile}",
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var module = new ProjectModule
+        {
+            Id = 812,
+            ProjectId = project.Id,
+            ModuleName = "Sales",
+            ModuleDescription = "Sales",
+            Icon = "Money",
+            OrderNum = 4,
+            RoutePath = "/sales",
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var entity = new ModuleEntity
+        {
+            Id = 813,
+            ProjectId = project.Id,
+            ModuleId = module.Id,
+            Name = "Order",
+            Description = "Order",
+            HasPrimaryKey = true,
+            IsReadOnly = false,
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+
+        _db.Insertable(project).ExecuteCommand();
+        _db.Insertable(module).ExecuteCommand();
+        _db.Insertable(entity).ExecuteCommand();
+
+        var targetDb = new SqlSugarClient(new ConnectionConfig
+        {
+            ConnectionString = project.ConnectionString,
+            DbType = DbType.Sqlite,
+            IsAutoCloseConnection = true,
+            ConfigureExternalServices = SqlSugarSetup.GetConfigureExternalServices(DbType.Sqlite)
+        });
+
+        var service = new ModuleEntityService(new DummyModuleEntityRepository(), new DummyExcelService(), _db, null);
+        Assert.True(await service.SyncProjectMenusToTargetAsync(
+            new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+        Assert.Single(targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == null && menu.MenuType == "M").ToList());
+
+        module.ModuleName = "SalesOrders";
+        module.ModuleDescription = "Sales orders";
+        _db.Updateable(module).ExecuteCommand();
+
+        Assert.True(await service.SyncProjectMenusToTargetAsync(
+            new CodeMaster.Application.Dtos.CodeGen.ProjectCodeGenerationDto { ProjectId = project.Id }));
+
+        var directory = Assert.Single(
+            targetDb.Queryable<SysMenu>().Where(menu => menu.ParentId == null && menu.MenuType == "M").ToList());
+        Assert.Equal("salesorders", directory.Path);
+        Assert.Equal("Sales orders", directory.MenuName);
+
+        var pageMenu = Assert.Single(targetDb.Queryable<SysMenu>()
+            .Where(menu => menu.ParentId == directory.Id && menu.MenuType == "C" && menu.Path == "order")
+            .ToList());
+        Assert.Equal("salesorders/order/index", pageMenu.Component);
+    }
+
     [Fact]
     public async Task Test_SelectTable_DisplayFields_Render_In_Main_List_And_Detail_When_Raw_Field_Hidden()
     {
@@ -2074,6 +2206,174 @@ public class CodeGenerationIntegrationTests : IDisposable
         Assert.True(await service.SavePageScriptAsync(entityId, "add", updatedChildScript, "orderItem"));
         Assert.Equal(updatedChildScript, await File.ReadAllTextAsync(Path.Combine(viewPath, "orderItem.add.script.json")));
         Assert.Equal("{\"name\":\"main\"}", await File.ReadAllTextAsync(Path.Combine(viewPath, "designerOrder.add.script.json")));
+    }
+
+    /// <summary>
+    /// A child card column of type date/datetime renders {{ formatDate(row.x, true) }} into the
+    /// parent page template, but the helper used to be injected only as a side effect of a
+    /// select-table display field. A page without one therefore produced add.vue/edit.vue that
+    /// called an undeclared formatDate.
+    /// </summary>
+    [Fact]
+    public async Task Child_table_datetime_column_declares_formatDate_in_child_composable()
+    {
+        const string emptyScript = "{\"imports\":[],\"uses\":[],\"refs\":[],\"reactives\":[],\"functions\":[],\"hooks\":[],\"computed\":[],\"watches\":[]}";
+
+        _db.Insertable(new ProjectModule
+        {
+            Id = 91,
+            ProjectId = 1,
+            ModuleName = "ContractManagement",
+            ModuleDescription = "Contract management",
+            Icon = "folder",
+            RoutePath = "/contract",
+            LastSyncTime = DateTime.UtcNow,
+            Remark = string.Empty,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+
+        var contractEntity = new ModuleEntity
+        {
+            Id = 92,
+            ProjectId = 1,
+            ModuleId = 91,
+            Name = "Contract",
+            Description = "Contract",
+            TableName = "contracts",
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        var milestoneEntity = new ModuleEntity
+        {
+            Id = 93,
+            ProjectId = 1,
+            ModuleId = 91,
+            Name = "ContractMilestone",
+            Description = "Contract milestone",
+            TableName = "contract_milestones",
+            GenerateFrontend = true,
+            CreateBy = "test",
+            UpdateUserId = 0
+        };
+        _db.Insertable(new[] { contractEntity, milestoneEntity }).ExecuteCommand();
+
+        _db.Insertable(new[]
+        {
+            new EntityField
+            {
+                Id = 94,
+                ModuleEntityId = contractEntity.Id,
+                Name = "Name",
+                Description = "Name",
+                DataType = "string",
+                FormControlType = "input",
+                ShowInList = true,
+                ShowInAddForm = true,
+                OrderNum = 1,
+                CreateBy = "test",
+                UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = 95,
+                ModuleEntityId = milestoneEntity.Id,
+                Name = "OrderId",
+                Description = "Contract",
+                DataType = "long",
+                FormControlType = "number",
+                ShowInList = false,
+                ShowInAddForm = false,
+                OrderNum = 1,
+                CreateBy = "test",
+                UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = 96,
+                ModuleEntityId = milestoneEntity.Id,
+                Name = "MilestoneName",
+                Description = "Milestone",
+                DataType = "string",
+                FormControlType = "input",
+                ShowInList = true,
+                ShowInAddForm = true,
+                OrderNum = 2,
+                CreateBy = "test",
+                UpdateUserId = 0
+            },
+            new EntityField
+            {
+                Id = 97,
+                ModuleEntityId = milestoneEntity.Id,
+                Name = "SignDate",
+                Description = "Sign date",
+                DataType = "DateTime",
+                FormControlType = "datetime",
+                ShowInList = true,
+                ShowInAddForm = true,
+                OrderNum = 3,
+                CreateBy = "test",
+                UpdateUserId = 0
+            }
+        }).ExecuteCommand();
+
+        _db.Insertable(new OneToManyRelation
+        {
+            Id = 98,
+            ModuleEntityId = contractEntity.Id,
+            MasterField = "Id",
+            ChildEntityId = milestoneEntity.Id,
+            ChildEntityName = "ContractMilestone",
+            ChildForeignKey = "OrderId",
+            OrderNum = 1,
+            CreateBy = "test",
+            UpdateUserId = 0
+        }).ExecuteCommand();
+
+        _db.Insertable(new[]
+        {
+            new SysFieldControlTemplate { Id = 9101, ControlType = "input", PageSection = "add", HtmlContent = "<el-col><el-form-item [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-input v-model=\"[field.formPrefix].[field.nameLower]\" /></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 1, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9102, ControlType = "input", PageSection = "edit", HtmlContent = "<el-col><el-form-item [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-input v-model=\"[field.formPrefix].[field.nameLower]\" /></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 2, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9103, ControlType = "input", PageSection = "detail", HtmlContent = "<el-descriptions-item data-gen-id=\"gen_field_[field.id]\">{{ [field.detailPrefix].[field.nameLower] }}</el-descriptions-item>", ScriptSections = emptyScript, Sort = 3, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9104, ControlType = "table-column", PageSection = "list", HtmlContent = "<el-table-column [field.prop] data-gen-id=\"gen_col_[field.id]\" />", ScriptSections = emptyScript, Sort = 4, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9105, ControlType = "datetime", PageSection = "add", HtmlContent = "<el-col><el-form-item [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-date-picker v-model=\"[field.formPrefix].[field.nameLower]\" type=\"datetime\" /></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 5, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9106, ControlType = "datetime", PageSection = "edit", HtmlContent = "<el-col><el-form-item [field.prop] data-gen-id=\"gen_field_[field.id]\"><el-date-picker v-model=\"[field.formPrefix].[field.nameLower]\" type=\"datetime\" /></el-form-item></el-col>", ScriptSections = emptyScript, Sort = 6, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9107, ControlType = "datetime", PageSection = "detail", HtmlContent = "<el-descriptions-item data-gen-id=\"gen_field_[field.id]\">{{ [field.detailPrefix].[field.nameLower] }}</el-descriptions-item>", ScriptSections = emptyScript, Sort = 7, CreateBy = "test", UpdateUserId = 0 },
+            new SysFieldControlTemplate { Id = 9108, ControlType = "table-column", PageSection = "list", HtmlContent = "<el-table-column [field.prop] data-gen-id=\"gen_col_[field.id]\" />", ScriptSections = emptyScript, Sort = 8, CreateBy = "test", UpdateUserId = 0 }
+        }).ExecuteCommand();
+
+        _db.Insertable(new[]
+        {
+            new SysChildTemplate { Id = 9201, PageType = "add", ChildType = "card", HtmlContent = "<el-table>[relation.tableColumns]</el-table>", ScriptSections = emptyScript, Sort = 1, CreateBy = "test", UpdateUserId = 0 },
+            new SysChildTemplate { Id = 9202, PageType = "add", ChildType = "dialog", HtmlContent = "<el-dialog><el-form>[relation.dialogColumns]</el-form></el-dialog>", ScriptSections = emptyScript, Sort = 2, CreateBy = "test", UpdateUserId = 0 }
+        }).ExecuteCommand();
+
+        var generator = new TemplateCodeGenerator(_db);
+        var add = await generator.GeneratePageAsync(contractEntity.Id, "add", "TestAutomationProject", "ContractManagement");
+
+        // The column keeps the slot, so the helper has to exist in the scope that owns the card.
+        Assert.Contains("formatDate(scope.row.signDate, true)", add.VueContent);
+        Assert.True(add.ChildScripts.TryGetValue("ContractMilestone", out var childScript));
+        Assert.Contains("const formatDate = (val, withTime) =>", childScript!.ScriptContent);
+        Assert.Contains("formatDate", childScript.ExportNames);
+        Assert.Contains("formatDate", add.ChildImportLine);
+
+        // Binding the same name twice in one <script setup> is a redeclaration error.
+        Assert.Equal(1, CountOccurrences(add.ChildImportLine, "formatDate"));
+    }
+
+    private static int CountOccurrences(string text, string token)
+    {
+        var count = 0;
+        var index = text.IndexOf(token, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            count++;
+            index = text.IndexOf(token, index + token.Length, StringComparison.Ordinal);
+        }
+        return count;
     }
 
     private void SeedMinimalTemplates()

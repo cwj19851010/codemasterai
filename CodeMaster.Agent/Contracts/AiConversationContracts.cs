@@ -114,6 +114,19 @@ public sealed class AiMessageDto
     public string? MetadataJson { get; set; }
     public int Sequence { get; set; }
     public DateTime CreateTime { get; set; }
+
+    /// <summary>
+    /// Text documents the user attached to this message. Only descriptors travel here; the
+    /// bodies stay on disk and are read on demand through <c>read_attachment</c>.
+    /// </summary>
+    public List<AiAttachmentRef> Attachments { get; set; } = new();
+
+    /// <summary>
+    /// Image bytes for the current turn only, populated by <c>BeginLocalAsync</c> so the local
+    /// client can build the multimodal message itself. Never populated by the message list
+    /// endpoints — that would push megabytes of base64 through every history reload.
+    /// </summary>
+    public List<AiImagePayload> Images { get; set; } = new();
 }
 
 public sealed class SendAiMessageRequest
@@ -121,6 +134,12 @@ public sealed class SendAiMessageRequest
     public long ConversationId { get; set; }
     public string? RequestId { get; set; }
     public string Content { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Documents uploaded through <c>POST api/agent/attachments</c> and attached to this
+    /// message. Their text is inlined into the model input for this turn.
+    /// </summary>
+    public List<AiAttachmentRef>? Attachments { get; set; }
 }
 
 public sealed class CancelAiChatRequest
@@ -133,6 +152,12 @@ public sealed class AiChatResult
 {
     public AiMessageDto Message { get; set; } = new();
     public List<AiToolExecutionDto> PendingApprovals { get; set; } = new();
+
+    /// <summary>
+    /// Non-fatal notes the user must see, for example "this model cannot read images, so the
+    /// images were not sent". The turn still succeeded; these are explanations, not errors.
+    /// </summary>
+    public List<string> Warnings { get; set; } = new();
 }
 
 public sealed class AiChatStreamEvent
@@ -178,6 +203,12 @@ public sealed class BeginLocalAiChatResult
     public List<AiMessageDto> Messages { get; set; } = new();
     public List<string> AvailableTools { get; set; } = new();
     public bool RequiresWorkPlan { get; set; }
+
+    /// <summary>
+    /// Non-fatal notes for the local client to show next to the reply, for example
+    /// "this model cannot read images". Explanations, not errors.
+    /// </summary>
+    public List<string> Warnings { get; set; } = new();
 
     /// <summary>
     /// The mode this turn runs in. The local client must not call tools outside
@@ -307,6 +338,7 @@ public sealed class CreateEntityFieldProposal
     public bool ShowInDetail { get; set; } = true;
     public bool ShowInAddForm { get; set; } = true;
     public bool ShowInEditForm { get; set; } = true;
+    [Description("Marks the field as a list-page search condition. Set true on 2-4 fields users would realistically filter by (codes, names, status, dates, owners). Leave false for long text, attachments, rich text, and derived/aggregate columns. When no field sets it, a fallback picks up to 4 automatically.")]
     public bool ShowInSearch { get; set; }
     [Description("UI control: input, textarea, number, select, select-table, date, datetime, switch, checkbox, radio-group, checkbox-group, file, image, editor, cascader, or table-column. Use ordinary select for scalar code values. select-table and cascader require RelatedEntityName, RelatedEntityIdField, and RelatedEntityDisplayFields; cascader must target a tree entity.")]
     public string FormControlType { get; set; } = "input";

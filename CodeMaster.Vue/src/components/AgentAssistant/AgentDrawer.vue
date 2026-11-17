@@ -163,98 +163,6 @@
             <span>可以开始描述需求了</span>
           </div>
 
-          <section v-if="workPlan" class="work-plan-panel" aria-label="项目任务列表">
-            <div class="work-plan-header">
-              <div>
-                <strong>{{ workPlan.title }}</strong>
-                <span>{{ workPlan.completedTasks }}/{{ workPlan.totalTasks }} 个任务完成</span>
-              </div>
-              <div class="work-plan-tags">
-                <el-tag
-                  size="small"
-                  :type="agentPhaseType(currentAgentPhase)"
-                  :title="agentPhaseLabel(currentAgentPhase)"
-                  data-testid="agent-phase-tag"
-                >{{ agentPhaseLabel(currentAgentPhase) }}</el-tag>
-                <el-tag size="small" :type="workPlanStatusType(workPlan.status)">{{ workPlanStatusLabel(workPlan.status) }}</el-tag>
-              </div>
-            </div>
-            <el-progress
-              :percentage="workPlanProgress"
-              :show-text="false"
-              :status="workPlan.status === 'Failed' ? 'exception' : undefined"
-            />
-            <el-button
-              v-if="workPlanCanResume"
-              class="work-plan-resume"
-              type="primary"
-              plain
-              :loading="applyingWorkPlanMetadata"
-              @click="applyConfirmedWorkPlanMetadata"
-            >继续执行任务</el-button>
-            <div v-if="currentWorkTask" class="work-plan-current-task" aria-live="polite">
-              <span class="work-plan-current-task-label">当前执行任务</span>
-              <strong>{{ currentWorkTask.title }}</strong>
-              <span>{{ taskStatusLabel(currentWorkTask.status) }}</span>
-            </div>
-            <div v-if="workPlan.repairPolicy?.canInspectCodeMasterSource" class="work-repair-policy">
-              <el-tag size="small" type="warning">测试源码修复已授权</el-tag>
-              <span>仅允许结构化补丁和服务器验证配置</span>
-            </div>
-            <div v-for="stage in workPlan.stages" :key="stage.id || stage.stageKey" class="work-stage">
-              <div class="work-stage-header">
-                <span class="work-stage-title">{{ stage.title }}</span>
-                <span class="work-stage-count">{{ stage.completedTasks }}/{{ stage.totalTasks }}</span>
-              </div>
-              <div v-for="task in stage.tasks" :key="task.id || task.taskKey" class="work-task">
-                <div class="work-task-row">
-                  <span class="work-task-state" :class="`state-${String(task.status).toLowerCase()}`">
-                    {{ taskStatusLabel(task.status, autoApprovalEnabled) }}
-                  </span>
-                  <span class="work-task-title">{{ task.title }}</span>
-                  <span v-if="task.unmetDependencyTaskKeys?.length" class="work-task-lock">
-                    等待 {{ task.unmetDependencyTaskKeys.join('、') }}
-                  </span>
-                  <span
-                    v-else-if="task.lastDiagnosis && !(autoApprovalEnabled && task.status === 'WaitingApproval')"
-                    class="work-task-diagnosis"
-                  >{{ task.lastDiagnosis }}</span>
-                </div>
-                <details v-if="task.lastAttempt?.evidence" class="work-task-evidence">
-                  <summary>
-                    查看失败证据
-                    <el-tag size="small" type="danger">
-                      {{ failureCategoryLabel(task.lastAttempt.evidence.category) }}
-                    </el-tag>
-                  </summary>
-                  <p>{{ task.lastAttempt.evidence.summary }}</p>
-                  <ul v-if="task.lastAttempt.evidence.supportingEvidence?.length">
-                    <li v-for="item in task.lastAttempt.evidence.supportingEvidence" :key="item">{{ item }}</li>
-                  </ul>
-                  <pre v-if="task.lastAttempt.evidence.diagnosticOutput">{{ task.lastAttempt.evidence.diagnosticOutput }}</pre>
-                  <el-button
-                    v-if="task.status === 'Failed' && task.lastAttempt.failureSignature"
-                    size="small"
-                    :loading="retryingTaskId === task.id"
-                    @click="retryFailedTask(task)"
-                  >重新排队</el-button>
-                </details>
-                <details v-if="task.lastAttempt?.repair" class="work-task-repair">
-                  <summary>
-                    源码修复记录
-                    <el-tag size="small" :type="task.lastAttempt.repair.validationPassed ? 'success' : 'danger'">
-                      {{ task.lastAttempt.repair.validationPassed ? '验证通过' : '验证未通过' }}
-                    </el-tag>
-                  </summary>
-                  <p v-if="task.lastAttempt.repair.rationale">{{ task.lastAttempt.repair.rationale }}</p>
-                  <p>Profile: {{ task.lastAttempt.repair.validationProfile }}</p>
-                  <p v-if="task.lastAttempt.repair.diffSummary">{{ task.lastAttempt.repair.diffSummary }}</p>
-                  <pre v-if="task.lastAttempt.repair.validationOutput">{{ task.lastAttempt.repair.validationOutput }}</pre>
-                </details>
-              </div>
-            </div>
-          </section>
-
           <template v-for="item in conversationTimeline" :key="item.key">
             <div
               v-if="item.kind === 'message'"
@@ -264,6 +172,28 @@
               <div class="message-role">{{ item.value.role === 'user' ? '你' : isRequestFailure(item.value) ? '执行错误' : 'Agent' }}</div>
               <div class="message-bubble" :class="{ streaming: item.value.isStreaming }">
                 <span v-if="item.value.content">{{ item.value.content }}</span>
+                <div v-if="item.value.attachments?.length" class="message-attachments">
+                  <span
+                    v-for="attachment in item.value.attachments"
+                    :key="attachment.token"
+                    class="message-attachment-chip"
+                    :title="`${attachment.name}（${formatAttachmentSize(attachment)}）`"
+                  >
+                    <el-icon><Paperclip /></el-icon>
+                    {{ attachment.name }}
+                    <em>{{ formatAttachmentSize(attachment) }}</em>
+                  </span>
+                </div>
+                <div v-if="item.value.warnings?.length" class="message-warnings">
+                  <div
+                    v-for="(warning, warningIndex) in item.value.warnings"
+                    :key="`warning-${warningIndex}`"
+                    class="message-warning"
+                  >
+                    <el-icon><InfoFilled /></el-icon>
+                    <span>{{ warning }}</span>
+                  </div>
+                </div>
                 <span v-if="item.value.isStreaming && item.value.content" class="stream-cursor"></span>
                 <div v-if="item.value.streamStatus" class="stream-status">
                   <span class="stream-status-dot"></span>
@@ -510,6 +440,98 @@
             </div>
           </template>
 
+          <section v-if="workPlan" class="work-plan-panel" aria-label="项目任务列表">
+            <div class="work-plan-header">
+              <div>
+                <strong>{{ workPlan.title }}</strong>
+                <span>{{ workPlan.completedTasks }}/{{ workPlan.totalTasks }} 个任务完成</span>
+              </div>
+              <div class="work-plan-tags">
+                <el-tag
+                  size="small"
+                  :type="agentPhaseType(currentAgentPhase)"
+                  :title="agentPhaseLabel(currentAgentPhase)"
+                  data-testid="agent-phase-tag"
+                >{{ agentPhaseLabel(currentAgentPhase) }}</el-tag>
+                <el-tag size="small" :type="workPlanStatusType(workPlan.status)">{{ workPlanStatusLabel(workPlan.status) }}</el-tag>
+              </div>
+            </div>
+            <el-progress
+              :percentage="workPlanProgress"
+              :show-text="false"
+              :status="workPlan.status === 'Failed' ? 'exception' : undefined"
+            />
+            <el-button
+              v-if="workPlanCanResume"
+              class="work-plan-resume"
+              type="primary"
+              plain
+              :loading="applyingWorkPlanMetadata"
+              @click="applyConfirmedWorkPlanMetadata"
+            >继续执行任务</el-button>
+            <div v-if="currentWorkTask" class="work-plan-current-task" aria-live="polite">
+              <span class="work-plan-current-task-label">当前执行任务</span>
+              <strong>{{ currentWorkTask.title }}</strong>
+              <span>{{ taskStatusLabel(currentWorkTask.status) }}</span>
+            </div>
+            <div v-if="workPlan.repairPolicy?.canInspectCodeMasterSource" class="work-repair-policy">
+              <el-tag size="small" type="warning">测试源码修复已授权</el-tag>
+              <span>仅允许结构化补丁和服务器验证配置</span>
+            </div>
+            <div v-for="stage in workPlan.stages" :key="stage.id || stage.stageKey" class="work-stage">
+              <div class="work-stage-header">
+                <span class="work-stage-title">{{ stage.title }}</span>
+                <span class="work-stage-count">{{ stage.completedTasks }}/{{ stage.totalTasks }}</span>
+              </div>
+              <div v-for="task in stage.tasks" :key="task.id || task.taskKey" class="work-task">
+                <div class="work-task-row">
+                  <span class="work-task-state" :class="`state-${String(task.status).toLowerCase()}`">
+                    {{ taskStatusLabel(task.status, autoApprovalEnabled) }}
+                  </span>
+                  <span class="work-task-title">{{ task.title }}</span>
+                  <span v-if="task.unmetDependencyTaskKeys?.length" class="work-task-lock">
+                    等待 {{ task.unmetDependencyTaskKeys.join('、') }}
+                  </span>
+                  <span
+                    v-else-if="task.lastDiagnosis && !(autoApprovalEnabled && task.status === 'WaitingApproval')"
+                    class="work-task-diagnosis"
+                  >{{ task.lastDiagnosis }}</span>
+                </div>
+                <details v-if="task.lastAttempt?.evidence" class="work-task-evidence">
+                  <summary>
+                    查看失败证据
+                    <el-tag size="small" type="danger">
+                      {{ failureCategoryLabel(task.lastAttempt.evidence.category) }}
+                    </el-tag>
+                  </summary>
+                  <p>{{ task.lastAttempt.evidence.summary }}</p>
+                  <ul v-if="task.lastAttempt.evidence.supportingEvidence?.length">
+                    <li v-for="item in task.lastAttempt.evidence.supportingEvidence" :key="item">{{ item }}</li>
+                  </ul>
+                  <pre v-if="task.lastAttempt.evidence.diagnosticOutput">{{ task.lastAttempt.evidence.diagnosticOutput }}</pre>
+                  <el-button
+                    v-if="task.status === 'Failed' && task.lastAttempt.failureSignature"
+                    size="small"
+                    :loading="retryingTaskId === task.id"
+                    @click="retryFailedTask(task)"
+                  >重新排队</el-button>
+                </details>
+                <details v-if="task.lastAttempt?.repair" class="work-task-repair">
+                  <summary>
+                    源码修复记录
+                    <el-tag size="small" :type="task.lastAttempt.repair.validationPassed ? 'success' : 'danger'">
+                      {{ task.lastAttempt.repair.validationPassed ? '验证通过' : '验证未通过' }}
+                    </el-tag>
+                  </summary>
+                  <p v-if="task.lastAttempt.repair.rationale">{{ task.lastAttempt.repair.rationale }}</p>
+                  <p>Profile: {{ task.lastAttempt.repair.validationProfile }}</p>
+                  <p v-if="task.lastAttempt.repair.diffSummary">{{ task.lastAttempt.repair.diffSummary }}</p>
+                  <pre v-if="task.lastAttempt.repair.validationOutput">{{ task.lastAttempt.repair.validationOutput }}</pre>
+                </details>
+              </div>
+            </div>
+          </section>
+
           <div v-if="sending" class="typing-row">
             <template v-if="!streamingMessageVisible">
               <span></span><span></span><span></span>
@@ -530,6 +552,19 @@
       </div>
 
       <div class="composer">
+        <div v-if="pendingAttachments.length" class="composer-attachments">
+          <el-tag
+            v-for="attachment in pendingAttachments"
+            :key="attachment.token"
+            size="small"
+            type="info"
+            effect="plain"
+            closable
+            @close="removePendingAttachment(attachment.token)"
+          >
+            {{ attachment.name }} · {{ formatAttachmentSize(attachment) }}
+          </el-tag>
+        </div>
         <el-input
           v-model="draft"
           type="textarea"
@@ -541,7 +576,19 @@
           @keydown.ctrl.enter.prevent="handleSend"
         />
         <div class="composer-footer">
-          <span>{{ isCodeModeActive ? 'Ctrl + Enter' : agentModeCopyText.emptyTip }}</span>
+          <div class="composer-footer-left">
+            <el-button
+              text
+              :icon="Paperclip"
+              :loading="uploadingAttachments"
+              :disabled="!canSend || uploadingAttachments"
+              title="上传 .md / .txt 需求文档，随本条消息一起交给 Agent"
+              @click="triggerAttachmentPick"
+            >
+              文档
+            </el-button>
+            <span>{{ isCodeModeActive ? 'Ctrl + Enter' : agentModeCopyText.emptyTip }}</span>
+          </div>
           <el-button
             type="primary"
             :icon="Promotion"
@@ -552,6 +599,14 @@
             发送
           </el-button>
         </div>
+        <input
+          ref="attachmentInputRef"
+          class="composer-file-input"
+          type="file"
+          :accept="ATTACHMENT_ACCEPT"
+          multiple
+          @change="handleAttachmentPick"
+        />
       </div>
 
       <div v-if="!isCodeModeActive" class="generate-action">
@@ -594,6 +649,7 @@ import {
   FolderOpened,
   InfoFilled,
   MagicStick,
+  Paperclip,
   Promotion,
   Setting,
   WarningFilled
@@ -637,13 +693,15 @@ import {
   getMessages,
   getProviders,
   getToolExecutions,
+  isClientTimeout,
   rejectTool,
   resumeWorkPlan,
   retryWorkPlanTask,
   streamMessage,
   switchAgentMode,
   updateConversationPreferences,
-  updateConversationProvider
+  updateConversationProvider,
+  uploadAgentAttachment
 } from '@/api/agent'
 import ProviderSettingsDialog from './ProviderSettingsDialog.vue'
 import ProjectCreateWizard from './ProjectCreateWizard.vue'
@@ -682,6 +740,15 @@ const autoApproveApprovals = ref(false)
 const agentMode = ref(DEFAULT_AGENT_MODE)
 const switchingMode = ref(false)
 const draft = ref('')
+// Documents staged for the next message. They are uploaded immediately (so the server owns
+// the bytes) but only reach the model when the message that carries them is sent.
+const MAX_MESSAGE_ATTACHMENTS = 5
+// Images are accepted too. Whether the selected model can actually read them is decided by the
+// server, which explains the situation instead of failing the turn.
+const ATTACHMENT_ACCEPT = '.md,.markdown,.txt,.text,.png,.jpg,.jpeg,.webp,.gif'
+const pendingAttachments = ref([])
+const uploadingAttachments = ref(false)
+const attachmentInputRef = ref(null)
 const sending = ref(false)
 const retryRequestId = ref('')
 const retryContent = ref('')
@@ -925,6 +992,14 @@ const confirmCurrentWorkPlan = async () => {
     ElMessage.success('方案已确认，正在按任务顺序执行')
     await applyConfirmedWorkPlanMetadata(confirmedResult?.execution || null)
   } catch (error) {
+    if (isClientTimeout(error)) {
+      // The confirm request may well have succeeded server-side. Do not report a failure and do
+      // not re-confirm blindly: re-read the plan and let the normal advance loop pick it up.
+      ElMessage.warning('方案已提交，服务端仍在执行（客户端已停止等待），进度会自动同步')
+      await loadWorkPlan()
+      if (autoApprovalEnabled.value) scheduleAutomaticApprovalProcessing()
+      return
+    }
     ElMessage.error(error?.message || '确认工作计划失败')
     await loadWorkPlan()
   } finally {
@@ -951,6 +1026,14 @@ const applyConfirmedWorkPlanMetadata = async initialExecution => {
     }
     ElMessage.success('元数据已全部应用；源代码请在项目页面手动生成')
   } catch (error) {
+    if (isClientTimeout(error)) {
+      // The plan keeps advancing server-side after the browser stops waiting. Re-read it and let
+      // the resume loop continue; only surface an error if the plan genuinely failed.
+      ElMessage.warning('服务端仍在执行工作计划（客户端已停止等待），进度稍后自动同步')
+      await loadWorkPlan()
+      if (autoApprovalEnabled.value && workPlanCanResume.value) scheduleAutomaticApprovalProcessing()
+      return
+    }
     ElMessage.error(error?.message || '应用工作计划元数据失败')
     await loadWorkPlan()
   } finally {
@@ -961,6 +1044,7 @@ const applyConfirmedWorkPlanMetadata = async initialExecution => {
 const advanceConfirmedWorkPlan = async initialExecution => {
   let execution = initialExecution || null
   const processedExecutions = new Set()
+  let consecutiveTimeouts = 0
   while (workPlan.value?.id) {
     if (execution) {
       const progressKey = executionProgressKey(execution)
@@ -980,7 +1064,19 @@ const advanceConfirmedWorkPlan = async initialExecution => {
 
     await loadWorkPlan()
     if (!workPlanCanResume.value) return
-    const resumed = await resumeWorkPlan(workPlan.value.id, activeConversationId.value)
+    let resumed
+    try {
+      resumed = await resumeWorkPlan(workPlan.value.id, activeConversationId.value)
+      consecutiveTimeouts = 0
+    } catch (error) {
+      // A resume call that outlives the client budget is still running on the server. Drop our
+      // handle on it, re-read the plan, and let the loop decide — never report it as a failure.
+      if (!isClientTimeout(error)) throw error
+      consecutiveTimeouts += 1
+      if (consecutiveTimeouts > 3) throw error
+      execution = null
+      continue
+    }
     if (resumed?.plan) workPlan.value = resumed.plan
     execution = resumed?.execution || null
     if (!execution) {
@@ -1141,13 +1237,25 @@ const applyAgentResult = async (result, requestId) => {
     throw error
   }
   messages.value = resolveRequestFailure(messages.value, requestId)
+  // Warnings are explanations, not failures: the turn succeeded, but the user must know that
+  // something was left out (for example images the model cannot read).
+  const assistantMessage = Array.isArray(result?.warnings) && result.warnings.length
+    ? { ...result.message, warnings: result.warnings }
+    : { ...result.message }
   const assistantIndex = messages.value.findIndex(message =>
     message.role === 'assistant' && message.requestId === requestId
   )
   if (assistantIndex >= 0) {
-    messages.value[assistantIndex] = result.message
+    // Preserve frontend-only transient progress state from the streaming message
+    // so that compile / stage / task progress panels remain visible after the
+    // server-side message replaces the local placeholder.
+    const oldMessage = messages.value[assistantIndex]
+    if (oldMessage.compileProgress) assistantMessage.compileProgress = oldMessage.compileProgress
+    if (oldMessage.stageProgress?.length) assistantMessage.stageProgress = oldMessage.stageProgress
+    if (oldMessage.taskProgress) assistantMessage.taskProgress = oldMessage.taskProgress
+    messages.value[assistantIndex] = assistantMessage
   } else {
-    messages.value.push(result.message)
+    messages.value.push(assistantMessage)
   }
   if (Array.isArray(result.pendingApprovals)) {
     const otherExecutions = toolExecutions.value.filter(item =>
@@ -1191,6 +1299,33 @@ const waitForServerCompletion = async (conversationId, requestId, streamingMessa
       // A transient poll failure should not restart the model request.
     }
     await new Promise(resolve => setTimeout(resolve, 1500))
+  }
+  return null
+}
+
+/**
+ * A client-side timeout means "we stopped waiting", not "the server failed".
+ *
+ * The backend keeps executing the request after axios aborts, so the only correct reaction is
+ * to stop treating the aborted promise as the source of truth and poll the persisted execution
+ * instead. Returns the settled execution, or `null` if it never left a transient state.
+ */
+const waitForExecutionSettled = async (executionId, { timeoutMs = 10 * 60 * 1000, intervalMs = 2000 } = {}) => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs))
+    if (cancelRequested.value) return null
+    try {
+      const executions = await getToolExecutions(activeConversationId.value)
+      const current = (executions || []).find(item => String(item.id) === String(executionId))
+      if (!current) continue
+      toolExecutions.value = executions
+      updateExecution(current)
+      // Executing/Approved are the server's in-flight states; anything else is a real outcome.
+      if (!['Executing', 'Approved'].includes(current.status)) return current
+    } catch {
+      // A transient poll failure says nothing about the run itself — keep waiting.
+    }
   }
   return null
 }
@@ -1275,6 +1410,78 @@ const handleStartGeneration = async () => {
   await handleSend('确认，按已讨论的需求开始生成代码')
 }
 
+const formatAttachmentSize = attachment => {
+  if (attachment?.kind === 'image') {
+    const kilobytes = Math.max(1, Math.round(Number(attachment.size || 0) / 1024))
+    return `${kilobytes} KB`
+  }
+  const chars = Number(attachment?.chars || 0)
+  if (chars >= 10000) return `${(chars / 10000).toFixed(1)} 万字`
+  if (chars >= 1000) return `${(chars / 1000).toFixed(1)} 千字`
+  return `${chars} 字`
+}
+
+const triggerAttachmentPick = () => {
+  if (uploadingAttachments.value || sending.value) return
+  if (pendingAttachments.value.length >= MAX_MESSAGE_ATTACHMENTS) {
+    ElMessage.warning(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文档`)
+    return
+  }
+  attachmentInputRef.value?.click()
+}
+
+/**
+ * Uploads the picked documents right away. The server keeps the bytes and returns a token;
+ * the token is what the message carries, so a later turn can page through the document with
+ * read_attachment without the client having to keep the file in memory.
+ */
+const handleAttachmentPick = async event => {
+  const files = Array.from(event?.target?.files || [])
+  if (event?.target) event.target.value = ''
+  if (!files.length) return
+
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请先选择或创建一个项目，再上传需求文档')
+    openCreateWizard()
+    return
+  }
+
+  uploadingAttachments.value = true
+  try {
+    const conversationId = await ensureConversation()
+    for (const file of files) {
+      if (pendingAttachments.value.length >= MAX_MESSAGE_ATTACHMENTS) {
+        ElMessage.warning(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文档`)
+        break
+      }
+      const attachment = await uploadAgentAttachment(conversationId, file)
+      if (attachment?.token) pendingAttachments.value.push(attachment)
+    }
+  } catch {
+    // The shared response interceptor already surfaced the failure message (validation,
+    // auth or transport), so this catch only stops an unhandled rejection.
+  } finally {
+    uploadingAttachments.value = false
+  }
+}
+
+const removePendingAttachment = token => {
+  pendingAttachments.value = pendingAttachments.value.filter(item => item.token !== token)
+}
+
+/**
+ * Puts staged documents back after a failed or cancelled send, so the user does not have to
+ * pick them again. Tokens are unique, so a document already re-picked is not duplicated.
+ */
+const restorePendingAttachments = attachments => {
+  if (!attachments?.length) return
+  const existing = new Set(pendingAttachments.value.map(item => item.token))
+  pendingAttachments.value = [
+    ...attachments.filter(item => !existing.has(item.token)),
+    ...pendingAttachments.value
+  ].slice(0, MAX_MESSAGE_ATTACHMENTS)
+}
+
 const handleSend = async (contentOverride = null, requestIdOverride = '') => {
   const hasContentOverride = typeof contentOverride === 'string'
   const content = String(hasContentOverride ? contentOverride : draft.value).trim()
@@ -1294,6 +1501,10 @@ const handleSend = async (contentOverride = null, requestIdOverride = '') => {
   sending.value = true
   cancelRequested.value = false
   if (!hasContentOverride) draft.value = ''
+  // Staged documents always travel with the next message, including the generated
+  // "start generating" confirmation — the user attached them to be read, not to be skipped.
+  const attachedDocuments = pendingAttachments.value.slice()
+  if (attachedDocuments.length) pendingAttachments.value = []
   let streamingMessage
   try {
     const conversationId = await ensureConversation()
@@ -1306,12 +1517,15 @@ const handleSend = async (contentOverride = null, requestIdOverride = '') => {
         requestId,
         role: 'user',
         content,
+        attachments: attachedDocuments,
         createTime: new Date().toISOString()
       })
     }
     await scrollToBottom()
 
-    const payload = { conversationId, requestId, content }
+    const payload = attachedDocuments.length
+      ? { conversationId, requestId, content, attachments: attachedDocuments }
+      : { conversationId, requestId, content }
     streamingMessage = {
       id: `stream-${requestId}`,
       requestId,
@@ -1359,6 +1573,7 @@ const handleSend = async (contentOverride = null, requestIdOverride = '') => {
       retryRequestId.value = requestId
       retryContent.value = content
       draft.value = content
+      restorePendingAttachments(attachedDocuments)
       ElMessage.info('已停止本次 Agent 请求')
       return false
     }
@@ -1369,6 +1584,7 @@ const handleSend = async (contentOverride = null, requestIdOverride = '') => {
         retryRequestId.value = requestId
         retryContent.value = content
         draft.value = content
+        restorePendingAttachments(attachedDocuments)
         ElMessage.info('已停止本次 Agent 请求')
         return false
       }
@@ -1398,6 +1614,7 @@ const handleSend = async (contentOverride = null, requestIdOverride = '') => {
     retryRequestId.value = requestId
     retryContent.value = content
     draft.value = content
+    restorePendingAttachments(attachedDocuments)
     const diagnostic = error?.message || 'AI 请求失败，请检查客户端模型配置和本地 Agent 状态'
     messages.value = keepRequestFailure(messages.value, requestId, diagnostic)
     await scrollToBottom()
@@ -1739,6 +1956,13 @@ const approveApproval = async approval => {
     const approvalResponse = await approveTool(approval.id)
     const approved = approvalResponse?.execution || approvalResponse
     updateExecution(approved)
+    // The server rejects approvals belonging to a retired work plan before they execute, so this
+    // is not a success: surface its reason and stop instead of queueing a doomed application.
+    if (approved.status === 'Rejected') {
+      ElMessage.warning(approved.errorMessage || '该变更已失效：所属工作计划已被取代')
+      await loadConversation()
+      return
+    }
     ElMessage.success('变更已确认，正在应用到 CodeMaster')
     void applyApprovedMetadata(approved)
   } catch (error) {
@@ -1791,7 +2015,9 @@ const applyApprovedMetadata = async approval => {
       return false
     }
     if (result.status === 'Rejected') {
-      ElMessage.warning('该变更已经被拒绝')
+      // The server rejects approvals whose work plan was superseded; surface its reason instead
+      // of a generic "already rejected".
+      ElMessage.warning(result.errorMessage || '该变更已经被拒绝')
       return false
     }
     if (result.status === 'Executing') {
@@ -1821,6 +2047,49 @@ const applyApprovedMetadata = async approval => {
     })
     return true
   } catch (error) {
+    if (isClientTimeout(error)) {
+      // The browser gave up waiting, the server did not give up executing. Reporting a failure
+      // here is what produced the bogus "timeout of 180000ms exceeded" error after a change set
+      // that actually succeeded, so we switch to polling the persisted execution instead.
+      await writeClientDiagnostic('agent.metadata_application.timeout', {
+        level: 'warning',
+        executionId: approval.id,
+        action: approval.toolName,
+        stage: 'metadata-application',
+        durationMs: performance.now() - startedAt,
+        message: error?.message || 'Client timeout'
+      })
+      ElMessage.warning('服务端仍在应用变更（客户端已停止等待），正在等待其完成…')
+      const settled = await waitForExecutionSettled(approval.id)
+      try {
+        await loadConversation()
+      } catch {
+        // The persisted execution state stays authoritative on the next refresh.
+      }
+      if (!settled) {
+        ElMessage.warning('变更仍在后台应用，结果稍后自动同步')
+        return false
+      }
+      if (settled.status === 'Failed') {
+        ElMessage.warning('变更执行失败，错误详情已保留在当前对话中')
+        return false
+      }
+      if (settled.status === 'AwaitingClientExecution') {
+        scheduleAutomaticClientActionRecovery()
+        return true
+      }
+      // Mirror the success path: the local agent's cached context is now stale for change sets.
+      if (['project_change_set', 'propose_view_data_source_plan', 'propose_openapi_import'].includes(approval.toolName)
+        && activeConversationId.value) {
+        try {
+          await invalidateLocalAgentContext(activeConversationId.value)
+        } catch {
+          // A stale local context is recoverable; the metadata itself is already applied.
+        }
+      }
+      ElMessage.success('元数据已应用（服务端完成，客户端等待超时）')
+      return true
+    }
     console.error('Agent metadata application failed:', error)
     await writeClientDiagnostic('agent.metadata_application.failed', {
       level: 'error',
@@ -1868,6 +2137,10 @@ const processAutomaticClientActionRecovery = async () => {
   try {
     await executeClientActions(pending)
   } catch (error) {
+    if (isClientTimeout(error)) {
+      ElMessage.warning('客户端任务仍在服务端执行，稍后自动同步结果')
+      return
+    }
     ElMessage.error(error?.message || '客户端任务恢复失败，错误详情已保留在当前对话中')
     try {
       await loadConversation()
@@ -1902,6 +2175,13 @@ const processAutomaticApprovals = async () => {
           ElMessage.info('已自动确认方案，正在按任务顺序执行')
           await applyConfirmedWorkPlanMetadata(confirmedResult?.execution || null)
           return
+        } catch (error) {
+          // Auto-confirm runs without any user action, so a client timeout here must not turn
+          // into a red "timeout of ...ms exceeded" toast for something that is still running.
+          if (!isClientTimeout(error)) throw error
+          ElMessage.warning('方案已自动提交，服务端仍在执行（客户端已停止等待），稍后自动同步进度')
+          await loadWorkPlan()
+          return
         } finally {
           confirmingWorkPlan.value = false
         }
@@ -1913,7 +2193,10 @@ const processAutomaticApprovals = async () => {
 
       const executionData = await getToolExecutions(activeConversationId.value)
       toolExecutions.value = executionData || []
-      const approval = toolExecutions.value.find(item =>
+      // The server returns executions oldest-first, so a plain `find` hands us the stalest record
+      // — typically a batch from a plan that has already been superseded. Prefer the newest
+      // intent instead: that is the one the user is actually waiting on.
+      const approval = [...toolExecutions.value].reverse().find(item =>
         item.status === 'PendingApproval' || item.status === 'Approved'
       )
       if (!approval) break
@@ -1926,6 +2209,11 @@ const processAutomaticApprovals = async () => {
         const approvalResponse = await approveTool(approval.id)
         approved = approvalResponse?.execution || approvalResponse
         updateExecution(approved)
+      }
+      if (approved.status === 'Rejected') {
+        // Retired-plan approvals come back rejected; retrying execution would only repeat it.
+        ElMessage.warning(approved.errorMessage || '该变更已失效：所属工作计划已被取代')
+        return
       }
       const applied = await applyApprovedMetadata(approved)
       if (!applied) return
@@ -2024,7 +2312,7 @@ const executeClientActions = async execution => {
               url: `/codegen/complexpagegeneration/generate/${action.pageId}`,
               method: 'post',
               params: { incremental: action.incremental !== false },
-              timeout: 180000
+              timeout: 600000
             })
           )
         } else {
@@ -2075,6 +2363,19 @@ const executeClientActions = async execution => {
     await loadConversation()
     return completion.nextExecution || completion.execution || completion
   } catch (error) {
+    if (isClientTimeout(error)) {
+      // Never write back `success: false` for a timeout: the server may be mid-generation and a
+      // false report would mark a healthy run as failed and burn the automatic repair budget.
+      ElMessage.warning('服务端仍在执行客户端任务（客户端已停止等待），正在等待其结果…')
+      const settled = await waitForExecutionSettled(execution.id)
+      try {
+        await loadConversation()
+      } catch {
+        // Keep the persisted execution state visible on the next refresh.
+      }
+      if (settled) return settled
+      throw error
+    }
     try {
       const completion = await completeToolClientActions(execution.id, {
         success: false,
@@ -3385,6 +3686,82 @@ const formatTime = value => {
 .composer-footer span {
   color: var(--app-text-muted, #94a3b8);
   font-size: 11px;
+}
+
+/* Staged documents: chips above the input, hidden native file picker. */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.composer-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.composer-footer-left :deep(.el-button) {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.composer-file-input {
+  display: none;
+}
+
+/* Documents a sent message carried, shown under its text. */
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.message-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--app-surface-muted, rgba(148, 163, 184, 0.16));
+  color: var(--app-text-secondary, #475569);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.message-attachment-chip em {
+  font-style: normal;
+  color: var(--app-text-muted, #94a3b8);
+}
+
+/* Explanations attached to a successful reply (for example: images were not sent). */
+.message-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.message-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--app-warning-border, #f5dab1);
+  background: var(--app-warning-bg, #fdf6ec);
+  color: var(--app-warning-text, #92680f);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.message-warning :deep(.el-icon) {
+  margin-top: 2px;
+  flex: 0 0 auto;
 }
 
 /* Mode switch: requirements is the read-only page, code is the authorized page. */

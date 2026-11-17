@@ -4,7 +4,7 @@
       <div class="tabs-view-wrapper">
         <div
           v-for="tag in visitedViews"
-          :key="tag.fullPath"
+          :key="tag.path"
           :class="['tabs-view-item', isActive(tag) ? 'active' : '']"
           @click="handleClickTag(tag)"
           @contextmenu.prevent="openContextMenu(tag, $event)"
@@ -66,9 +66,9 @@ const selectedTag = ref({})
 
 const visitedViews = computed(() => tagsViewStore.visitedViews)
 
-// 判断是否是当前激活的标签
+// 判断是否是当前激活的标签（同一路由不同 query 视为同一个标签）
 const isActive = (tag) => {
-  return tag.path === route.path && JSON.stringify(tag.query) === JSON.stringify(route.query)
+  return tag.path === route.path
 }
 
 // 判断是否是固定标签
@@ -179,6 +179,7 @@ const initAffixTags = () => {
 
 // 组件挂载时初始化固定标签
 initAffixTags()
+tagsViewStore.dedupeVisitedViews()
 
 // 监听路由变化
 watch(

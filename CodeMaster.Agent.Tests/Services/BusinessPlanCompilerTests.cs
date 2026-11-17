@@ -162,6 +162,276 @@ public class BusinessPlanCompilerTests
         Assert.DoesNotContain(deserialized.Stages, s => s.StageKey == "GenerateCode");
     }
 
+    /// <summary>
+    /// A foreign key that points at another entity must be bound to a picker, not a number box.
+    /// <c>InferControlType</c> only sees the C# type, so before this the generated add/edit form asked the
+    /// user to type a raw id even though the relation already named the target entity.
+    /// </summary>
+    [Fact]
+    public async Task Reference_foreign_key_field_is_bound_to_select_table()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = [new BusinessModuleDefinition { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" }],
+            Entities =
+            [
+                Entity("project", "engineering", "EngineeringProject", "工程项目",
+                    [Field("Name", "工程名称", "string", true), Field("ContractAmount", "合同金额", "decimal")]),
+                Entity("supplier", "engineering", "Supplier", "供应商",
+                    [Field("Name", "供应商名称", "string", true)]),
+                Entity("purchase", "engineering", "PurchaseContract", "采购合同",
+                    [Field("ContractNo", "采购合同号", "string", true),
+                     Field("EngineeringProjectId", "所属工程", "long"),
+                     Field("SupplierId", "供应商", "long")])
+            ],
+            Relations =
+            [
+                new() { Key = "purchase_project", Kind = "ManyToOne", SourceEntityKey = "purchase", SourceField = "EngineeringProjectId", TargetEntityKey = "project", TargetField = "Id" },
+                new() { Key = "purchase_supplier", Kind = "ManyToOne", SourceEntityKey = "purchase", SourceField = "SupplierId", TargetEntityKey = "supplier", TargetField = "Id" }
+            ]
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService());
+
+        var bindings = result.CompiledPlan.Stages.Single(s => s.StageKey == "FieldControls")
+            .Tasks.Single().Definition!.Value.GetProperty("controlBindings").EnumerateArray()
+            .Select(item => (field: item.GetProperty("field").GetString(), item))
+            .ToList();
+
+        var projectFk = bindings.Single(b => b.field == "EngineeringProjectId").item;
+        Assert.Equal("select-table", projectFk.GetProperty("formControlType").GetString());
+        Assert.Equal("EngineeringProject", projectFk.GetProperty("relatedEntityName").GetString());
+        Assert.Equal("Id", projectFk.GetProperty("relatedEntityIdField").GetString());
+        Assert.Equal("Name", projectFk.GetProperty("relatedEntityDisplayFields")[0].GetString());
+
+        var supplierFk = bindings.Single(b => b.field == "SupplierId").item;
+        Assert.Equal("select-table", supplierFk.GetProperty("formControlType").GetString());
+        Assert.Equal("Supplier", supplierFk.GetProperty("relatedEntityName").GetString());
+
+        // A decimal is not a reference: it keeps the numeric control and carries no link.
+        var amount = bindings.Single(b => b.field == "ContractAmount").item;
+        Assert.Equal("number", amount.GetProperty("formControlType").GetString());
+        Assert.Equal(JsonValueKind.Null, amount.GetProperty("relatedEntityName").ValueKind);
+    }
+
+    /// <summary>
+    /// A read-only reporting entity has no add/edit form, and its field list is rebuilt from the view's
+    /// SELECT when the view is created — the key column comes back as Id, so a binding compiled from the
+    /// declared fields can name a column that no longer exists. Emitting one anyway failed the whole
+    /// field-control stage during change-set normalization.
+    /// </summary>
+    [Fact]
+    public async Task ReadOnly_view_entity_gets_no_control_bindings()
+    {
+        var report = Entity("profit", "engineering", "VProjectProfit", "工程利润视图",
+            [Field("ProjectId", "所属工程", "long"), Field("Profit", "利润", "decimal")]);
+        report.IsReadOnly = true;
+
+        var def = new BusinessPlanDefinition
+        {
+            Modules = [new BusinessModuleDefinition { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" }],
+            Entities =
+            [
+                Entity("project", "engineering", "EngineeringProject", "工程项目",
+                    [Field("Name", "工程名称", "string", true), Field("ContractAmount", "合同金额", "decimal")]),
+                report
+            ],
+            Relations =
+            [
+                new() { Key = "profit_project", Kind = "ManyToOne", SourceEntityKey = "profit", SourceField = "ProjectId", TargetEntityKey = "project", TargetField = "Id" }
+            ],
+            Views = [new() { Key = "profit_view", EntityKey = "profit", ViewName = "V_ProjectProfit", DisplayName = "工程利润视图", Sql = "SELECT p.Id AS ProjectId, 0 AS Profit FROM EngineeringProject p" }]
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService());
+
+        var controlStage = result.CompiledPlan.Stages.SingleOrDefault(s => s.StageKey == "FieldControls");
+        Assert.NotNull(controlStage);
+        var entities = controlStage!.Tasks.Single().Definition!.Value.GetProperty("controlBindings")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("entity").GetString())
+            .ToList();
+        Assert.DoesNotContain("VProjectProfit", entities);
+    }
+
+    /// <summary>
+    /// Models often express "a project has many contracts" from the parent side instead of declaring the
+    /// foreign key on the child. The key is then <c>targetField</c> and the picker must point back at the
+    /// source — otherwise the child's form still asks for a raw id.
+    /// </summary>
+    [Fact]
+    public async Task OneToMany_relation_from_parent_still_binds_child_foreign_key_to_picker()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = [new BusinessModuleDefinition { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" }],
+            Entities =
+            [
+                Entity("project", "engineering", "EngineeringProject", "工程项目",
+                    [Field("ProjectName", "工程名称", "string", true)]),
+                Entity("purchase", "engineering", "PurchaseContract", "采购合同",
+                    [Field("ContractNo", "采购合同号", "string", true), Field("ProjectId", "所属工程", "long")])
+            ],
+            Relations =
+            [
+                new() { Key = "project_contracts", Kind = "OneToMany", SourceEntityKey = "project", SourceField = "Id", TargetEntityKey = "purchase", TargetField = "ProjectId" }
+            ]
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 1L, new FakeBlueprintService());
+
+        var bindings = result.CompiledPlan.Stages.Single(s => s.StageKey == "FieldControls")
+            .Tasks.Single().Definition!.Value.GetProperty("controlBindings").EnumerateArray()
+            .ToList();
+        var fk = bindings.Single(b => b.GetProperty("field").GetString() == "ProjectId");
+        Assert.Equal("PurchaseContract", fk.GetProperty("entity").GetString());
+        Assert.Equal("select-table", fk.GetProperty("formControlType").GetString());
+        Assert.Equal("EngineeringProject", fk.GetProperty("relatedEntityName").GetString());
+        Assert.Equal("ProjectName", fk.GetProperty("relatedEntityDisplayFields")[0].GetString());
+    }
+
+    [Fact]
+    public async Task Dictionaries_compile_into_a_leading_entity_task()
+    {
+        var def = BuildEngineeringManagementDefinition();
+        def.Dictionaries = new List<BusinessDictionaryDefinition>
+        {
+            new()
+            {
+                DictType = "payment_bill_status",
+                DictName = "付款单状态",
+                Items = new List<BusinessDictionaryItemDefinition>
+                {
+                    new() { Label = "草稿", Value = "draft" },
+                    new() { Label = "已审批", Value = "approved", IsDefault = true }
+                }
+            }
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 2L, new FakeBlueprintService());
+
+        var entityStage = result.CompiledPlan.Stages.Single(s => s.StageKey == "EntityFields");
+        var dictionaryTask = entityStage.Tasks[0];
+        Assert.Equal("create_business_dictionaries", dictionaryTask.TaskKey);
+        Assert.Equal("project_change_set", dictionaryTask.OperationKind);
+        Assert.Empty(dictionaryTask.DependsOnTaskKeys);
+
+        var dictionaries = dictionaryTask.Definition!.Value.GetProperty("dictionaries");
+        Assert.Equal(1, dictionaries.GetArrayLength());
+        var first = dictionaries[0];
+        Assert.Equal("payment_bill_status", first.GetProperty("dictType").GetString());
+        Assert.Equal("付款单状态", first.GetProperty("dictName").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(first.GetProperty("summary").GetString()));
+        Assert.Equal(2, first.GetProperty("items").GetArrayLength());
+        Assert.Equal("approved", first.GetProperty("items")[1].GetProperty("value").GetString());
+        Assert.Equal(1, first.GetProperty("items")[1].GetProperty("isDefault").GetInt32());
+
+        Assert.Equal(1, result.Report.Dictionaries);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task Field_referencing_an_undeclared_dictionary_warns_without_failing()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = new List<BusinessModuleDefinition>
+            {
+                new() { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" }
+            },
+            Entities = new List<BusinessEntityDefinition>
+            {
+                Entity("payment", "engineering", "PaymentBill", "付款单",
+                    new[]
+                    {
+                        new BusinessFieldDefinition
+                        {
+                            TechnicalName = "Status",
+                            DisplayName = "状态",
+                            DataType = "string",
+                            Dictionary = "payment_status"
+                        }
+                    })
+            }
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 2L, new FakeBlueprintService());
+
+        Assert.Contains(result.Warnings, warning => warning.Contains("payment_status", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            result.CompiledPlan.Stages.Single(s => s.StageKey == "EntityFields").Tasks,
+            task => task.TaskKey == "create_business_dictionaries");
+    }
+
+    [Fact]
+    public async Task Compiled_dictionary_task_passes_change_set_validation()
+    {
+        var def = BuildEngineeringManagementDefinition();
+        def.Dictionaries = new List<BusinessDictionaryDefinition>
+        {
+            new() { DictType = "payment_bill_status", DictName = "付款单状态" }
+        };
+
+        var compiled = await BusinessPlanCompiler.CompileAsync(def, 1L, 2L, new FakeBlueprintService());
+        var task = compiled.CompiledPlan.Stages.Single(s => s.StageKey == "EntityFields").Tasks[0];
+
+        var blueprint = new AiProjectBlueprintDto
+        {
+            Project = new AiProjectSummaryDto { Id = 1, ProjectName = "EngineeringV11" }
+        };
+        var proposal = ProjectChangeSetDefinitionNormalizer.NormalizeForTest(
+            task.TaskKey,
+            task.Definition!.Value.GetRawText(),
+            blueprint);
+
+        var dictionary = Assert.Single(proposal.Dictionaries);
+        Assert.Equal("payment_bill_status", dictionary.DictType);
+        Assert.Equal("付款单状态", dictionary.DictName);
+
+        var validation = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal, "EngineeringV11");
+        Assert.True(validation.IsValid, string.Join(" | ", validation.Errors));
+        Assert.Equal(1, validation.DictionaryCount);
+    }
+
+    [Fact]
+    public async Task Swapped_dictType_and_dictName_are_repaired_from_the_field_reference()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = new List<BusinessModuleDefinition>
+            {
+                new() { Key = "finance", TechnicalName = "Finance", DisplayName = "财务" }
+            },
+            Entities = new List<BusinessEntityDefinition>
+            {
+                Entity("invoice", "finance", "Invoice", "发票",
+                    new[]
+                    {
+                        new BusinessFieldDefinition
+                        {
+                            TechnicalName = "InvoiceType",
+                            DisplayName = "发票类型",
+                            DataType = "string",
+                            Dictionary = "invoice_type"
+                        }
+                    })
+            },
+            Dictionaries = new List<BusinessDictionaryDefinition>
+            {
+                // What the model actually emits: the data type lands in dictType and the code in dictName.
+                new() { DictType = "string", DictName = "invoice_type", Remark = "发票类型" }
+            }
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 2L, new FakeBlueprintService());
+
+        var task = result.CompiledPlan.Stages.Single(s => s.StageKey == "EntityFields").Tasks[0];
+        var dictionary = task.Definition!.Value.GetProperty("dictionaries")[0];
+        Assert.Equal("invoice_type", dictionary.GetProperty("dictType").GetString());
+        Assert.Equal("发票类型", dictionary.GetProperty("dictName").GetString());
+        Assert.Contains(result.Warnings, warning => warning.Contains("写反", StringComparison.Ordinal));
+    }
+
     static BusinessPlanDefinition BuildEngineeringManagementDefinition()
     {
         return new BusinessPlanDefinition

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Claims;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeMaster.Application.Dtos.Community;
@@ -157,15 +158,28 @@ public class HomeController : Controller
     }
 
     [HttpGet("/community")]
-    public async Task<IActionResult> Community([FromQuery] long? categoryId, [FromQuery] string? keyword, [FromQuery] int pageNum = 1)
+    public async Task<IActionResult> Community(
+        [FromQuery] long? categoryId,
+        [FromQuery] string? keyword,
+        [FromQuery] string? sort,
+        [FromQuery] int pageNum = 1)
     {
         var categories = await _communityService.GetCategoriesAsync();
+        var normalizedSort = sort is "new" or "hot" or "featured" or "solved" ? sort : "active";
         var topics = await _communityService.GetTopicsAsync(new CommunityTopicQueryDto
         {
             CategoryId = categoryId,
             Keyword = keyword,
+            Sort = normalizedSort,
             PageNum = Math.Max(pageNum, 1),
             PageSize = 20
+        });
+        var overview = await _communityService.GetOverviewAsync();
+        var hotTopics = await _communityService.GetTopicsAsync(new CommunityTopicQueryDto
+        {
+            Sort = "hot",
+            PageNum = 1,
+            PageSize = 5
         });
 
         return View(new CommunityIndexViewModel
@@ -173,7 +187,12 @@ public class HomeController : Controller
             Categories = categories,
             Topics = topics,
             CategoryId = categoryId,
-            Keyword = keyword
+            Keyword = keyword,
+            Sort = normalizedSort,
+            Overview = overview,
+            HotTopics = hotTopics.Items,
+            CurrentUserId = GetCurrentUserId(),
+            IsAdmin = IsAdmin()
         });
     }
 
@@ -190,8 +209,21 @@ public class HomeController : Controller
         return View(new CommunityTopicViewModel
         {
             Topic = topic,
-            Replies = replies
+            Replies = replies,
+            CurrentUserId = GetCurrentUserId(),
+            IsAdmin = IsAdmin()
         });
+    }
+
+    private long? GetCurrentUserId()
+    {
+        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
+        return claim != null && long.TryParse(claim.Value, out var userId) ? userId : null;
+    }
+
+    private bool IsAdmin()
+    {
+        return string.Equals(User.FindFirst("IsAdmin")?.Value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     [HttpGet("/robots.txt")]

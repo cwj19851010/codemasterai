@@ -30,6 +30,7 @@ public static class AgentServiceCollectionExtensions
         services.AddScoped<ICodeMasterAgentBatchOperationAdapter, ProjectConsistencyCheckBatchOperationAdapter>();
         services.AddScoped<ICodeMasterAgentBatchOperationAdapter, GenerateProjectBatchOperationAdapter>();
         services.AddScoped<IAiProjectWorkPlanService, AiProjectWorkPlanService>();
+        services.AddScoped<IAiAttachmentStore, AiAttachmentStore>();
         services.TryAddSingleton<IAiProjectValidationRunner, AiProjectValidationRunner>();
         // Source repair is disabled (2026-10-20): the agent never reads or patches
         // CodeMaster source code, so the executor is no longer registered.

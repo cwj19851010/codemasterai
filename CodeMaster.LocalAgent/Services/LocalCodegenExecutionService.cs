@@ -252,18 +252,20 @@ public class LocalCodegenExecutionService
                 await _initializationService.Step8_WriteTranslationsAsync(project.ProjectName, projectPath, project.DisplayName, projectIdText);
                 return StepOk("项目翻译写入完成", "write_translations", 80);
             case 9:
-                var npmOutput = await RunCommandAsync(ProjectProcessLauncher.NpmCommand(), new[] { "install", "--legacy-peer-deps" }, Path.Combine(projectPath, $"{project.ProjectName}.Vue"), TimeSpan.FromMinutes(5));
+                // 与 case 10/11 的构建同理：npm 必须经 cmd.exe 解析，裸名启动 npm.cmd 会报
+                // Cannot find module ...npm-cli.js。
+                var npmInstallCommand = OperatingSystem.IsWindows() ? "cmd.exe" : "npm";
+                var npmInstallArgs = OperatingSystem.IsWindows()
+                    ? new[] { "/c", "npm", "install", "--legacy-peer-deps" }
+                    : new[] { "install", "--legacy-peer-deps" };
+                var npmOutput = await RunCommandAsync(npmInstallCommand, npmInstallArgs, Path.Combine(projectPath, $"{project.ProjectName}.Vue"), TimeSpan.FromMinutes(5));
                 return StepOk("npm install 完成", "npm_install", 90, npmOutput);
             case 10:
-                var backendStart = await ProjectProcessLauncher.StartBackendAsync(project.ProjectName, projectPath, project.BackendPort);
-                return backendStart.Success
-                    ? StepOk(backendStart.Message, "start_backend", 95, backendStart.Output)
-                    : LocalExecutionResult.Fail(backendStart.Message, backendStart.Output);
+                // 不在初始化里拉起后端：长驻进程会让初始化结果受 dev server 启动快慢影响，
+                // 而且运行中的后端会锁住生成目录里的文件（重写迁移模块等产物时报 Access Denied）。
+                // 初始化边界止于依赖与数据库就绪，启动交给用户手动执行。
+                return StepOk("初始化完成，后端请手动启动（dotnet run）", "finalize", 95);
             case 11:
-                var frontendStart = await ProjectProcessLauncher.StartFrontendAsync(project.ProjectName, projectPath, project.FrontendPort);
-                if (!frontendStart.Success)
-                    return LocalExecutionResult.Fail(frontendStart.Message, frontendStart.Output);
-
                 await _initializationService.WriteProjectContextAsync(
                     projectPath,
                     project.ProjectName,
@@ -274,7 +276,7 @@ public class LocalCodegenExecutionService
                     project.BackendPort ?? 0,
                     request.ServerBaseUrl);
 
-                return StepOk(frontendStart.Message, "start_frontend", 100, frontendStart.Output);
+                return StepOk("初始化完成，前端请手动启动（npm run dev）", "done", 100);
             default:
                 return LocalExecutionResult.Fail($"Unsupported initialization step: {step}");
         }
@@ -630,10 +632,15 @@ public class LocalCodegenExecutionService
             if (Directory.Exists(frontendPath) && File.Exists(Path.Combine(frontendPath, "package.json")))
             {
                 output.AppendLine("[2/2] 构建前端项目...");
-                var npmCommand = OperatingSystem.IsWindows() ? "npm.cmd" : "npm";
+                // 同 ProjectService：npm 必须经 cmd.exe 解析，裸名启动 .cmd 会让 npm.cmd 的
+                // %~dp0 退化成 cwd，node 随后报 Cannot find module ...npm-cli.js。
+                var npmCommand = OperatingSystem.IsWindows() ? "cmd.exe" : "npm";
+                var npmArgs = OperatingSystem.IsWindows()
+                    ? new[] { "/c", "npm", "run", "build" }
+                    : new[] { "run", "build" };
                 output.AppendLine(await RunCommandAsync(
                     npmCommand,
-                    new[] { "run", "build" },
+                    npmArgs,
                     frontendPath,
                     TimeSpan.FromMinutes(10)));
             }
@@ -714,10 +721,13 @@ public class LocalCodegenExecutionService
         var project = await GetProjectAsync(request);
         var projectPath = GetFullProjectPath(project.ProjectName, project.ProjectPath);
         var frontendPath = Path.Combine(projectPath, $"{project.ProjectName}.Vue");
-        var npmCommand = OperatingSystem.IsWindows() ? "npm.cmd" : "npm";
+        var npmCommand = OperatingSystem.IsWindows() ? "cmd.exe" : "npm";
+        var npmArgs = OperatingSystem.IsWindows()
+            ? new[] { "/c", "npm", "run", "build" }
+            : new[] { "run", "build" };
         var output = await RunCommandAsync(
             npmCommand,
-            new[] { "run", "build" },
+            npmArgs,
             frontendPath,
             TimeSpan.FromMinutes(10));
         return LocalExecutionResult.Ok("Frontend build completed", output: output);

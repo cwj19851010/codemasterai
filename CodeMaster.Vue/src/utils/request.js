@@ -162,6 +162,13 @@ service.interceptors.response.use(
   error => {
     console.error('响应错误:', error)
 
+    // axios 在超时后会 abort 自己的等待，但服务端请求仍在继续执行。只有长耗时接口
+    // （变更集应用 / 代码生成 / 构建）才值得提示"转后台"，短接口超时说明是真有问题。
+    const isTimeout = error.code === 'ECONNABORTED' ||
+      error.code === 'ETIMEDOUT' ||
+      /timeout of \d+ms exceeded/i.test(String(error.message || ''))
+    const isLongRunningTimeout = isTimeout && Number(error.config?.timeout || 0) >= 120000
+
     // 处理 401 未授权
     if (error.response && error.response.status === 401) {
       ElMessage.error(t('login_expired'))
@@ -169,6 +176,10 @@ service.interceptors.response.use(
       localStorage.removeItem('user')
       localStorage.removeItem('permission')
       router.push('/login')
+    } else if (isLongRunningTimeout) {
+      // 直接把 axios 原文 "timeout of 180000ms exceeded" 抛给用户既不可读，
+      // 又会把一次正常的长时间任务误导成失败；真正的结果由调用方轮询服务端状态得到。
+      ElMessage.warning('请求耗时较长，已切换为后台继续执行；结果会自动同步，请稍候刷新')
     } else {
       // 只在有错误消息时才显示，避免显示 undefined
       const errorMsg = error.response?.data?.message || error.message

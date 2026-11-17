@@ -1,176 +1,363 @@
+@using CodeMaster.WebApi.ContentRendering
 @model CodeMaster.WebApi.Models.CommunityIndexViewModel
 @{
-    ViewData["Title"] = "CodeMaster 社区 - 反馈、讨论和产品建议";
-    ViewData["Description"] = "CodeMaster 用户社区，用于提出问题、反馈建议、讨论 MCP、代码生成、客户端和模板体系。";
+    ViewData["Title"] = "CodeMaster 社区 - 问题反馈、模板讨论与产品建议";
+    ViewData["Description"] = "CodeMaster 用户社区：提出问题、反馈建议、讨论 MCP 与代码生成，展示你用 CodeMaster 做出来的项目。";
     var currentCategory = Model.Categories.FirstOrDefault(x => x.Id == Model.CategoryId);
+    var keyword = string.IsNullOrWhiteSpace(Model.Keyword) ? null : Model.Keyword.Trim();
+    var totalPages = Math.Max(Model.Topics.TotalPages, 1);
+    var currentPage = Math.Clamp(Model.Topics.PageNum, 1, totalPages);
+    var startPage = Math.Max(1, currentPage - 2);
+    var endPage = Math.Min(totalPages, startPage + 4);
+    startPage = Math.Max(1, endPage - 4);
+    var hasFilter = currentCategory != null || keyword != null;
+    var sortOptions = new (string Value, string Label)[]
+    {
+        ("active", "活跃"),
+        ("new", "最新"),
+        ("hot", "热门"),
+        ("featured", "精华"),
+        ("solved", "已解决")
+    };
+
+    string BuildUrl(long? categoryId, string? kw, string sort, int page)
+    {
+        var query = new List<string> { $"sort={sort}" };
+        if (categoryId.HasValue)
+        {
+            query.Add($"categoryId={categoryId.Value}");
+        }
+        if (!string.IsNullOrWhiteSpace(kw))
+        {
+            query.Add($"keyword={Uri.EscapeDataString(kw)}");
+        }
+        if (page > 1)
+        {
+            query.Add($"pageNum={page}");
+        }
+        return "/community?" + string.Join("&", query);
+    }
 }
 
-<section class="page-hero community-hero">
-    <p class="eyebrow">Community</p>
-    <h1>CodeMaster 社区</h1>
-    <p>这里用来收集产品建议、问题反馈、模板与生成讨论，以及使用 CodeMaster 做出的项目展示。账号直接复用 CodeMaster 用户体系，邮箱注册和 GitHub 登录都可以发帖。</p>
-</section>
-
-<section class="section community-page">
-    <aside class="community-sidebar">
-        <div class="community-panel">
-            <h2>分类</h2>
-            <a class="category-link @(Model.CategoryId == null ? "active" : "")" href="/community">全部讨论</a>
-            @foreach (var category in Model.Categories)
-            {
-                <a class="category-link @(Model.CategoryId == category.Id ? "active" : "")" href="/community?categoryId=@category.Id">
-                    <strong>@category.Name</strong>
-                    <span>@category.Description</span>
-                </a>
-            }
-        </div>
-
-        <div class="community-panel compact">
-            <h2>发帖规则</h2>
-            <p>描述清楚问题、复现步骤、期望结果。如果是代码生成问题，尽量说明数据库类型、实体字段和操作入口。</p>
-        </div>
-    </aside>
-
-    <div class="community-main">
-        <form class="community-search" method="get" action="/community">
-            @if (Model.CategoryId.HasValue)
-            {
-                <input type="hidden" name="categoryId" value="@Model.CategoryId.Value" />
-            }
-            <input name="keyword" value="@Model.Keyword" placeholder="搜索主题、问题或建议" />
-            <button class="button secondary" type="submit">搜索</button>
-            <button class="button primary" type="button" id="openTopicForm">发新主题</button>
-        </form>
-
-        <section class="new-topic-panel" id="newTopicPanel" hidden>
-            <div class="panel-head">
-                <h2>发布新主题</h2>
-                <button type="button" class="icon-button" id="closeTopicForm" aria-label="关闭">×</button>
+<div class="forum-page"
+     data-logged-in="@(Model.CurrentUserId.HasValue ? "true" : "false")"
+     data-user-id="@Model.CurrentUserId">
+    <section class="forum-hero">
+        <div class="forum-hero-inner">
+            <div class="forum-hero-copy">
+                <p class="forum-kicker"><span class="forum-kicker-dot" aria-hidden="true"></span>Community</p>
+                <h1>CodeMaster 社区</h1>
+                <p class="forum-hero-lead">反馈问题、提产品建议、聊模板与代码生成，也欢迎展示你用 CodeMaster 做出来的项目。账号与平台用户体系互通。</p>
+                <dl class="forum-hero-stats">
+                    <div><dt>主题</dt><dd>@Model.Overview.TopicCount</dd></div>
+                    <div><dt>回复</dt><dd>@Model.Overview.ReplyCount</dd></div>
+                    <div><dt>成员</dt><dd>@Model.Overview.MemberCount</dd></div>
+                </dl>
             </div>
-            <form id="topicForm" class="topic-form">
-                <label>
-                    分类
-                    <select name="categoryId" required>
-                        @foreach (var category in Model.Categories)
-                        {
-                            <option value="@category.Id" selected="@(Model.CategoryId == category.Id)">@category.Name</option>
-                        }
-                    </select>
-                </label>
-                <label>
-                    标题
-                    <input name="title" required minlength="4" maxlength="120" placeholder="一句话说明你的问题或建议" />
-                </label>
-                <label>
-                    内容
-                    <textarea name="content" required minlength="10" rows="8" placeholder="写清楚背景、步骤、期望结果或你的想法"></textarea>
-                </label>
-                <div class="form-actions">
-                    <button class="button primary" type="submit">发布</button>
-                    <span id="topicMessage" class="form-message"></span>
-                </div>
-            </form>
-        </section>
-
-        <div class="topic-list">
-            <div class="topic-list-head">
-                <div>
-                    <h2>@(currentCategory?.Name ?? "全部讨论")</h2>
-                    <p>共 @Model.Topics.Total 条主题</p>
-                </div>
-            </div>
-
-            @if (!Model.Topics.Items.Any())
-            {
-                <div class="empty-state">
-                    <h3>还没有讨论</h3>
-                    <p>可以发布第一个问题、建议或展示你的生成项目。</p>
-                </div>
-            }
-            else
-            {
-                @foreach (var topic in Model.Topics.Items)
+            <div class="forum-hero-actions">
+                <button class="forum-btn primary lg" type="button" data-open-composer>发起讨论</button>
+                @if (!Model.CurrentUserId.HasValue)
                 {
-                    <article class="topic-row">
-                        <div class="topic-status">
-                            @if (topic.IsPinned)
+                    <a class="forum-btn lg" href="/register">注册 / 登录</a>
+                }
+                else
+                {
+                    <a class="forum-btn lg" href="#topicFeed">浏览讨论</a>
+                }
+            </div>
+        </div>
+    </section>
+
+    <div class="forum-shell">
+        <aside class="forum-rail forum-rail-left" aria-label="版块导航">
+            <nav class="forum-card forum-categories">
+                <h2 class="forum-card-title">版块</h2>
+                <a class="forum-cat @(Model.CategoryId == null ? "active" : "")" href="@BuildUrl(null, keyword, Model.Sort, 1)">
+                    <span>全部讨论</span><em>@Model.Overview.TopicCount</em>
+                </a>
+                @foreach (var category in Model.Categories)
+                {
+                    <a class="forum-cat @(Model.CategoryId == category.Id ? "active" : "")" href="@BuildUrl(category.Id, keyword, Model.Sort, 1)">
+                        <span>@category.Name</span><em>@category.TopicCount</em>
+                    </a>
+                }
+            </nav>
+
+            <div class="forum-card forum-rules">
+                <h2 class="forum-card-title">发帖须知</h2>
+                <ul>
+                    <li>标题写清问题，正文给出复现步骤与期望结果。</li>
+                    <li>代码生成问题请注明数据库类型、实体字段和操作入口。</li>
+                    <li>贴代码请用代码块包裹，方便他人阅读。</li>
+                </ul>
+                <a class="forum-link" href="/">了解 CodeMaster →</a>
+            </div>
+        </aside>
+
+        <div class="forum-main">
+            <section class="forum-card forum-compose" id="composerPanel" hidden>
+                <div class="forum-compose-head">
+                    <h2>发起讨论</h2>
+                    <button class="forum-icon-btn" type="button" id="closeComposer" aria-label="关闭发帖面板">×</button>
+                </div>
+                <form id="topicForm" class="forum-form">
+                    <div class="forum-form-row">
+                        <label class="forum-field">
+                            <span>版块</span>
+                            <select name="categoryId" required>
+                                @foreach (var category in Model.Categories)
+                                {
+                                    <option value="@category.Id" selected="@(Model.CategoryId == category.Id)">@category.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="forum-field grow">
+                            <span>标题</span>
+                            <input name="title" required minlength="4" maxlength="120" placeholder="一句话说明你的问题或建议" />
+                        </label>
+                    </div>
+                    <div class="forum-field">
+                        <span>正文 <small>支持 Markdown，发布前可预览</small></span>
+                        <div class="md-editor" data-editor>
+                            @await Html.PartialAsync("_ForumMarkdownToolbar")
+                            <textarea name="content" required minlength="10" rows="9" aria-label="主题正文" placeholder="写清楚背景、复现步骤、期望结果，或附上相关代码。"></textarea>
+                            <div class="md-preview forum-markdown" hidden></div>
+                        </div>
+                    </div>
+                    <div class="forum-form-foot">
+                        <button class="forum-btn primary" type="submit">发布主题</button>
+                        <span class="forum-form-msg" data-form-msg></span>
+                    </div>
+                </form>
+            </section>
+
+            <div class="forum-toolbar">
+                <nav class="forum-tabs" aria-label="排序方式">
+                    @foreach (var option in sortOptions)
+                    {
+                        <a class="forum-tab @(Model.Sort == option.Value ? "active" : "")"
+                           href="@BuildUrl(Model.CategoryId, keyword, option.Value, 1)">@option.Label</a>
+                    }
+                </nav>
+                <form class="forum-search" method="get" action="/community" role="search">
+                    @if (Model.CategoryId.HasValue)
+                    {
+                        <input type="hidden" name="categoryId" value="@Model.CategoryId.Value" />
+                    }
+                    <input type="hidden" name="sort" value="@Model.Sort" />
+                    <svg class="forum-search-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                        <circle cx="9" cy="9" r="5.5" fill="none" stroke="currentColor" stroke-width="1.6"></circle>
+                        <path d="M13.2 13.2 17 17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                    </svg>
+                    <input type="search" name="keyword" value="@keyword" placeholder="搜索主题或内容" aria-label="搜索主题或内容" />
+                    <button type="submit">搜索</button>
+                </form>
+            </div>
+
+            @if (hasFilter)
+            {
+                <div class="forum-filterbar">
+                    <span class="forum-filterbar-label">当前筛选</span>
+                    @if (currentCategory != null)
+                    {
+                        <a class="forum-chip removable" href="@BuildUrl(null, keyword, Model.Sort, 1)" title="移除版块筛选">
+                            @currentCategory.Name <span aria-hidden="true">×</span>
+                        </a>
+                    }
+                    @if (keyword != null)
+                    {
+                        <a class="forum-chip removable" href="@BuildUrl(Model.CategoryId, null, Model.Sort, 1)" title="移除关键词">
+                            “@keyword” <span aria-hidden="true">×</span>
+                        </a>
+                    }
+                    <span class="forum-filterbar-count">@Model.Topics.Total 条结果</span>
+                </div>
+            }
+
+            <div class="forum-feed" id="topicFeed">
+                <div class="forum-feed-head">
+                    <h2>@(currentCategory?.Name ?? "全部讨论")</h2>
+                    <span>@Model.Topics.Total 个主题</span>
+                </div>
+
+                @if (!Model.Topics.Items.Any())
+                {
+                    <div class="forum-empty">
+                        <div class="forum-empty-mark" aria-hidden="true">#</div>
+                        @if (hasFilter)
+                        {
+                            <h3>没有匹配的讨论</h3>
+                            <p>换个关键词，或者清空筛选看看全部主题。</p>
+                            <a class="forum-btn" href="/community">查看全部讨论</a>
+                        }
+                        else
+                        {
+                            <h3>这里还没有讨论</h3>
+                            <p>发起第一个主题，聊聊你遇到的问题或想法。</p>
+                            <button class="forum-btn primary" type="button" data-open-composer>发起讨论</button>
+                        }
+                    </div>
+                }
+                else
+                {
+                    @foreach (var topic in Model.Topics.Items)
+                    {
+                        <article class="forum-topic">
+                            <a class="forum-avatar" href="/community/topic/@topic.Id"
+                               style="background:@CommunityViewHelpers.AvatarColor(topic.AuthorName)" tabindex="-1" aria-hidden="true">
+                                @CommunityViewHelpers.Initial(topic.AuthorName)
+                            </a>
+                            <div class="forum-topic-main">
+                                <div class="forum-topic-head">
+                                    @if (topic.IsPinned)
+                                    {
+                                        <span class="forum-badge pinned">置顶</span>
+                                    }
+                                    @if (topic.IsFeatured)
+                                    {
+                                        <span class="forum-badge featured">精华</span>
+                                    }
+                                    @if (topic.IsSolved)
+                                    {
+                                        <span class="forum-badge solved">已解决</span>
+                                    }
+                                    @if (topic.IsLocked)
+                                    {
+                                        <span class="forum-badge locked">已锁定</span>
+                                    }
+                                    <h3 class="forum-topic-title">
+                                        <a href="/community/topic/@topic.Id">@topic.Title</a>
+                                    </h3>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(topic.Excerpt))
+                                {
+                                    <p class="forum-topic-excerpt">@topic.Excerpt</p>
+                                }
+                                <div class="forum-topic-meta">
+                                    <a class="forum-chip" href="@BuildUrl(topic.CategoryId, keyword, Model.Sort, 1)">@topic.CategoryName</a>
+                                    <span class="forum-author">@topic.AuthorName</span>
+                                    <span class="forum-sep" aria-hidden="true">·</span>
+                                    <time datetime="@CommunityViewHelpers.Iso(topic.CreateTime)" data-relative>@topic.CreateTime.ToString("yyyy-MM-dd")</time>
+                                </div>
+                            </div>
+                            <div class="forum-topic-stats">
+                                <span class="forum-stat" title="@topic.ReplyCount 条回复">
+                                    <strong>@topic.ReplyCount</strong><em>回复</em>
+                                </span>
+                                <span class="forum-stat" title="@topic.ViewCount 次浏览">
+                                    <strong>@topic.ViewCount</strong><em>浏览</em>
+                                </span>
+                                <span class="forum-stat @(topic.Liked ? "liked" : "")" title="@topic.LikeCount 个赞">
+                                    <strong>@topic.LikeCount</strong><em>赞</em>
+                                </span>
+                            </div>
+                        </article>
+                    }
+
+                    @if (totalPages > 1)
+                    {
+                        <nav class="forum-pager" aria-label="分页">
+                            @if (currentPage > 1)
                             {
-                                <span>置顶</span>
-                            }
-                            else if (topic.IsFeatured)
-                            {
-                                <span>精华</span>
+                                <a class="forum-page-btn" href="@BuildUrl(Model.CategoryId, keyword, Model.Sort, currentPage - 1)" rel="prev">上一页</a>
                             }
                             else
                             {
-                                <span>讨论</span>
+                                <span class="forum-page-btn disabled">上一页</span>
                             }
-                        </div>
-                        <div class="topic-body">
-                            <a class="topic-title" href="/community/topic/@topic.Id">@topic.Title</a>
-                            <p>@topic.Content</p>
-                            <div class="topic-meta">
-                                <span>@topic.CategoryName</span>
-                                <span>@topic.AuthorName</span>
-                                <span>@topic.CreateTime.ToString("yyyy-MM-dd HH:mm")</span>
-                            </div>
-                        </div>
-                        <div class="topic-counts">
-                            <strong>@topic.ReplyCount</strong>
-                            <span>回复</span>
-                            <strong>@topic.ViewCount</strong>
-                            <span>浏览</span>
-                        </div>
-                    </article>
+
+                            @for (var pageNumber = startPage; pageNumber <= endPage; pageNumber++)
+                            {
+                                if (pageNumber == currentPage)
+                                {
+                                    <span class="forum-page-btn active" aria-current="page">@pageNumber</span>
+                                }
+                                else
+                                {
+                                    <a class="forum-page-btn" href="@BuildUrl(Model.CategoryId, keyword, Model.Sort, pageNumber)">@pageNumber</a>
+                                }
+                            }
+
+                            @if (currentPage < totalPages)
+                            {
+                                <a class="forum-page-btn" href="@BuildUrl(Model.CategoryId, keyword, Model.Sort, currentPage + 1)" rel="next">下一页</a>
+                            }
+                            else
+                            {
+                                <span class="forum-page-btn disabled">下一页</span>
+                            }
+                            <span class="forum-pager-info">第 @currentPage / @totalPages 页</span>
+                        </nav>
+                    }
                 }
-            }
+            </div>
         </div>
+
+        <aside class="forum-rail forum-rail-right" aria-label="社区信息">
+            <div class="forum-card">
+                <h2 class="forum-card-title">热门主题</h2>
+                @if (Model.HotTopics.Any())
+                {
+                    <ol class="forum-hotlist">
+                        @for (var index = 0; index < Model.HotTopics.Count; index++)
+                        {
+                            var hot = Model.HotTopics[index];
+                            <li>
+                                <span class="forum-hotrank">@(index + 1)</span>
+                                <div>
+                                    <a class="forum-hotlink" href="/community/topic/@hot.Id">@hot.Title</a>
+                                    <span class="forum-hotmeta">@hot.ReplyCount 回复 · @hot.LikeCount 赞</span>
+                                </div>
+                            </li>
+                        }
+                    </ol>
+                }
+                else
+                {
+                    <p class="forum-muted">还没有热门主题。</p>
+                }
+            </div>
+
+            <div class="forum-card">
+                <h2 class="forum-card-title">活跃贡献者</h2>
+                @if (Model.Overview.Contributors.Any())
+                {
+                    <ul class="forum-contributors">
+                        @foreach (var contributor in Model.Overview.Contributors)
+                        {
+                            <li>
+                                <span class="forum-avatar sm" style="background:@CommunityViewHelpers.AvatarColor(contributor.AuthorName)" aria-hidden="true">
+                                    @CommunityViewHelpers.Initial(contributor.AuthorName)
+                                </span>
+                                <div>
+                                    <strong>@contributor.AuthorName</strong>
+                                    <span>@contributor.TopicCount 个主题</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <p class="forum-muted">等你来成为第一个贡献者。</p>
+                }
+            </div>
+
+            <div class="forum-card forum-about">
+                <h2 class="forum-card-title">关于社区</h2>
+                <p>提问前先搜索历史主题；问题解决后，作者可以「采纳」一个回复，帮后来的人快速找到答案。</p>
+                <a class="forum-link" href="/download">下载 CodeMaster →</a>
+            </div>
+        </aside>
     </div>
-</section>
+</div>
+
+@section Head {
+    <link rel="stylesheet" href="/site/vendor/highlight-github-dark.min.css" />
+    <link rel="stylesheet" href="/site/forum.css?v=2" />
+}
 
 @section Scripts {
-<script>
-const tokenKeys = ['Admin-Token', 'access_token', 'token']
-const getToken = () => tokenKeys.map(key => localStorage.getItem(key)).find(Boolean)
-const panel = document.getElementById('newTopicPanel')
-const message = document.getElementById('topicMessage')
-document.getElementById('openTopicForm').addEventListener('click', () => {
-  if (!getToken()) {
-    window.location.href = '/register'
-    return
-  }
-  panel.hidden = false
-})
-document.getElementById('closeTopicForm').addEventListener('click', () => {
-  panel.hidden = true
-})
-document.getElementById('topicForm').addEventListener('submit', async (event) => {
-  event.preventDefault()
-  const token = getToken()
-  if (!token) {
-    window.location.href = '/register'
-    return
-  }
-  const form = event.currentTarget
-  message.textContent = '正在发布...'
-  const response = await fetch('/api/community/topics', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      categoryId: Number(form.categoryId.value),
-      title: form.title.value,
-      content: form.content.value
-    })
-  })
-  const result = await response.json().catch(() => ({}))
-  if (!response.ok || result.code !== 200) {
-    message.textContent = result.message || '发布失败，请稍后再试'
-    return
-  }
-  window.location.href = `/community/topic/${result.data.id}`
-})
-</script>
+    <script src="/site/vendor/highlight.min.js"></script>
+    <script src="/site/forum.js?v=2"></script>
 }

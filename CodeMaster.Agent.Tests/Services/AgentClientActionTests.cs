@@ -125,7 +125,7 @@ public class AgentClientActionTests
             AIFunctionFactory.Create(() => "large", name: CodeMasterAgentToolCatalog.ProposeProjectChangeSet)
         };
 
-        var selected = AiTurnToolSelector.SelectForRequest(
+        var selected = AiTurnToolSelector.SelectForWorkPlanRepair(
             tools,
             "请修复当前任务计划，任务缺少可执行定义");
         var names = selected.OfType<AIFunction>().Select(tool => tool.Name).ToList();

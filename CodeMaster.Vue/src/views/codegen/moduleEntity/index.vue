@@ -198,7 +198,7 @@ import {
   syncProjectLanguages
 } from '@/api/codegen/moduleEntity'
 import { getList as getModuleList } from '@/api/codegen/projectModule'
-import { buildProject, getList as getProjectList } from '@/api/codegen/project'
+import { getList as getProjectList } from '@/api/codegen/project'
 
 defineOptions({
   name: 'CodegenModuleEntity'
@@ -326,8 +326,7 @@ async function runProjectBatchAction({
   message,
   loadingMessage,
   successMessage,
-  action,
-  validateBuild = false
+  action
 }) {
   if (!queryParams.projectId) {
     ElMessage.warning('请先选择所属项目')
@@ -348,29 +347,7 @@ async function runProjectBatchAction({
     })
     await action(queryParams.projectId)
 
-    if (validateBuild) {
-      loadingMessageInstance?.close()
-      loadingMessageInstance = ElMessage({
-        message: '代码生成完成，正在检查项目编译结果...',
-        type: 'info',
-        duration: 0
-      })
-
-      const buildResult = await buildProject(queryParams.projectId)
-      if (!buildResult.success) {
-        await loadEntityList()
-        await ElMessageBox.alert(
-          buildResult.output || buildResult.message || '项目编译失败，请检查生成结果。',
-          '代码已生成，但编译检查失败',
-          {
-            type: 'error',
-            confirmButtonText: '知道了'
-          }
-        ).catch(() => {})
-        return
-      }
-    }
-
+    // 生成后不再自动编译检查：需要验证请手动运行前后端，或在项目列表点「编译」。
     ElMessage.success(successMessage)
     await loadEntityList()
   } catch (error) {
@@ -389,8 +366,7 @@ function handleGenerateAll() {
     message: `确定生成项目“${selectedProjectName.value}”的代码吗？系统会自动创建缺失文件，并安全更新已有代码；API 元数据模型不会参与后台生成。`,
     loadingMessage: '正在检查并生成项目代码，请稍候...',
     successMessage: '项目代码生成完成',
-    action: projectId => generateProjectSmartCode(projectId),
-    validateBuild: true
+    action: projectId => generateProjectSmartCode(projectId)
   })
 }
 

@@ -92,6 +92,7 @@ public sealed class AiProjectPlanTurnTests
             AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetProjectSummary),
             AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetProjectWorkPlan),
             AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.UpsertProjectWorkPlan),
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.SubmitBusinessPlan),
             AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetComplexPageContext),
             AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetUiCompositionContext)
         };
@@ -99,9 +100,63 @@ public sealed class AiProjectPlanTurnTests
         var selected = AiTurnToolSelector.SelectForNewPlanRequest(tools, "开始生成工程管理平台");
         var names = selected.OfType<AIFunction>().Select(item => item.Name).ToList();
 
-        Assert.Contains(CodeMasterAgentToolCatalog.UpsertProjectWorkPlan, names);
+        Assert.Contains(CodeMasterAgentToolCatalog.SubmitBusinessPlan, names);
         Assert.DoesNotContain(CodeMasterAgentToolCatalog.GetComplexPageContext, names);
         Assert.DoesNotContain(CodeMasterAgentToolCatalog.GetUiCompositionContext, names);
+    }
+
+    /// <summary>
+    /// A new-plan turn must not reach the hand-written plan writer. With both writers reachable,
+    /// one model turn created two plans: a coarse hand-written one and then the compiled one, the
+    /// second silently superseding the first and orphaning its in-flight batch. That orphan is
+    /// what later replayed stale metadata and produced a wall of "already exists" errors.
+    /// </summary>
+    [Fact]
+    public void New_plan_turn_exposes_only_the_compiled_plan_writer()
+    {
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.UpsertProjectWorkPlan),
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.SubmitBusinessPlan),
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.SupersedeProjectWorkPlan)
+        };
+
+        var names = AiTurnToolSelector
+            .SelectForNewPlanRequest(tools, "开始生成工程管理平台")
+            .OfType<AIFunction>()
+            .Select(item => item.Name)
+            .ToList();
+
+        Assert.Contains(CodeMasterAgentToolCatalog.SubmitBusinessPlan, names);
+        Assert.DoesNotContain(CodeMasterAgentToolCatalog.UpsertProjectWorkPlan, names);
+    }
+
+    /// <summary>
+    /// The repair prompt tells the model to read get_codegen_catalog before drafting any task, so
+    /// the repair tool set has to contain it. A narrowed set that omits a tool the prompt demands
+    /// makes the model ask for something it cannot call.
+    /// </summary>
+    [Fact]
+    public void Repair_turn_keeps_the_tools_its_prompt_names()
+    {
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetCodegenCatalog),
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetProjectWorkTask),
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.UpsertProjectWorkPlan),
+            AIFunctionFactory.Create(() => "ok", name: CodeMasterAgentToolCatalog.GetComplexPageContext)
+        };
+
+        var names = AiTurnToolSelector
+            .SelectForWorkPlanRepair(tools, "修复当前任务计划：create-core-entities 缺少可执行定义")
+            .OfType<AIFunction>()
+            .Select(item => item.Name)
+            .ToList();
+
+        Assert.Contains(CodeMasterAgentToolCatalog.GetCodegenCatalog, names);
+        Assert.Contains(CodeMasterAgentToolCatalog.GetProjectWorkTask, names);
+        Assert.Contains(CodeMasterAgentToolCatalog.UpsertProjectWorkPlan, names);
+        Assert.DoesNotContain(CodeMasterAgentToolCatalog.GetComplexPageContext, names);
     }
 
     [Fact]
@@ -110,8 +165,7 @@ public sealed class AiProjectPlanTurnTests
         var plan = SavedPlan();
         var result = await AiProjectPlanTurn.EnsureSavedAsync(
             _ => Task.FromResult<AiProjectWorkPlanDto?>(plan),
-            (_, _) => throw new InvalidOperationException("Must not resubmit a saved plan."),
-            directUpsertAsync: null);
+            (_, _) => throw new InvalidOperationException("Must not resubmit a saved plan."));
         Assert.Same(plan, result.Plan);
         Assert.Equal(0, result.ContinuationAttempts);
     }
@@ -128,8 +182,7 @@ public sealed class AiProjectPlanTurnTests
                 attempts++;
                 if (attempts == 2) saved = SavedPlan();
                 return Task.CompletedTask;
-            },
-            directUpsertAsync: null);
+            });
         Assert.NotNull(result.Plan);
         Assert.Equal(2, result.ContinuationAttempts);
     }
@@ -139,21 +192,47 @@ public sealed class AiProjectPlanTurnTests
     {
         var result = await AiProjectPlanTurn.EnsureSavedAsync(
             _ => Task.FromResult<AiProjectWorkPlanDto?>(new() { Id = 1, Status = "Draft", TotalTasks = 0 }),
-            (_, _) => Task.CompletedTask,
-            directUpsertAsync: null);
+            (_, _) => Task.CompletedTask);
         Assert.Null(result.Plan);
         Assert.Equal(AiProjectPlanTurn.MaximumContinuationAttempts, result.ContinuationAttempts);
     }
 
+    /// <summary>
+    /// A model that keeps writing prose instead of submitting a plan must end the turn with nothing
+    /// generated. The server used to substitute a built-in engineering template at this point, so the
+    /// user was told "the task plan is ready" while the metadata had nothing to do with the requirement
+    /// and no template marker anywhere the user could see.
+    /// </summary>
     [Fact]
-    public async Task Direct_fallback_saves_plan_when_model_keeps_text_only()
+    public async Task Model_that_never_submits_a_plan_generates_nothing()
     {
-        var fallback = SavedPlan();
         var result = await AiProjectPlanTurn.EnsureSavedAsync(
             _ => Task.FromResult<AiProjectWorkPlanDto?>(null),
-            (_, _) => Task.CompletedTask,
-            directUpsertAsync: (_, _, _) => Task.FromResult<AiProjectWorkPlanDto?>(fallback));
-        Assert.Same(fallback, result.Plan);
+            (_, _) => Task.CompletedTask);
+        Assert.Null(result.Plan);
+        Assert.Equal(AiProjectPlanTurn.MaximumContinuationAttempts, result.ContinuationAttempts);
+    }
+
+    /// <summary>
+    /// "No plan was saved" on its own cannot be acted on: a provider outage, a rejected tool schema and
+    /// a model that ignores the tool all look the same. The outcome message has to carry the last
+    /// continuation failure so the difference is visible without reading server logs.
+    /// </summary>
+    [Fact]
+    public async Task Unfulfilled_outcome_reports_the_last_failure_reason()
+    {
+        Exception? lastFailure = null;
+        var result = await AiProjectPlanTurn.EnsureSavedAsync(
+            _ => Task.FromResult<AiProjectWorkPlanDto?>(null),
+            (_, _) => throw new HttpRequestException("tool_choice refers to an unknown function"),
+            reportFailure: (_, exception) => lastFailure = exception);
+
+        Assert.Null(result.Plan);
+        Assert.NotNull(lastFailure);
+
+        var message = AiProjectPlanTurn.BuildOutcomeMessage(result.Plan, lastFailure);
+        Assert.Contains("未成功提交计划", message);
+        Assert.Contains("unknown function", message);
     }
 
     [Fact]
@@ -164,16 +243,13 @@ public sealed class AiProjectPlanTurnTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AiProjectPlanTurn.EnsureSavedAsync(
             _ => Task.FromResult<AiProjectWorkPlanDto?>(null),
             (_, _) => throw new InvalidOperationException("Must not run after cancellation."),
-            directUpsertAsync: null,
             cancellationToken: cancellation.Token));
 
         var calls = 0;
-        var fallback = new AiProjectWorkPlanDto { Id = 5, Status = "AwaitingConfirmation", TotalTasks = 7 };
         var result = await AiProjectPlanTurn.EnsureSavedAsync(
             _ => Task.FromResult<AiProjectWorkPlanDto?>(null),
-            (_, _) => { calls++; throw new InvalidOperationException("429 Too Many Requests"); },
-            directUpsertAsync: (_, _, _) => Task.FromResult<AiProjectWorkPlanDto?>(fallback));
-        Assert.Same(fallback, result.Plan);
+            (_, _) => { calls++; throw new InvalidOperationException("429 Too Many Requests"); });
+        Assert.Null(result.Plan);
         Assert.Equal(2, calls);
     }
 
@@ -230,8 +306,7 @@ public sealed class AiProjectPlanTurnTests
                 await agent.RunAsync(prompt, session,
                     options: AiChatClientFactory.CreateRunOptions("Standard", CodeMasterAgentToolCatalog.UpsertProjectWorkPlan),
                     cancellationToken: token);
-            },
-            directUpsertAsync: null);
+            });
         Assert.NotNull(result.Plan);
         Assert.Equal(1, result.ContinuationAttempts);
         Assert.Equal(1, writes);

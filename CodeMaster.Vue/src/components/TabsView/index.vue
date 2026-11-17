@@ -117,18 +117,10 @@ const selectedTag = ref({})
 const visitedViews = computed(() => tagsViewStore.visitedViews)
 const activeTag = computed(() => visitedViews.value.find(tag => isActive(tag)) || visitedViews.value[0])
 
-const normalizeQuery = (query = {}) => {
-  const result = {}
-  Object.keys(query || {}).sort().forEach(key => {
-    const value = query[key]
-    if (value !== undefined) result[key] = value
-  })
-  return result
-}
-
-const getTagKey = (tag = {}) => `${tag.path || ''}?${JSON.stringify(normalizeQuery(tag.query))}`
+// 标签按路由路径唯一：同一路由不同 query（如 id）复用同一个标签
+const getTagKey = (tag = {}) => tag.path || ''
 const isSameTag = (a, b) => getTagKey(a) === getTagKey(b)
-const isActive = (tag) => tag.path === route.path && JSON.stringify(normalizeQuery(tag.query)) === JSON.stringify(normalizeQuery(route.query))
+const isActive = (tag) => tag?.path === route.path
 const isAffix = (tag) => Boolean(tag?.meta?.affix)
 
 const getRouteLocation = (tag) => ({
@@ -264,6 +256,7 @@ const initAffixTags = () => {
 }
 
 initAffixTags()
+tagsViewStore.dedupeVisitedViews()
 
 watch(
   () => route.fullPath,

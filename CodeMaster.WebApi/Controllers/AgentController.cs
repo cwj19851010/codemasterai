@@ -103,6 +103,27 @@ public sealed class AgentController : ControllerBase
     public Task<IActionResult> GetToolExecutions(long id)
         => ExecuteAsync(async () => await _conversationService.GetToolExecutionsAsync(id));
 
+    /// <summary>
+    /// Uploads one Markdown / plain-text document and returns its descriptor. The descriptor is
+    /// then sent back with the chat message in <see cref="SendAiMessageRequest.Attachments"/>,
+    /// which is when the text is actually inlined into the model input.
+    /// </summary>
+    [HttpPost("attachments")]
+    [RequestSizeLimit(4 * 1024 * 1024)]
+    public Task<IActionResult> UploadAttachment([FromQuery] long conversationId, IFormFile? file)
+        => ExecuteAsync(async () =>
+        {
+            if (file == null || file.Length == 0)
+                throw new ArgumentException("请选择要上传的文档。");
+
+            await using var stream = file.OpenReadStream();
+            return await _conversationService.UploadAttachmentAsync(
+                conversationId,
+                file.FileName,
+                stream,
+                file.Length);
+        });
+
     [HttpGet("work-plans/active")]
     public Task<IActionResult> GetActiveWorkPlan([FromQuery] long projectId)
         => ExecuteAsync(async () => await _workPlanService.GetActiveAsync(projectId));

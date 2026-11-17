@@ -79,3 +79,30 @@ html.dark {
 html.dark body {
   background: var(--app-bg, #0f141b);
 }
+
+// 星舰青：用光感强化科技氛围
+html[data-theme='tech-cyan'] {
+  .sidebar .logo h2 {
+    text-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
+  }
+
+  .header {
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      bottom: -1px;
+      left: 0;
+      height: 1px;
+      background: linear-gradient(
+        90deg,
+        rgba(34, 211, 238, 0) 0%,
+        rgba(34, 211, 238, 0.55) 35%,
+        rgba(2, 132, 199, 0.45) 65%,
+        rgba(34, 211, 238, 0) 100%
+      );
+    }
+  }
+}

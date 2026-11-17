@@ -290,7 +290,7 @@ public sealed class LocalAgentChatService
                 tools,
                 settings.CompatibilityMode);
             var messages = isWorkPlanRepair
-                ? [new ChatMessage(ChatRole.User, currentUserContent)]
+                ? [GetCurrentUserMessage(begin)]
                 : AiConversationHistory.BuildBounded(begin.Messages);
             var session = sessionReused
                 ? sessionState.Session!
@@ -324,18 +324,20 @@ public sealed class LocalAgentChatService
             });
             var recoveredAfterProposal = false;
             var streamingFallback = false;
+            var streamedCharacters = 0;
             string responseText;
             try
             {
                 var responseBuilder = new StringBuilder();
                 var streamingResponse = sessionReused
-                    ? agent.RunStreamingAsync(GetCurrentUserContent(begin), session, options: runOptions)
+                    ? agent.RunStreamingAsync(GetCurrentUserMessage(begin), session, options: runOptions)
                     : agent.RunStreamingAsync(messages, session, options: runOptions);
                 await foreach (var update in streamingResponse)
                 {
                     if (!string.IsNullOrEmpty(update.Text))
                     {
                         responseBuilder.Append(update.Text);
+                        streamedCharacters = responseBuilder.Length;
                         await ReportProgressAsync(reportProgress, new LocalExecutionProgress
                         {
                             Event = "text_delta",
@@ -376,6 +378,68 @@ public sealed class LocalAgentChatService
                         ["proposalToolName"] = completedProposalToolName
                     },
                     ex);
+            }
+            catch (Exception ex) when (streamedCharacters == 0 &&
+                                       begin.Messages.Any(item => item.Images.Count > 0) &&
+                                       AiRequestFailure.LooksLikeVisionRejection(ex))
+            {
+                // The local model refused the image. Answer with an explanation instead of an
+                // error: retry the same turn without the images so the text part still works,
+                // and say plainly why the pictures were not used.
+                modelStopwatch.Stop();
+                await _diagnostics.WriteAsync(
+                    "warning",
+                    "agent.model.vision_unsupported",
+                    new Dictionary<string, object?>(baseFields)
+                    {
+                        ["durationMs"] = modelStopwatch.ElapsedMilliseconds,
+                        ["fallback"] = "text_only"
+                    },
+                    ex);
+
+                await ReportProgressAsync(reportProgress, new LocalExecutionProgress
+                {
+                    Event = "status",
+                    Phase = "generating"
+                });
+
+                var textOnly = begin.Messages
+                    .Select(item => new AiMessageDto
+                    {
+                        Id = item.Id,
+                        RequestId = item.RequestId,
+                        Role = item.Role,
+                        Content = item.Content,
+                        MetadataJson = item.MetadataJson,
+                        Sequence = item.Sequence,
+                        CreateTime = item.CreateTime,
+                        Attachments = item.Attachments
+                    })
+                    .ToList();
+
+                session = await agent.CreateSessionAsync();
+                var retryStopwatch = Stopwatch.StartNew();
+                var retryResponse = await agent.RunAsync(
+                    AiConversationHistory.BuildBounded(textOnly),
+                    session,
+                    options: runOptions);
+                retryStopwatch.Stop();
+                var retryText = retryResponse.ToString();
+                responseText = $"{AiVisionCapabilityProbe.UnsupportedMessage}{AiVisionCapabilityProbe.UnsupportedSuggestion}" +
+                               (string.IsNullOrWhiteSpace(retryText)
+                                   ? string.Empty
+                                   : $"{Environment.NewLine}{Environment.NewLine}{retryText}");
+
+                await _diagnostics.WriteAsync(
+                    "information",
+                    "agent.model.completed",
+                    new Dictionary<string, object?>(baseFields)
+                    {
+                        ["durationMs"] = modelStopwatch.ElapsedMilliseconds + retryStopwatch.ElapsedMilliseconds,
+                        ["fallbackDurationMs"] = retryStopwatch.ElapsedMilliseconds,
+                        ["responseLength"] = responseText.Length,
+                        ["visionFallback"] = true
+                    });
             }
             catch (Exception ex) when (IsStreamingTransportFailure(ex))
             {
@@ -453,7 +517,6 @@ public sealed class LocalAgentChatService
                             options: AiChatClientFactory.CreateRunOptions(settings.CompatibilityMode, CodeMasterAgentToolCatalog.SubmitBusinessPlan),
                             cancellationToken: token);
                     },
-                    directUpsertAsync: null,
                     async (_, _) => await ReportProgressAsync(reportProgress, new LocalExecutionProgress
                     {
                         Event = "status",
@@ -653,16 +716,25 @@ public sealed class LocalAgentChatService
         }
     }
 
-    private static string GetCurrentUserContent(BeginLocalAiChatResult begin)
+    private static AiMessageDto GetCurrentUserDto(BeginLocalAiChatResult begin)
     {
-        var message = begin.Messages.LastOrDefault(item =>
-                          string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase) &&
-                          string.Equals(item.RequestId, begin.RequestId, StringComparison.Ordinal))
-                      ?? begin.Messages.LastOrDefault(item =>
-                          string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase));
-        return message?.Content
-            ?? throw new InvalidOperationException("The current user message is missing from the local Agent context.");
+        return begin.Messages.LastOrDefault(item =>
+                   string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(item.RequestId, begin.RequestId, StringComparison.Ordinal))
+               ?? begin.Messages.LastOrDefault(item =>
+                   string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase))
+               ?? throw new InvalidOperationException("The current user message is missing from the local Agent context.");
     }
+
+    private static string GetCurrentUserContent(BeginLocalAiChatResult begin)
+        => GetCurrentUserDto(begin).Content;
+
+    /// <summary>
+    /// The current turn as a model message. Uses the shared converter so images attached to the
+    /// message become multimodal content exactly like they do on the server path.
+    /// </summary>
+    private static ChatMessage GetCurrentUserMessage(BeginLocalAiChatResult begin)
+        => AiConversationHistory.ToChatMessage(GetCurrentUserDto(begin));
 
     private static ChatMessage ToChatMessage(AiMessageDto message)
     {

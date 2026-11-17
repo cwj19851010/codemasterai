@@ -26,7 +26,7 @@ public interface IAiProjectWorkPlanService
     Task AttachToolExecutionAsync(long batchId, long executionId, CancellationToken cancellationToken = default);
     Task BeginBatchExecutionAsync(long batchId, string inputHash, CancellationToken cancellationToken = default);
     Task WaitForClientExecutionAsync(long batchId, CancellationToken cancellationToken = default);
-    Task CompleteBatchAsync(long batchId, bool success, string? errorMessage = null, AiProjectFailureEvidenceInput? evidence = null, CancellationToken cancellationToken = default);
+    Task CompleteBatchAsync(long batchId, bool success, string? errorMessage = null, AiProjectFailureEvidenceInput? evidence = null, IReadOnlyCollection<string>? completedTaskKeys = null, CancellationToken cancellationToken = default);
     Task<AiProjectWorkPlanDto> RetryTaskAsync(long planId, long taskId, RetryAiProjectWorkTaskRequest input, CancellationToken cancellationToken = default);
     Task RecordSourceRepairAsync(long planId, long taskId, AiProjectSourceRepairResult result, CancellationToken cancellationToken = default);
     Task<AiProjectWorkPlanDto> RejectBatchAsync(long batchId, CancellationToken cancellationToken = default);
@@ -174,30 +174,58 @@ internal sealed class AiProjectWorkPlanService : IAiProjectWorkPlanService
             var actives = await _planRepository.GetQueryable()
                 .Where(item => item.ProjectId == input.ProjectId && item.ConversationId == input.ConversationId &&
                                item.UserId == _currentUser.UserId && item.ActivitySlot == "active")
+                .OrderByDescending(item => item.LastActivityAt)
                 .ToListAsync();
+
+            AiProjectWorkPlan? adopted = null;
+            if (actives.Count > 0)
+            {
+                var (decision, completedTaskCount, unfinishedTaskCount) = await EvaluateReuseAsync(actives[0]);
+                if (decision == AiProjectWorkPlanReuseDecision.Refuse)
+                {
+                    throw AiProjectWorkPlanInProgressException.ForReplacement(
+                        actives[0].Id, actives[0].Status, unfinishedTaskCount, completedTaskCount);
+                }
+
+                if (decision == AiProjectWorkPlanReuseDecision.Adopt)
+                {
+                    // Nothing of this plan has executed, so replacing its task rows destroys no
+                    // committed work. Upgrading in place is what makes a second
+                    // submit_business_plan call in the same turn idempotent instead of a second
+                    // plan that silently supersedes the first one.
+                    adopted = actives[0];
+                    plan = adopted;
+                    plan.StructureVersion += 1;
+                }
+            }
+
             foreach (var stale in actives)
             {
-                stale.Status = AiProjectWorkPlanStatus.Superseded;
-                stale.ActivitySlot = $"terminal:{stale.PlanKey}";
-                stale.CompletedAt = now;
-                stale.LastActivityAt = now;
-                await _planRepository.UpdateAsync(stale);
+                if (adopted != null && stale.Id == adopted.Id)
+                    continue;
+                // Retiring a plan has to retire its batches too: a PendingApproval batch of a
+                // superseded plan is still an executable snapshot and would replay stale metadata.
+                await RetirePlanAsync(stale, AiProjectWorkPlanStatus.Superseded, now);
             }
-            plan = new AiProjectWorkPlan
+
+            if (plan == null)
             {
-                TenantId = _currentUser.TenantId,
-                UserId = _currentUser.UserId,
-                ProjectId = input.ProjectId,
-                ConversationId = input.ConversationId,
-                PlanKey = string.IsNullOrWhiteSpace(input.PlanKey)
-                    ? Truncate($"plan-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}", 60)
-                    : input.PlanKey!.Substring(0, Math.Min(60, input.PlanKey.Length)),
-                ActivitySlot = "active",
-                StructureVersion = 1,
-                CreateBy = _currentUser.UserName,
-                CreateUserId = _currentUser.UserId,
-                CreateTime = now
-            };
+                plan = new AiProjectWorkPlan
+                {
+                    TenantId = _currentUser.TenantId,
+                    UserId = _currentUser.UserId,
+                    ProjectId = input.ProjectId,
+                    ConversationId = input.ConversationId,
+                    PlanKey = string.IsNullOrWhiteSpace(input.PlanKey)
+                        ? Truncate($"plan-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}", 60)
+                        : input.PlanKey!.Substring(0, Math.Min(60, input.PlanKey.Length)),
+                    ActivitySlot = "active",
+                    StructureVersion = 1,
+                    CreateBy = _currentUser.UserName,
+                    CreateUserId = _currentUser.UserId,
+                    CreateTime = now
+                };
+            }
         }
 
         plan.Title = string.IsNullOrWhiteSpace(input.Title) ? plan.Title : input.Title.Substring(0, Math.Min(200, input.Title.Length));
@@ -574,7 +602,7 @@ internal sealed class AiProjectWorkPlanService : IAiProjectWorkPlanService
         await _batchRepository.UpdateAsync(batch);
     }
 
-    public async Task CompleteBatchAsync(long batchId, bool success, string? errorMessage = null, AiProjectFailureEvidenceInput? evidence = null, CancellationToken cancellationToken = default)
+    public async Task CompleteBatchAsync(long batchId, bool success, string? errorMessage = null, AiProjectFailureEvidenceInput? evidence = null, IReadOnlyCollection<string>? completedTaskKeys = null, CancellationToken cancellationToken = default)
     {
         var batch = await LoadOwnedBatchAsync(batchId);
         var now = DateTime.UtcNow;
@@ -588,6 +616,14 @@ internal sealed class AiProjectWorkPlanService : IAiProjectWorkPlanService
         {
             if (success)
             {
+                task.Status = AiProjectWorkTaskStatus.Completed;
+                task.LastDiagnosis = null;
+            }
+            else if (ShouldMarkTaskCompletedOnBatchFailure(completedTaskKeys, task.TaskKey))
+            {
+                // Its operation already committed. Marking it Failed anyway is what forced the
+                // repair flow to re-execute work that had succeeded, which replays create-intent
+                // change sets against rows that now exist ("... already exists", once per entity).
                 task.Status = AiProjectWorkTaskStatus.Completed;
                 task.LastDiagnosis = null;
             }
@@ -744,29 +780,22 @@ internal sealed class AiProjectWorkPlanService : IAiProjectWorkPlanService
     public async Task<AiProjectWorkPlanDto> CancelAsync(long planId, bool superseded, CancellationToken cancellationToken = default)
     {
         var plan = await LoadOwnedPlanAsync(planId);
-        var now = DateTime.UtcNow;
-        plan.Status = superseded ? AiProjectWorkPlanStatus.Superseded : AiProjectWorkPlanStatus.Cancelled;
-        plan.ActivitySlot = $"terminal:{plan.PlanKey}";
-        plan.CompletedAt = now;
-        plan.LastActivityAt = now;
-        plan.UpdateTime = now;
-        await _planRepository.UpdateAsync(plan);
-        var batches = await _batchRepository.GetQueryable()
-            .Where(item => item.PlanId == plan.Id && item.Status != AiProjectWorkBatchStatus.Completed)
+
+        // Cancelling is the escape hatch, so it must stay available — except while an operation
+        // is literally running. A batch mid-execution has already handed work to the change-set
+        // service; marking it Cancelled underneath would leave the result unattributable and the
+        // next approval would replay the same snapshot. Everything else (PendingApproval,
+        // Approved, WaitingClientExecution) has written nothing yet and can be dropped safely.
+        var running = await _batchRepository.GetQueryable()
+            .Where(item => item.PlanId == planId)
             .ToListAsync();
-        foreach (var batch in batches)
-        {
-            batch.Status = AiProjectWorkBatchStatus.Cancelled;
-            batch.UpdateTime = now;
-            await _batchRepository.UpdateAsync(batch);
-        }
-        var tasks = await _taskRepository.GetQueryable().Where(item => item.PlanId == plan.Id).ToListAsync();
-        foreach (var task in tasks.Where(item => item.Status is not (AiProjectWorkTaskStatus.Completed or AiProjectWorkTaskStatus.Cancelled)))
-        {
-            task.Status = AiProjectWorkTaskStatus.Cancelled;
-            task.UpdateTime = now;
-            await _taskRepository.UpdateAsync(task);
-        }
+        if (running.Any(item => item.Status == AiProjectWorkBatchStatus.Executing))
+            throw AiProjectWorkPlanInProgressException.ForRunningBatch(plan.Id, plan.Status);
+
+        await RetirePlanAsync(
+            plan,
+            superseded ? AiProjectWorkPlanStatus.Superseded : AiProjectWorkPlanStatus.Cancelled,
+            DateTime.UtcNow);
         return await BuildProjectionAsync(plan);
     }
 
@@ -781,15 +810,132 @@ internal sealed class AiProjectWorkPlanService : IAiProjectWorkPlanService
     private static bool IsTerminal(AiProjectWorkPlanStatus status)
         => status is AiProjectWorkPlanStatus.Completed or AiProjectWorkPlanStatus.Cancelled or AiProjectWorkPlanStatus.Superseded;
 
-    private async Task RetireAsync(AiProjectWorkPlan plan)
+    /// <summary>
+    /// A batch must die with its plan unless it already produced a result. Kept as a named rule
+    /// (instead of an inline filter) so the "retire the plan but leave a PendingApproval batch
+    /// behind" regression stays directly testable.
+    /// </summary>
+    internal static bool ShouldCancelBatchWithPlan(AiProjectWorkBatchStatus status)
+        => status != AiProjectWorkBatchStatus.Completed;
+
+    /// <summary>
+    /// A batch is "in flight" while it can still write metadata: created but not yet decided,
+    /// approved but not started, or actually executing. Failed/Rejected/Stale/Cancelled batches
+    /// are history and never block a re-plan.
+    /// </summary>
+    internal static bool IsBatchInFlight(AiProjectWorkBatchStatus status)
+        => status is AiProjectWorkBatchStatus.Draft
+            or AiProjectWorkBatchStatus.PendingApproval
+            or AiProjectWorkBatchStatus.Approved
+            or AiProjectWorkBatchStatus.WaitingClientExecution
+            or AiProjectWorkBatchStatus.Executing;
+
+    /// <summary>
+    /// Decides what "create a plan" means when another plan is already active in the same
+    /// conversation. Kept as a pure rule so the three outcomes stay directly testable.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Refuse</b> — an in-flight batch exists, or some tasks already committed while
+    /// others did not. Both cases lose real work: the batch is an executable snapshot compiled
+    /// against an older blueprint (approving it later replays stale metadata and produces a wall
+    /// of "already exists"), and deleting committed task rows makes the repair flow re-run
+    /// create-intent change sets against rows that exist.</para>
+    /// <para><b>Adopt</b> — nothing has executed yet, so replacing the task rows is lossless.
+    /// This is what makes a second plan submission in one turn an in-place upgrade instead of a
+    /// second plan that silently supersedes the first.</para>
+    /// <para><b>Replace</b> — the plan is empty or fully finished; a new round of work is
+    /// legitimate and the old rows carry no unfinished state.</para>
+    /// </remarks>
+    internal static AiProjectWorkPlanReuseDecision DecideReuseForNewPlan(
+        bool hasInFlightBatch, int completedTaskCount, int unfinishedTaskCount)
     {
-        var now = DateTime.UtcNow;
-        plan.Status = AiProjectWorkPlanStatus.Superseded;
+        if (hasInFlightBatch)
+            return AiProjectWorkPlanReuseDecision.Refuse;
+
+        if (completedTaskCount > 0)
+        {
+            return unfinishedTaskCount > 0
+                ? AiProjectWorkPlanReuseDecision.Refuse
+                : AiProjectWorkPlanReuseDecision.Replace;
+        }
+
+        return unfinishedTaskCount > 0
+            ? AiProjectWorkPlanReuseDecision.Adopt
+            : AiProjectWorkPlanReuseDecision.Replace;
+    }
+
+    private async Task<(AiProjectWorkPlanReuseDecision Decision, int CompletedTasks, int UnfinishedTasks)> EvaluateReuseAsync(AiProjectWorkPlan plan)
+    {
+        var batches = await _batchRepository.GetQueryable()
+            .Where(item => item.PlanId == plan.Id)
+            .ToListAsync();
+        var tasks = await _taskRepository.GetQueryable()
+            .Where(item => item.PlanId == plan.Id)
+            .ToListAsync();
+        var completed = tasks.Count(item => item.Status == AiProjectWorkTaskStatus.Completed);
+        var unfinished = tasks.Count(item => item.Status is not (AiProjectWorkTaskStatus.Completed or AiProjectWorkTaskStatus.Cancelled));
+        var decision = DecideReuseForNewPlan(
+            batches.Any(item => IsBatchInFlight(item.Status)),
+            completed,
+            unfinished);
+        return (decision, completed, unfinished);
+    }
+
+    /// <summary>
+    /// True when this task's operation already committed before a later task in the same batch
+    /// failed. A batch is not one transaction — every operation commits on its own — so the tasks
+    /// that succeeded must stay Completed. Reporting them as Failed makes the repair flow re-run
+    /// them, and re-running a create-intent change set against rows that already exist is exactly
+    /// what produced a dozen "already exists" errors from one failed batch.
+    /// </summary>
+    internal static bool ShouldMarkTaskCompletedOnBatchFailure(
+        IReadOnlyCollection<string>? completedTaskKeys,
+        string? taskKey)
+    {
+        if (completedTaskKeys == null || completedTaskKeys.Count == 0 || string.IsNullOrWhiteSpace(taskKey))
+            return false;
+        return completedTaskKeys.Contains(taskKey, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task RetireAsync(AiProjectWorkPlan plan)
+        => await RetirePlanAsync(plan, AiProjectWorkPlanStatus.Superseded, DateTime.UtcNow);
+
+    /// <summary>
+    /// Terminates a plan together with everything still hanging off it.
+    ///
+    /// Batches belong to the plan, not to the conversation. A batch left in PendingApproval after
+    /// its plan was retired is still a fully executable change-set snapshot: it keeps showing up
+    /// in the pending-approval list, and approving it replays metadata compiled against an older
+    /// blueprint — which is exactly how one superseded batch produced a dozen "already exists"
+    /// errors at once. Retiring a plan therefore has to take its batches with it, and that is the
+    /// only reason this is more than a single UpdateAsync on the plan row.
+    /// </summary>
+    private async Task RetirePlanAsync(AiProjectWorkPlan plan, AiProjectWorkPlanStatus status, DateTime now)
+    {
+        plan.Status = status;
         plan.ActivitySlot = $"terminal:{plan.PlanKey}";
         plan.CompletedAt = now;
         plan.LastActivityAt = now;
         plan.UpdateTime = now;
         await _planRepository.UpdateAsync(plan);
+
+        var batches = await _batchRepository.GetQueryable()
+            .Where(item => item.PlanId == plan.Id)
+            .ToListAsync();
+        foreach (var batch in batches.Where(item => ShouldCancelBatchWithPlan(item.Status)))
+        {
+            batch.Status = AiProjectWorkBatchStatus.Cancelled;
+            batch.UpdateTime = now;
+            await _batchRepository.UpdateAsync(batch);
+        }
+
+        var tasks = await _taskRepository.GetQueryable().Where(item => item.PlanId == plan.Id).ToListAsync();
+        foreach (var task in tasks.Where(item => item.Status is not (AiProjectWorkTaskStatus.Completed or AiProjectWorkTaskStatus.Cancelled)))
+        {
+            task.Status = AiProjectWorkTaskStatus.Cancelled;
+            task.UpdateTime = now;
+            await _taskRepository.UpdateAsync(task);
+        }
     }
 
     private async Task<List<AiProjectWorkTask>> BatchTasksAsync(long batchId)

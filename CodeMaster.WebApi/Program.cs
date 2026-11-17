@@ -281,6 +281,17 @@ builder.Services.AddAuthentication(options =>
                 context.Token = accessToken;
             }
 
+            // 服务端渲染页面无法附带 Authorization 头，回退到登录时写入的 Cookie
+            if (string.IsNullOrEmpty(context.Token)
+                && string.IsNullOrEmpty(context.Request.Headers.Authorization))
+            {
+                var cookieToken = context.Request.Cookies["cm_token"];
+                if (!string.IsNullOrEmpty(cookieToken))
+                {
+                    context.Token = cookieToken;
+                }
+            }
+
             return Task.CompletedTask;
         }
     };

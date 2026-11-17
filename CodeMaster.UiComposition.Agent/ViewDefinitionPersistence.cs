@@ -48,6 +48,9 @@ internal static class ViewDefinitionPersistence
             EntityName = plan.EntityName,
             DisplayName = plan.DisplayName,
             KeyColumn = plan.KeyColumn,
+            // The plan resolved no key column, so the consumer is registered as a keyless
+            // read-only entity — the supported shape for a view that concatenates unrelated rows.
+            HasPrimaryKey = !string.IsNullOrWhiteSpace(plan.KeyColumn),
             Fields = plan.EntityFields,
             GenerateFrontend = plan.GenerateFrontend,
             AllowUnappliedDefinition = plan.DefinitionOnly,

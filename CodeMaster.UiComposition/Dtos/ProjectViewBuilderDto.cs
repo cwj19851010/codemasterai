@@ -168,6 +168,13 @@ public sealed class RegisterReadOnlyViewEntityDto
     public string EntityName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? KeyColumn { get; set; }
+    /// <summary>
+    /// Whether the generated read-only consumer gets a primary key.
+    /// <c>null</c> infers one from <see cref="KeyColumn"/> or the first integral output;
+    /// <c>false</c> registers a keyless consumer (list/query only, no GetById, no EF key),
+    /// which is the correct shape for a view that aggregates unrelated rows.
+    /// </summary>
+    public bool? HasPrimaryKey { get; set; }
     public List<ViewEntityFieldDefinitionDto> Fields { get; set; } = new();
     public bool GenerateFrontend { get; set; } = true;
     /// <summary>

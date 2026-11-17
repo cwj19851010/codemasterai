@@ -1,5 +1,5 @@
 using CodeMaster.Agent.Contracts;
-using CodeMaster.Agent.Tools;
+using CodeMaster.Agent.Services;
 
 namespace CodeMaster.Agent.Tests.Services;
 
@@ -35,7 +35,7 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
         var id = Field("Id");
         var proposal = Proposal(Entity("EngineeringProjectProfitView", hasPrimaryKey: true, id, Field("Amount")));
 
-        var repairs = CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
 
         Assert.True(id.IsPrimaryKey);
         Assert.Single(repairs);
@@ -50,7 +50,7 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
         var id = Field("Id");
         var proposal = Proposal(Entity("Order", hasPrimaryKey: true, explicitKey, id));
 
-        var repairs = CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
 
         Assert.Empty(repairs);
         Assert.False(id.IsPrimaryKey);
@@ -64,7 +64,7 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
         var id = Field("Id");
         var proposal = Proposal(Entity("ReadOnlyView", hasPrimaryKey: false, id));
 
-        var repairs = CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
 
         Assert.Empty(repairs);
         Assert.False(id.IsPrimaryKey);
@@ -76,7 +76,7 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
         // Nothing to promote, and the validator has no complaint for this shape either.
         var proposal = Proposal(Entity("Metric", hasPrimaryKey: true, Field("Name"), Field("Value")));
 
-        var repairs = CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
 
         Assert.Empty(repairs);
     }
@@ -87,7 +87,7 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
         var lower = Field("id");
         var proposal = Proposal(Entity("Order", hasPrimaryKey: true, lower));
 
-        var repairs = CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
 
         Assert.True(lower.IsPrimaryKey);
         Assert.Single(repairs);
@@ -103,7 +103,7 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
             Entity("OrderItem", hasPrimaryKey: true, secondId),
             Entity("AlreadyKeyed", hasPrimaryKey: true, Field("Id", isPrimaryKey: true)));
 
-        var repairs = CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
 
         Assert.True(firstId.IsPrimaryKey);
         Assert.True(secondId.IsPrimaryKey);
@@ -115,6 +115,6 @@ public sealed class ProjectChangeSetPrimaryKeyRepairTests
     {
         var proposal = Proposal(Entity("Order", hasPrimaryKey: true, Field("Id", isPrimaryKey: true)));
 
-        Assert.Empty(CodeMasterAgentToolFactory.RepairImplicitPrimaryKeys(proposal));
+        Assert.Empty(ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal));
     }
 }

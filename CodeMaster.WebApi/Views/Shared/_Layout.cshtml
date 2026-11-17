@@ -38,7 +38,14 @@
                 <a href="/swagger">API</a>
             }
             <a href="/app">前端入口</a>
-            <a class="nav-cta" href="/register">注册</a>
+            @if (User.Identity?.IsAuthenticated == true)
+            {
+                <a class="nav-cta" href="/app">控制台</a>
+            }
+            else
+            {
+                <a class="nav-cta" href="/register">注册</a>
+            }
         </nav>
     </header>
     <main>

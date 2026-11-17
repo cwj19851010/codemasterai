@@ -25,6 +25,15 @@ public static class CodeMasterAgentToolCatalog
     public const string GetUiCompositionContext = "get_ui_composition_context";
     public const string GetComplexPageContext = "get_complex_page_context";
     public const string ProposeProjectWorkBatch = "propose_project_work_batch";
+
+    /// <summary>Lists the Markdown / plain-text documents inside the generated project folder.</summary>
+    public const string ListProjectFiles = "list_project_files";
+
+    /// <summary>Reads one Markdown / plain-text document from the generated project folder.</summary>
+    public const string ReadProjectFile = "read_project_file";
+
+    /// <summary>Reads a document the user attached to a chat message, by token.</summary>
+    public const string ReadAttachment = "read_attachment";
     // Disabled on 2026-10-20: the agent never reads or patches CodeMaster source code.
     // The names stay as a record of the removed tools; nothing registers them any more.
     public const string InspectCodeMasterSource = "inspect_codemaster_source";
@@ -57,7 +66,11 @@ public static class CodeMasterAgentToolCatalog
         Func<ProposeAiProjectWorkBatchRequest, Task<string>>? proposeProjectWorkBatch = null,
         Func<SupersedeAiProjectWorkPlanRequest, Task<string>>? supersedeProjectWorkPlan = null,
         bool includeSubmitBusinessPlan = false,
-        Func<BusinessPlanDefinition, Task<string>>? submitBusinessPlan = null)
+        Func<BusinessPlanDefinition, Task<string>>? submitBusinessPlan = null,
+        bool includeDocumentRead = false,
+        Func<AiProjectFileListQuery, Task<string>>? listProjectFiles = null,
+        Func<AiProjectFileReadQuery, Task<string>>? readProjectFile = null,
+        Func<AiAttachmentReadQuery, Task<string>>? readAttachment = null)
     {
         var tools = new List<AITool>();
         if (includeProjectSummary)
@@ -185,7 +198,34 @@ public static class CodeMasterAgentToolCatalog
             tools.Add(AIFunctionFactory.Create(
                 submitBusinessPlan,
                 name: SubmitBusinessPlan,
-                description: "Submit a business-only plan definition (modules, entities, fields, relations, views, pages) using stable cross-block keys. The server compiles it into the six-stage executable work plan (EntityFields, Views, Relations, FieldControls, ComplexPages, ConsistencyCheck) and streams progress events. Use this on confirmation turns instead of authoring task definitions, dependency graphs, or task JSON."));
+                description: "Submit a business-only plan definition (modules, entities, fields, relations, views, pages, dictionaries) using stable cross-block keys. The server compiles it into the six-stage executable work plan (EntityFields, Views, Relations, FieldControls, ComplexPages, ConsistencyCheck) and streams progress events. Declare every enumeration field as a dictionary reference AND list that dictionary under `dictionaries` (type plus optional entries); the plan creates the dictionary types in the generated project, and a referenced-but-undeclared dictionary leaves the generated select empty. Use this on confirmation turns instead of authoring task definitions, dependency graphs, or task JSON."));
+        }
+
+        if (includeDocumentRead)
+        {
+            if (listProjectFiles != null)
+            {
+                tools.Add(AIFunctionFactory.Create(
+                    listProjectFiles,
+                    name: ListProjectFiles,
+                    description: "List the Markdown and plain-text documents (.md, .markdown, .txt, .text) inside the generated project folder. Build output and dependency folders (bin, obj, node_modules, .git) are skipped. Use this before read_project_file when you do not know the exact file name. Only documents are listed; source code files are never readable by the Agent."));
+            }
+
+            if (readProjectFile != null)
+            {
+                tools.Add(AIFunctionFactory.Create(
+                    readProjectFile,
+                    name: ReadProjectFile,
+                    description: "Read one Markdown or plain-text document from the generated project folder, for example README.md or docs/需求说明.md. The path must be relative to the project root. Returns the decoded text plus its total character count; use offset to continue when truncated. Use this to ground entity and field design in a requirement document the user placed in the project."));
+            }
+
+            if (readAttachment != null)
+            {
+                tools.Add(AIFunctionFactory.Create(
+                    readAttachment,
+                    name: ReadAttachment,
+                    description: "Read a document the user attached to an earlier chat message, addressed by the attachment token recorded in that message's attachment list. The document attached to the current turn is already inlined in the prompt, so call this only to re-read an older attachment or to page through a long one with offset."));
+            }
         }
 
         return tools;

@@ -197,7 +197,7 @@ export function buildProject(projectId) {
       url: '/codegen/project/build',
       method: 'post',
       data: { projectId },
-      timeout: 180000 // 3分钟超时
+      timeout: 600000 // 10分钟超时（冷启动首次编译生成项目远超3分钟）
     })
   )
 }

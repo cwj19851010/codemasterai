@@ -108,7 +108,7 @@
                 {{ formatDateTime(row.createTime) }}
               </template>
           </el-table-column>
-          <el-table-column :label="$t('actions')" width="480" fixed="right">
+          <el-table-column :label="$t('actions')" width="550" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="handleView(row)" v-permission="'codegen:project:view'">
                 {{ $t('view') }}
@@ -182,6 +182,15 @@
               <el-button link type="danger" @click="handleDelete(row)" v-permission="'codegen:project:delete'">
                 {{ $t('delete') }}
               </el-button>
+
+              <!-- 一键生成：更新菜单 → 更新代码（前后端）→ 更新多语言，不自动做编译检查 -->
+              <el-button
+                link
+                type="success"
+                :loading="oneClickMap[row.id]"
+                @click="handleOneClickGenerate(row)">
+                一键生成
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -196,6 +205,51 @@
         @current-change="getList"
       />
     </el-card>
+
+    <!-- 一键生成进度 -->
+    <el-dialog
+      v-model="oneClickVisible"
+      :title="`一键生成 - ${oneClickProjectName}`"
+      width="520px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!oneClickRunning"
+      :show-close="!oneClickRunning"
+    >
+      <div class="one-click-steps">
+        <div
+          v-for="step in oneClickSteps"
+          :key="step.key"
+          class="one-click-step"
+          :class="`is-${step.status}`"
+        >
+          <span class="one-click-step-icon">
+            <el-icon v-if="step.status === 'done'"><CircleCheckFilled /></el-icon>
+            <el-icon v-else-if="step.status === 'failed'"><CircleCloseFilled /></el-icon>
+            <el-icon v-else-if="step.status === 'running'" class="is-loading"><Loading /></el-icon>
+            <span v-else class="one-click-step-dot"></span>
+          </span>
+          <span class="one-click-step-label">{{ step.label }}</span>
+          <span class="one-click-step-status">{{ oneClickStepStatusText(step) }}</span>
+        </div>
+      </div>
+
+      <el-progress
+        class="one-click-progress"
+        :percentage="oneClickProgress"
+        :status="oneClickFailed ? 'exception' : (oneClickProgress === 100 ? 'success' : undefined)"
+      />
+
+      <div v-if="oneClickFailed" class="one-click-error">
+        <div class="one-click-error-title">执行失败</div>
+        <pre>{{ oneClickError }}</pre>
+      </div>
+
+      <template #footer>
+        <el-button v-if="!oneClickRunning" type="primary" @click="oneClickVisible = false">
+          {{ oneClickFailed ? '知道了' : '完成' }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="clientConfigVisible" title="本地执行配置" width="640px">
       <el-form :model="clientConfigForm" label-width="130px">
@@ -244,7 +298,7 @@ import { ref, computed, onMounted } from 'vue'
 import { refreshOnReactivated } from '@/utils/pageLifecycle'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, CircleCheckFilled, CircleCloseFilled, Loading } from '@element-plus/icons-vue'
 import { t2 } from '@/i18n'
 import { formatDateTime } from '@/utils/dateFormat'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -282,6 +336,11 @@ import {
 import { isInClient, clientInitializeProject } from '@/utils/jsbridge'
 import { getClientInitializeData } from '@/api/codegen/project'
 import {
+  generateProjectSmartCode,
+  syncProjectMenus,
+  syncProjectLanguages
+} from '@/api/codegen/moduleEntity'
+import {
   DEFAULT_CODEMASTER_SERVER_BASE_URL,
   getCodeMasterClientConfig,
   getCodeMasterClientConfigFilePath,
@@ -304,6 +363,35 @@ const startingMap = ref({})    // key=项目ID，value=true表示正在启动
 const stoppingMap = ref({})    // key=项目ID，value=true表示正在停止
 const migratingMap = ref({})   // key=项目ID，value=true表示正在迁移
 const buildingMap = ref({})    // key=项目ID，value=true表示正在编译
+// 一键生成：菜单 → 代码（前后端）→ 多语言。故意不做编译检查，需要验证请手动运行或点「编译」。
+const oneClickMap = ref({})    // key=项目ID，value=true表示正在一键生成
+const oneClickVisible = ref(false)
+const oneClickRunning = ref(false)
+const oneClickProjectName = ref('')
+const oneClickSteps = ref([])
+const oneClickError = ref('')
+
+const ONE_CLICK_ACTIONS = [
+  { key: 'menu', label: '更新菜单', run: projectId => syncProjectMenus(projectId) },
+  { key: 'code', label: '更新代码（前后端）', run: projectId => generateProjectSmartCode(projectId) },
+  { key: 'language', label: '更新多语言', run: projectId => syncProjectLanguages(projectId) }
+]
+
+const oneClickProgress = computed(() => {
+  const steps = oneClickSteps.value
+  if (!steps.length) return 0
+  const finished = steps.filter(step => step.status === 'done' || step.status === 'failed').length
+  return Math.round((finished / steps.length) * 100)
+})
+
+const oneClickFailed = computed(() => oneClickSteps.value.some(step => step.status === 'failed'))
+
+const oneClickStepStatusText = step => {
+  if (step.status === 'done') return '完成'
+  if (step.status === 'failed') return '失败'
+  if (step.status === 'running') return '进行中…'
+  return '等待'
+}
 const downloadingTemplate = ref(false)
 const uploadingTemplate = ref(false)
 const templateUploadRef = ref(null)
@@ -467,8 +555,9 @@ const handleInitialize = async (row) => {
         { fn: initializeStep7, name: 'dotnet_restore', progress: 75 },
         { fn: initializeStep8, name: 'write_translations', progress: 80 },
         { fn: initializeStep9, name: 'npm_install', progress: 90 },
-        { fn: initializeStep10, name: 'start_backend', progress: 95 },
-        { fn: initializeStep11, name: 'start_frontend', progress: 100 }
+        // 最后两步不再自动拉起 dev server：启动由用户手动完成，这两步只做收尾与状态落库。
+        { fn: initializeStep10, name: 'finalize', progress: 95 },
+        { fn: initializeStep11, name: 'done', progress: 100 }
       ]
 
       try {
@@ -627,6 +716,56 @@ const handleMigrate = async (row) => {
     ElMessage.error(`迁移请求失败：${error.message || ''}`)
   } finally {
     migratingMap.value[row.id] = false
+  }
+}
+
+const handleOneClickGenerate = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `将对「${row.projectName}」依次执行：更新菜单、更新代码（前后端）、更新多语言。\n不会自动做编译检查，需要验证请手动启动前后端或点「编译」。`,
+      '一键生成',
+      { type: 'warning', confirmButtonText: '开始生成', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  oneClickProjectName.value = row.projectName
+  oneClickSteps.value = ONE_CLICK_ACTIONS.map(action => ({
+    key: action.key,
+    label: action.label,
+    status: 'pending'
+  }))
+  oneClickError.value = ''
+  oneClickVisible.value = true
+  oneClickRunning.value = true
+  oneClickMap.value[row.id] = true
+
+  try {
+    for (let index = 0; index < ONE_CLICK_ACTIONS.length; index += 1) {
+      const action = ONE_CLICK_ACTIONS[index]
+      oneClickSteps.value[index].status = 'running'
+
+      try {
+        const result = await action.run(row.id)
+        // 后端这三个接口返回 bool（拦截器已解包 data），失败时也可能是 { success:false }。
+        if (result === false || (result && result.success === false)) {
+          throw new Error(result?.message || `${action.label}失败`)
+        }
+        oneClickSteps.value[index].status = 'done'
+      } catch (error) {
+        oneClickSteps.value[index].status = 'failed'
+        oneClickError.value = `${action.label}：${error?.message || '未知错误'}`
+        // 后续步骤依赖前一步的结果，失败即停止，避免在半成品状态上继续写入。
+        return
+      }
+    }
+
+    ElMessage.success('一键生成完成')
+    getList()
+  } finally {
+    oneClickRunning.value = false
+    oneClickMap.value[row.id] = false
   }
 }
 
@@ -846,5 +985,90 @@ refreshOnReactivated(getList)
   color: #909399;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.one-click-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.one-click-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #909399;
+  font-size: 14px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+
+  &.is-running {
+    background: #ecf5ff;
+    color: #409eff;
+  }
+
+  &.is-done {
+    background: #f0f9eb;
+    color: #67c23a;
+  }
+
+  &.is-failed {
+    background: #fef0f0;
+    color: #f56c6c;
+  }
+}
+
+.one-click-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  font-size: 16px;
+}
+
+.one-click-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0c4cc;
+}
+
+.one-click-step-label {
+  flex: 1;
+}
+
+.one-click-step-status {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.one-click-progress {
+  margin-bottom: 12px;
+}
+
+.one-click-error {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #fef0f0;
+  color: #f56c6c;
+  font-size: 13px;
+
+  pre {
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    color: #c45656;
+  }
+}
+
+.one-click-error-title {
+  font-weight: 600;
 }
 </style>

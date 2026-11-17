@@ -157,6 +157,8 @@ public static class GlobalTranslations
 
             // 主题皮肤
             { "theme_tech_blue", new() { { "zh-CN", "科技蓝" }, { "en-US", "Tech Blue" } } },
+            { "theme_tech_cyan", new() { { "zh-CN", "星舰青" }, { "en-US", "Starship Cyan" } } },
+            { "theme_cloud_white", new() { { "zh-CN", "云端白" }, { "en-US", "Cloud White" } } },
             { "theme_classic_blue", new() { { "zh-CN", "经典蓝" }, { "en-US", "Classic Blue" } } },
             { "theme_code_green", new() { { "zh-CN", "代码绿" }, { "en-US", "Code Green" } } },
             { "theme_ocean", new() { { "zh-CN", "海洋蓝" }, { "en-US", "Ocean" } } },

@@ -1,5 +1,5 @@
 <template>
-  <el-popover placement="bottom-end" :width="296" trigger="click" popper-class="theme-gallery-popper">
+  <el-popover ref="popoverRef" placement="bottom-end" :width="296" trigger="click" popper-class="theme-gallery-popper">
     <template #reference>
       <button class="theme-trigger" type="button" :aria-label="t('theme_switch')" :title="t('theme_switch')">
         <el-icon :size="18">
@@ -30,8 +30,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { Check, Cloudy, Moon, Sunny } from '@element-plus/icons-vue'
+import { computed, ref } from 'vue'
+import { Check, Cloudy, Lightning, Moon, Sunny } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { ElMessage } from 'element-plus'
 import { useI18n } from 'vue-i18n'
@@ -39,7 +39,8 @@ import { useI18n } from 'vue-i18n'
 const iconMap = {
   Sunny,
   Moon,
-  Cloudy
+  Cloudy,
+  Lightning
 }
 
 const swatchMap = {
@@ -47,13 +48,16 @@ const swatchMap = {
   'classic-blue': 'linear-gradient(135deg, #2563eb 0%, #0f766e 100%)',
   'code-green': 'linear-gradient(135deg, #059669 0%, #0d9488 100%)',
   ocean: 'linear-gradient(135deg, #0d9488 0%, #0ea5e9 100%)',
-  'china-red': 'linear-gradient(135deg, #dc2626 0%, #ffffff 70%)',
+  'tech-cyan': 'linear-gradient(135deg, #22d3ee 0%, #0a1828 100%)',
+  'cloud-white': 'linear-gradient(135deg, #ffffff 0%, #dbeafe 55%, #2563eb 100%)',
+  'china-red': 'linear-gradient(135deg, #c8102e 0%, #4a0d16 100%)',
   dark: 'linear-gradient(135deg, #111827 0%, #38bdf8 100%)',
   'business-gray': 'linear-gradient(135deg, #3f4c57 0%, #16a34a 100%)'
 }
 
 const settingsStore = useSettingsStore()
 const { t, locale } = useI18n()
+const popoverRef = ref(null)
 
 const currentTheme = computed(() => settingsStore.currentTheme)
 const themeOptions = computed(() => settingsStore.themeOptions)
@@ -77,6 +81,7 @@ const handleThemeChange = (theme) => {
   settingsStore.changeTheme(theme)
   const nextTheme = themeOptions.value.find(item => item.name === theme)
   ElMessage.success(t('theme_switch_success', { theme: themeLabel(nextTheme || {}) }))
+  popoverRef.value?.hide()
 }
 </script>
 

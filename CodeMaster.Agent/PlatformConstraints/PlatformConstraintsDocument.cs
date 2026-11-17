@@ -15,6 +15,7 @@ public sealed record PlatformConstraintsDocument
     public BackendConvention Backend { get; init; } = new();
     public RelationConvention Relations { get; init; } = new();
     public ControlConventionRegistry Controls { get; init; } = new(ControlConvention.Defaults());
+    public DictionaryConvention Dictionaries { get; init; } = new();
     public WorkflowConvention Workflow { get; init; } = new();
     public GenerationConvention Generation { get; init; } = new();
 
@@ -31,6 +32,8 @@ public sealed record PlatformConstraintsDocument
         builder.AppendLine();
         builder.AppendLine("Control conventions (data-driven; the registry can be extended without code changes):");
         builder.AppendLine(Controls.RenderForPrompt());
+        builder.AppendLine();
+        builder.AppendLine(Dictionaries.RenderForPrompt());
         builder.AppendLine();
         builder.AppendLine(Workflow.RenderForPrompt());
         builder.AppendLine();

@@ -77,6 +77,25 @@ export function getToolExecutions(conversationId) {
   return request({ url: `/agent/conversations/${conversationId}/tools`, method: 'get' })
 }
 
+/**
+ * Uploads one Markdown / plain-text document for a conversation.
+ *
+ * The response is a descriptor `{ token, name, size, chars }` that is sent back inside
+ * `attachments` with the chat message. Uploading does not touch the model input by itself —
+ * the text is inlined only on the turn the document is attached to.
+ */
+export function uploadAgentAttachment(conversationId, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request({
+    url: '/agent/attachments',
+    method: 'post',
+    params: { conversationId },
+    data: formData,
+    timeout: 60000
+  })
+}
+
 export function getActiveWorkPlan(projectId) {
   return request({ url: '/agent/work-plans/active', method: 'get', params: { projectId } })
 }
@@ -85,8 +104,32 @@ export function getWorkPlan(planId) {
   return request({ url: `/agent/work-plans/${planId}`, method: 'get' })
 }
 
+/**
+ * Long-running Agent endpoints. A single batch can legitimately take minutes on a cold build
+ * (restore + compile + metadata verification), so these carry an explicit 10-minute budget.
+ *
+ * Even so, a client timeout here does NOT mean the server failed — the request keeps running
+ * server-side. Callers must treat a timeout as "still working" and fall back to polling
+ * (see `isClientTimeout` below) instead of reporting the task as failed.
+ */
+const LONG_RUNNING_TIMEOUT = 600000
+
+/**
+ * Distinguishes "we stopped waiting" from "the work failed".
+ *
+ * axios aborts its own wait when the timeout elapses, but the backend keeps executing the
+ * request to completion — that is exactly how a 270s `/agent/chat/stream` can succeed while
+ * the browser reports `timeout of 180000ms exceeded`. Any caller that reacts to a timeout by
+ * showing a failure or writing back `success: false` corrupts a run that is still healthy.
+ */
+export function isClientTimeout(error) {
+  if (!error) return false
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return true
+  return /timeout of \d+ms exceeded/i.test(String(error.message || ''))
+}
+
 export function confirmWorkPlan(planId, data) {
-  return request({ url: `/agent/work-plans/${planId}/confirm`, method: 'post', data, timeout: 180000 })
+  return request({ url: `/agent/work-plans/${planId}/confirm`, method: 'post', data, timeout: LONG_RUNNING_TIMEOUT })
 }
 
 export function resumeWorkPlan(planId, conversationId) {
@@ -94,7 +137,7 @@ export function resumeWorkPlan(planId, conversationId) {
     url: `/agent/work-plans/${planId}/resume`,
     method: 'post',
     params: conversationId ? { conversationId } : {},
-    timeout: 180000
+    timeout: LONG_RUNNING_TIMEOUT
   })
 }
 
@@ -111,7 +154,7 @@ export function retryWorkPlanTask(planId, taskId, failureSignature) {
 }
 
 export function sendMessage(data) {
-  return request({ url: '/agent/chat', method: 'post', data, timeout: 180000 })
+  return request({ url: '/agent/chat', method: 'post', data, timeout: LONG_RUNNING_TIMEOUT })
 }
 
 export function cancelAgentRequest(data) {
@@ -201,7 +244,7 @@ export function approveTool(id) {
 }
 
 export function executeApprovedTool(id) {
-  return request({ url: `/agent/tools/${id}/execute`, method: 'post', timeout: 180000 })
+  return request({ url: `/agent/tools/${id}/execute`, method: 'post', timeout: LONG_RUNNING_TIMEOUT })
 }
 
 export function rejectTool(id) {
@@ -213,6 +256,6 @@ export function completeToolClientActions(id, data) {
     url: `/agent/tools/${id}/complete-client-actions`,
     method: 'post',
     data,
-    timeout: 180000
+    timeout: LONG_RUNNING_TIMEOUT
   })
 }

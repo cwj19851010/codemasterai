@@ -1,82 +1,121 @@
 ﻿<template>
-  <div class="login-container">
-    <div class="ambient-glow" aria-hidden="true"></div>
-    <div class="ambient-grid" aria-hidden="true"></div>
-    <theme-picker class="login-theme" />
-
-    <div class="login-card">
-      <div class="brand">
-        <div class="brand-mark">
-          <el-icon :size="24"><Platform /></el-icon>
-        </div>
-        <div>
-          <h1>{{ t('app_title') }}</h1>
-          <p>以数据为驱动，生成全场景代码</p>
-        </div>
-      </div>
-
-      <div class="access-line">
-        <span>SECURE ACCESS</span>
-        <i />
-      </div>
-
-      <div class="card-header">
-        <h2>{{ t('login_title') }}</h2>
-        <p>{{ isClientLogin ? '客户端授权登录' : '服务器控制台登录' }}</p>
-      </div>
-
-      <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" class="login-form">
-        <el-form-item prop="username">
-          <el-input
-            ref="username"
-            v-model="loginForm.username"
-            :placeholder="$t2('please_input', 'username')"
-            size="large"
-            :prefix-icon="User"
-            clearable
-          />
-        </el-form-item>
-
-        <el-form-item prop="password">
-          <el-input
-            ref="password"
-            v-model="loginForm.password"
-            :type="passwordType"
-            :placeholder="$t2('please_input', 'password')"
-            size="large"
-            :prefix-icon="Lock"
-            @keyup.enter="handleLogin"
-          >
-            <template #suffix>
-              <el-icon class="password-icon" @click="showPwd">
-                <View v-if="passwordType === 'password'" />
-                <Hide v-else />
-              </el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <el-button
-          :loading="loading"
-          type="primary"
-          size="large"
-          class="login-button"
-          @click.prevent="handleLogin"
-        >
-          <span v-if="!loading">{{ t('login') }}</span>
-          <span v-else>{{ t('login_loading') }}</span>
-        </el-button>
-      </el-form>
-
-      <div class="auth-links">
-        <el-button text @click="openRegister">注册账号</el-button>
-        <el-button text @click="openGithubLogin">GitHub 登录</el-button>
-      </div>
-
-      <div class="card-footer">
-        <p>{{ t('copyright') }}</p>
-      </div>
+  <div class="login-page">
+    <div class="login-theme">
+      <theme-picker />
     </div>
+
+    <section class="showcase">
+      <div class="showcase-glow" aria-hidden="true"></div>
+      <div class="showcase-grid" aria-hidden="true"></div>
+      <div class="showcase-ring ring-a" aria-hidden="true"></div>
+      <div class="showcase-ring ring-b" aria-hidden="true"></div>
+
+      <div class="showcase-inner">
+        <div class="brand">
+          <div class="brand-mark">
+            <el-icon :size="24"><Platform /></el-icon>
+          </div>
+          <span class="brand-name">{{ t('app_title') }}</span>
+        </div>
+
+        <div class="showcase-copy">
+          <p class="eyebrow">CODE MASTER PLATFORM</p>
+          <h1>
+            以数据为驱动<br />
+            <span>生成全场景代码</span>
+          </h1>
+          <p class="lead">可视化建模、模板化生成、开箱即用的企业级应用底座。</p>
+        </div>
+
+        <ul class="feature-list">
+          <li>
+            <span class="feature-icon"><el-icon :size="18"><Grid /></el-icon></span>
+            <div>
+              <strong>可视化建模</strong>
+              <em>拖拽搭建页面，配置即刻生效</em>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon"><el-icon :size="18"><MagicStick /></el-icon></span>
+            <div>
+              <strong>一键生成</strong>
+              <em>前后端代码同步产出，保持可维护</em>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon"><el-icon :size="18"><Connection /></el-icon></span>
+            <div>
+              <strong>多库适配</strong>
+              <em>SQL Server / MySQL / PostgreSQL / SQLite</em>
+            </div>
+          </li>
+        </ul>
+
+        <div class="showcase-foot">
+          <span>SECURE ACCESS</span>
+          <i />
+          <span>© 2026 CodeMaster</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-inner">
+        <div class="card-header">
+          <h2>{{ t('login_title') }}</h2>
+          <p>{{ isClientLogin ? '客户端授权登录' : '服务器控制台登录' }}</p>
+        </div>
+
+        <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" class="login-form">
+          <el-form-item prop="username">
+            <el-input
+              ref="username"
+              v-model="loginForm.username"
+              :placeholder="$t2('please_input', 'username')"
+              size="large"
+              :prefix-icon="User"
+              clearable
+            />
+          </el-form-item>
+
+          <el-form-item prop="password">
+            <el-input
+              ref="password"
+              v-model="loginForm.password"
+              :type="passwordType"
+              :placeholder="$t2('please_input', 'password')"
+              size="large"
+              :prefix-icon="Lock"
+              @keyup.enter="handleLogin"
+            >
+              <template #suffix>
+                <el-icon class="password-icon" @click="showPwd">
+                  <View v-if="passwordType === 'password'" />
+                  <Hide v-else />
+                </el-icon>
+              </template>
+            </el-input>
+          </el-form-item>
+
+          <el-button
+            :loading="loading"
+            type="primary"
+            size="large"
+            class="login-button"
+            @click.prevent="handleLogin"
+          >
+            <span v-if="!loading">登 录</span>
+            <span v-else>登录中…</span>
+          </el-button>
+        </el-form>
+
+        <div class="auth-links">
+          <el-button text @click="openRegister">注册账号</el-button>
+          <em />
+          <el-button text @click="openGithubLogin">GitHub 登录</el-button>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -84,7 +123,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Lock, View, Hide, Platform } from '@element-plus/icons-vue'
+import { User, Lock, View, Hide, Platform, Grid, MagicStick, Connection } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { getToken } from '@/utils/auth'
 import { useI18n } from 'vue-i18n'
@@ -207,48 +246,19 @@ onMounted(async () => {
 </script>
 
 <style lang="scss" scoped>
-.login-container {
+.login-page {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(0, 1fr);
   min-height: 100vh;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
-  overflow: hidden;
   background: var(--app-bg, #f4f7fb);
-}
-
-.ambient-glow {
-  position: absolute;
-  top: -220px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 720px;
-  height: 460px;
-  pointer-events: none;
-  background:
-    radial-gradient(closest-side, rgba(var(--app-primary-rgb, 79, 70, 229), 0.16), transparent),
-    radial-gradient(closest-side, rgba(5, 150, 105, 0.08), transparent 70%);
-  filter: blur(6px);
-}
-
-.ambient-grid {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(90deg, rgba(var(--app-primary-rgb, 79, 70, 229), 0.07) 1px, transparent 1px),
-    linear-gradient(0deg, rgba(var(--app-primary-rgb, 79, 70, 229), 0.07) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: radial-gradient(ellipse 70% 60% at 50% 42%, rgba(0, 0, 0, 0.9), transparent);
-  pointer-events: none;
 }
 
 .login-theme {
   position: fixed;
-  top: 18px;
-  right: 18px;
-  z-index: 2;
+  top: 20px;
+  right: 20px;
+  z-index: 5;
   display: flex;
   align-items: center;
   padding: 4px;
@@ -258,78 +268,227 @@ onMounted(async () => {
   box-shadow: var(--app-card-shadow, 0 10px 30px rgba(31, 41, 55, 0.08));
 }
 
-.login-card {
+/* ---------- 左侧品牌展示区 ---------- */
+.showcase {
   position: relative;
-  width: min(420px, 100%);
-  padding: 40px 38px 26px;
-  border: 1px solid var(--app-border, #dbe4ef);
-  border-radius: 14px;
-  background: var(--app-surface, #fff);
-  box-shadow: var(--app-card-shadow, 0 10px 30px rgba(31, 41, 55, 0.08));
+  display: flex;
+  overflow: hidden;
+  padding: 56px 64px;
+  color: #e6edf7;
+  background:
+    radial-gradient(120% 90% at 8% 0%, rgba(var(--app-primary-rgb, 37, 99, 235), 0.5), transparent 58%),
+    radial-gradient(90% 70% at 92% 100%, rgba(var(--app-accent-rgb, 5, 150, 105), 0.28), transparent 62%),
+    linear-gradient(158deg, #0a1424 0%, #0d1a2c 46%, #08111d 100%);
+}
+
+.showcase-glow {
+  position: absolute;
+  top: -160px;
+  left: -120px;
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(var(--app-primary-rgb, 37, 99, 235), 0.42), transparent 72%);
+  filter: blur(4px);
+  pointer-events: none;
+}
+
+.showcase-grid {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(148, 197, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(148, 197, 255, 0.1) 1px, transparent 1px);
+  background-size: 52px 52px;
+  mask-image: radial-gradient(ellipse 90% 80% at 30% 20%, rgba(0, 0, 0, 0.85), transparent 78%);
+  pointer-events: none;
+}
+
+.showcase-ring {
+  position: absolute;
+  border: 1px solid rgba(148, 197, 255, 0.14);
+  border-radius: 50%;
+  pointer-events: none;
+
+  &.ring-a {
+    right: -180px;
+    bottom: -220px;
+    width: 620px;
+    height: 620px;
+  }
+
+  &.ring-b {
+    right: -90px;
+    bottom: -130px;
+    width: 440px;
+    height: 440px;
+    border-color: rgba(148, 197, 255, 0.2);
+  }
+}
+
+.showcase-inner {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 44px;
+  max-width: 560px;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 26px;
 
   .brand-mark {
     display: inline-flex;
     width: 46px;
     height: 46px;
-    flex-shrink: 0;
     align-items: center;
     justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.22);
     border-radius: 12px;
     color: #fff;
-    background: linear-gradient(135deg, var(--app-primary, #4f46e5), var(--app-accent, #059669));
-    box-shadow: 0 10px 22px rgba(var(--app-primary-rgb, 79, 70, 229), 0.3);
+    background: linear-gradient(135deg, rgba(var(--app-primary-rgb, 37, 99, 235), 0.95), rgba(var(--app-accent-rgb, 5, 150, 105), 0.9));
+    box-shadow: 0 14px 30px rgba(2, 8, 20, 0.45);
+  }
+
+  .brand-name {
+    color: #f4f8ff;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+}
+
+.showcase-copy {
+  .eyebrow {
+    margin: 0 0 18px;
+    color: rgba(186, 214, 255, 0.66);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
   }
 
   h1 {
     margin: 0;
-    color: var(--app-text, #1f2937);
-    font-size: 22px;
+    color: #f8fbff;
+    font-size: clamp(34px, 3vw, 48px);
     font-weight: 800;
-    line-height: 1.2;
+    line-height: 1.22;
+    letter-spacing: -0.01em;
+
+    span {
+      background: linear-gradient(96deg, #8ec5ff 0%, #b3b9ff 48%, #f5b8ff 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
   }
 
-  p {
-    margin: 5px 0 0;
-    color: var(--app-text-muted, #64748b);
-    font-size: 12px;
+  .lead {
+    margin: 20px 0 0;
+    max-width: 420px;
+    color: rgba(203, 218, 238, 0.72);
+    font-size: 15px;
+    line-height: 1.75;
   }
 }
 
-.access-line {
+.feature-list {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px 16px;
+    border: 1px solid rgba(148, 197, 255, 0.14);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(6px);
+    transition: border-color 0.25s, background-color 0.25s, transform 0.25s;
+
+    &:hover {
+      border-color: rgba(148, 197, 255, 0.32);
+      background: rgba(255, 255, 255, 0.07);
+      transform: translateX(4px);
+    }
+  }
+
+  .feature-icon {
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    color: #9ec8ff;
+    background: rgba(var(--app-primary-rgb, 37, 99, 235), 0.22);
+  }
+
+  strong {
+    display: block;
+    color: #eaf2fd;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  em {
+    display: block;
+    margin-top: 4px;
+    color: rgba(190, 210, 235, 0.62);
+    font-size: 12px;
+    font-style: normal;
+  }
+}
+
+.showcase-foot {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 24px;
-
-  span {
-    color: var(--app-text-muted, #64748b);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-  }
+  color: rgba(170, 195, 224, 0.5);
+  font-size: 11px;
+  letter-spacing: 0.14em;
 
   i {
     height: 1px;
     flex: 1;
-    background: linear-gradient(90deg, var(--app-border, #dbe4ef), transparent);
+    background: linear-gradient(90deg, rgba(148, 197, 255, 0.28), transparent);
   }
 }
 
+/* ---------- 右侧登录表单 ---------- */
+.panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+  background:
+    radial-gradient(80% 60% at 100% 0%, rgba(var(--app-primary-rgb, 37, 99, 235), 0.07), transparent 62%),
+    var(--app-surface, #fff);
+  border-left: 1px solid var(--app-border, #dbe4ef);
+}
+
+.panel-inner {
+  width: min(372px, 100%);
+}
+
 .card-header {
-  margin-bottom: 26px;
+  margin-bottom: 30px;
 
   h2 {
-    margin: 0 0 6px;
+    margin: 0 0 8px;
     color: var(--app-text, #1f2937);
-    font-size: 26px;
+    font-size: 28px;
     font-weight: 800;
+    letter-spacing: -0.01em;
   }
 
   p {
@@ -341,23 +500,23 @@ onMounted(async () => {
 
 .login-form {
   :deep(.el-form-item) {
-    margin-bottom: 16px;
+    margin-bottom: 18px;
   }
 
   :deep(.el-input__wrapper) {
-    padding: 9px 12px;
+    padding: 10px 12px;
     border-radius: 8px;
     background: var(--app-surface-soft, #f8fafc);
     box-shadow: 0 0 0 1px var(--app-border, #dbe4ef) inset;
     transition: all 0.25s;
 
     &:hover {
-      box-shadow: 0 0 0 1px rgba(var(--app-primary-rgb, 79, 70, 229), 0.45) inset;
+      box-shadow: 0 0 0 1px rgba(var(--app-primary-rgb, 37, 99, 235), 0.45) inset;
     }
 
     &.is-focus {
       background: var(--app-surface, #fff);
-      box-shadow: 0 0 0 1px var(--app-primary, #4f46e5) inset, 0 0 0 3px rgba(var(--app-primary-rgb, 79, 70, 229), 0.12);
+      box-shadow: 0 0 0 1px var(--app-primary, #2563eb) inset, 0 0 0 3px rgba(var(--app-primary-rgb, 37, 99, 235), 0.12);
     }
   }
 
@@ -367,24 +526,26 @@ onMounted(async () => {
     transition: color 0.25s;
 
     &:hover {
-      color: var(--app-primary, #4f46e5);
+      color: var(--app-primary, #2563eb);
     }
   }
 
   .login-button {
     width: 100%;
-    height: 46px;
-    margin-top: 8px;
+    height: 48px;
+    margin-top: 10px;
     font-size: 15px;
     font-weight: 700;
-    border-radius: 8px;
-    background: linear-gradient(135deg, var(--app-primary, #4f46e5) 0%, rgba(var(--app-primary-rgb, 79, 70, 229), 0.72) 100%);
+    letter-spacing: 0.06em;
     border: none;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--app-primary, #2563eb) 0%, rgba(var(--app-primary-rgb, 37, 99, 235), 0.76) 100%);
+    box-shadow: 0 10px 22px rgba(var(--app-primary-rgb, 37, 99, 235), 0.24);
     transition: all 0.25s;
 
     &:hover {
       transform: translateY(-1px);
-      box-shadow: 0 12px 24px rgba(var(--app-primary-rgb, 79, 70, 229), 0.3);
+      box-shadow: 0 14px 28px rgba(var(--app-primary-rgb, 37, 99, 235), 0.32);
     }
 
     &:active {
@@ -395,38 +556,51 @@ onMounted(async () => {
 
 .auth-links {
   display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 14px;
-  margin-top: 18px;
+  gap: 4px;
+  margin-top: 22px;
 
   :deep(.el-button) {
-    color: var(--app-primary, #4f46e5);
+    color: var(--app-primary, #2563eb);
     font-weight: 600;
   }
-}
 
-.card-footer {
-  margin-top: 26px;
-  padding-top: 16px;
-  border-top: 1px solid var(--app-border, #dbe4ef);
-  text-align: center;
-
-  p {
-    margin: 0;
-    font-size: 12px;
-    color: var(--app-text-muted, #64748b);
+  em {
+    width: 1px;
+    height: 12px;
+    background: var(--app-border, #dbe4ef);
   }
 }
 
-@media (max-width: 640px) {
-  .login-container {
-    padding: 18px;
-    align-items: flex-start;
-    padding-top: 10vh;
+@media (max-width: 960px) {
+  .login-page {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .login-card {
-    padding: 30px 24px 22px;
+  .showcase {
+    padding: 40px 26px 36px;
+  }
+
+  .showcase-inner {
+    gap: 28px;
+  }
+
+  .showcase-copy .lead {
+    margin-top: 14px;
+    font-size: 14px;
+  }
+
+  .feature-list,
+  .showcase-foot,
+  .showcase-ring {
+    display: none;
+  }
+
+  .panel {
+    padding: 36px 24px 48px;
+    border-left: none;
+    border-top: 1px solid var(--app-border, #dbe4ef);
   }
 }
 </style>

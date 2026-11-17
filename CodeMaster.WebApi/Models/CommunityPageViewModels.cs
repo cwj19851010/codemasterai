@@ -12,6 +12,16 @@ public class CommunityIndexViewModel
     public long? CategoryId { get; set; }
 
     public string? Keyword { get; set; }
+
+    public string Sort { get; set; } = "active";
+
+    public CommunityOverviewDto Overview { get; set; } = new();
+
+    public List<CommunityTopicDto> HotTopics { get; set; } = new();
+
+    public long? CurrentUserId { get; set; }
+
+    public bool IsAdmin { get; set; }
 }
 
 public class CommunityTopicViewModel
@@ -19,4 +29,13 @@ public class CommunityTopicViewModel
     public CommunityTopicDto Topic { get; set; } = new();
 
     public List<CommunityReplyDto> Replies { get; set; } = new();
+
+    public long? CurrentUserId { get; set; }
+
+    public bool IsAdmin { get; set; }
+}
+
+public class CommunityPreviewRequest
+{
+    public string Content { get; set; } = string.Empty;
 }

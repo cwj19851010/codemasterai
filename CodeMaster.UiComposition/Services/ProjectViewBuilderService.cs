@@ -291,6 +291,14 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                 .FirstAsync();
             if (definition is null || definition.Ownership != ProjectViewOwnership.Managed)
                 return;
+            // ProjectViewDefinitionService.DeployAsync 会先把状态置为 Pending 作为乐观锁标记，
+            // 再用 DeploymentState == Pending 收口。这里若抢先改成 Applied / Failed，
+            // 外层 UPDATE 会匹配 0 行并误报「视图已部署，但定义状态发生并发变化」，
+            // 最后被 catch 写成 Failed —— 受管视图永远部署不成功。
+            // Pending 期间状态由 DeployAsync 统一回写；直接调用 CreateViewAsync 的
+            // 「修复历史 Failed 定义」路径不受影响。
+            if (definition.DeploymentState == ProjectViewDeploymentState.Pending)
+                return;
 
             if (error is null)
             {
@@ -374,9 +382,12 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
             if (columns.Count == 0 && declaredFields.Count == 0)
                 throw new InvalidOperationException($"View {viewName} has no readable columns.");
             var mappedFields = declaredFields.Count > 0
-                ? BuildDeclaredViewFields(declaredFields, input.KeyColumn)
-                : BuildInferredViewFields(columns, input.KeyColumn, viewName);
-            var key = mappedFields.Single(item => item.IsPrimaryKey);
+                ? BuildDeclaredViewFields(declaredFields, input.KeyColumn, input.HasPrimaryKey)
+                : BuildInferredViewFields(columns, input.KeyColumn, viewName, input.HasPrimaryKey);
+            // A view consumer without a primary key is a supported shape: read-only entities may
+            // omit it, and the generated project maps them with HasNoKey() plus a list/query-only
+            // service. Forcing one here would claim uniqueness a report view does not have.
+            var key = mappedFields.FirstOrDefault(item => item.IsPrimaryKey);
 
             var existing = await _db.Queryable<ModuleEntity>()
                 .Where(item => !item.IsDeleted && item.ProjectId == project.Id &&
@@ -429,7 +440,6 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                     // instead; when nothing changed this rewrites the same values.
                     await SynchronizeRestoredViewFieldsAsync(existing, mappedFields, existing.TenantId);
 
-                    var linkedKey = mappedFields.Single(item => item.IsPrimaryKey);
                     return new ReadOnlyViewEntityResultDto
                     {
                         EntityId = existing.Id,
@@ -438,7 +448,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                         ModuleId = existing.ModuleId,
                         EntityName = existing.Name,
                         ViewName = viewName,
-                        KeyColumn = linkedKey.ColumnName,
+                        KeyColumn = key?.ColumnName ?? string.Empty,
                         HasTenant = existing.HasTenant,
                         HasDataPermission = existing.HasDataPermission,
                         GenerateFrontend = existing.GenerateFrontend,
@@ -452,7 +462,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                 existing.Description = string.IsNullOrWhiteSpace(input.DisplayName) ? input.EntityName.Trim() : input.DisplayName.Trim();
                 existing.TableName = viewName;
                 existing.GenerationMode = EntityGenerationMode.FullStack;
-                existing.HasPrimaryKey = true;
+                existing.HasPrimaryKey = key != null;
                 existing.IsReadOnly = true;
                 existing.HasTenant = adoptedHasTenant;
                 existing.HasDataPermission = adoptedHasDataPermission;
@@ -503,7 +513,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                     throw;
                 }
 
-                var existingKey = mappedFields.Single(item => item.IsPrimaryKey);
+                var existingKey = key;
                 return new ReadOnlyViewEntityResultDto
                 {
                     EntityId = existing.Id,
@@ -512,7 +522,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                     ModuleId = existing.ModuleId,
                     EntityName = existing.Name,
                     ViewName = viewName,
-                    KeyColumn = existingKey.ColumnName,
+                    KeyColumn = existingKey?.ColumnName ?? string.Empty,
                     HasTenant = existing.HasTenant,
                     HasDataPermission = existing.HasDataPermission,
                     GenerateFrontend = existing.GenerateFrontend,
@@ -538,7 +548,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                 deleted.Description = string.IsNullOrWhiteSpace(input.DisplayName) ? input.EntityName.Trim() : input.DisplayName.Trim();
                 deleted.TableName = viewName;
                 deleted.GenerationMode = EntityGenerationMode.FullStack;
-                deleted.HasPrimaryKey = true;
+                deleted.HasPrimaryKey = key != null;
                 deleted.IsReadOnly = true;
                 deleted.HasTenant = restoredHasTenant;
                 deleted.HasDataPermission = restoredHasDataPermission;
@@ -603,7 +613,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                     ModuleId = deleted.ModuleId,
                     EntityName = deleted.Name,
                     ViewName = viewName,
-                    KeyColumn = key.ColumnName,
+                    KeyColumn = key?.ColumnName ?? string.Empty,
                     HasTenant = deleted.HasTenant,
                     HasDataPermission = deleted.HasDataPermission,
                     GenerateFrontend = deleted.GenerateFrontend,
@@ -620,7 +630,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                 Name = input.EntityName.Trim(),
                 Description = string.IsNullOrWhiteSpace(input.DisplayName) ? input.EntityName.Trim() : input.DisplayName.Trim(),
                 TableName = viewName,
-                HasPrimaryKey = true,
+                HasPrimaryKey = key != null,
                 IsReadOnly = true,
                 HasTenant = hasTenant,
                 HasDataPermission = hasDataPermission,
@@ -726,7 +736,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
                 ModuleId = module.Id,
                 EntityName = entity.Name,
                 ViewName = viewName,
-                KeyColumn = key.ColumnName,
+                KeyColumn = key?.ColumnName ?? string.Empty,
                 HasTenant = hasTenant,
                 HasDataPermission = hasDataPermission,
                 GenerateFrontend = entity.GenerateFrontend,
@@ -1029,9 +1039,20 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
         field.DeleteTime = null;
     }
 
-    private static List<MappedViewField> BuildDeclaredViewFields(
+    /// <summary>
+    /// Builds the generated field list for a view consumer from the fields a caller declared.
+    /// </summary>
+    /// <remarks>
+    /// A view only gets a primary key when one can be named and proven integral. A projection that
+    /// aggregates unrelated sources — a <c>UNION ALL</c> report, say — has no such column, and
+    /// naming one anyway would claim a uniqueness the view does not have, so <c>GetById</c> would
+    /// answer with whichever branch row happened to collide. Read-only entities are allowed to be
+    /// keyless, so that is a supported outcome here rather than a rejection.
+    /// </remarks>
+    internal static List<MappedViewField> BuildDeclaredViewFields(
         IReadOnlyList<ViewEntityFieldDefinitionDto> definitions,
-        string? requestedKeyColumn)
+        string? requestedKeyColumn,
+        bool? hasPrimaryKey)
     {
         var normalized = definitions.Select((definition, index) =>
         {
@@ -1078,21 +1099,36 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
         if (duplicateColumn != null)
             throw new ArgumentException($"Duplicate view output column mapping: {duplicateColumn.Key}. Use distinct SQL AS aliases.");
 
-        var keyColumn = string.IsNullOrWhiteSpace(requestedKeyColumn)
-            ? normalized[0].ColumnName
-            : requestedKeyColumn.Trim();
-        var keyIndex = normalized.FindIndex(item =>
-            string.Equals(item.ColumnName, keyColumn, StringComparison.OrdinalIgnoreCase));
-        if (keyIndex < 0)
-            throw new ArgumentException($"Key column {keyColumn} is not declared in the view entity fields.");
-        if (!IsIntegralType(normalized[keyIndex].DataType))
-            throw new ArgumentException("The declared key field must use an integral C# data type compatible with the generated long Id.");
+        var keyColumn = string.IsNullOrWhiteSpace(requestedKeyColumn) ? null : requestedKeyColumn.Trim();
+        var keyIndex = -1;
+        if (keyColumn != null)
+        {
+            keyIndex = normalized.FindIndex(item =>
+                string.Equals(item.ColumnName, keyColumn, StringComparison.OrdinalIgnoreCase));
+            if (keyIndex < 0)
+                throw new ArgumentException($"Key column {keyColumn} is not declared in the view entity fields.");
+            if (!IsIntegralType(normalized[keyIndex].DataType))
+                throw new ArgumentException("The declared key field must use an integral C# data type compatible with the generated long Id.");
+        }
+        else if (hasPrimaryKey != false)
+        {
+            // The import dialog leaves the key empty and promises the first column; honour that, but
+            // pick the first integral output rather than failing when the leading column is text.
+            keyIndex = normalized.FindIndex(item => IsIntegralType(item.DataType));
+            if (keyIndex < 0 && hasPrimaryKey == true)
+                throw new ArgumentException(
+                    "The view entity has no integral output to key on. " +
+                    $"Available columns: {string.Join(", ", normalized.Select(item => $"{item.ColumnName} ({item.DataType})"))}.");
+        }
 
-        normalized[keyIndex] = normalized[keyIndex] with { Name = "Id", DataType = "long", IsNullable = false, IsPrimaryKey = true };
-        var duplicateMappedProperty = normalized.GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault(group => group.Count() > 1);
-        if (duplicateMappedProperty != null)
-            throw new ArgumentException($"View fields map to duplicate generated property name: {duplicateMappedProperty.Key}.");
+        if (keyIndex >= 0)
+        {
+            normalized[keyIndex] = normalized[keyIndex] with { Name = "Id", DataType = "long", IsNullable = false, IsPrimaryKey = true };
+            var duplicateMappedProperty = normalized.GroupBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateMappedProperty != null)
+                throw new ArgumentException($"View fields map to duplicate generated property name: {duplicateMappedProperty.Key}.");
+        }
 
         return normalized
             .OrderBy(item => item.IsPrimaryKey ? 0 : 1)
@@ -1101,28 +1137,38 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
             .ToList();
     }
 
-    private static List<MappedViewField> BuildInferredViewFields(
+    internal static List<MappedViewField> BuildInferredViewFields(
         IReadOnlyList<ViewBuilderViewColumnDto> columns,
         string? requestedKeyColumn,
-        string viewName)
+        string viewName,
+        bool? hasPrimaryKey)
     {
-        var keyColumn = string.IsNullOrWhiteSpace(requestedKeyColumn)
-            ? columns[0].Name
-            : requestedKeyColumn.Trim();
-        var key = columns.FirstOrDefault(item =>
-            string.Equals(item.Name, keyColumn, StringComparison.OrdinalIgnoreCase));
-        if (key is null)
-            throw new InvalidOperationException($"Key column {keyColumn} does not exist on view {viewName}.");
-        if (!IsIntegralType(key.DataType))
-            throw new InvalidOperationException("The read-only entity key column must be integral to support the generated long Id service contract.");
+        var keyColumn = string.IsNullOrWhiteSpace(requestedKeyColumn) ? null : requestedKeyColumn.Trim();
+        ViewBuilderViewColumnDto? key = null;
+        if (keyColumn != null)
+        {
+            key = columns.FirstOrDefault(item =>
+                string.Equals(item.Name, keyColumn, StringComparison.OrdinalIgnoreCase));
+            if (key is null)
+                throw new InvalidOperationException($"Key column {keyColumn} does not exist on view {viewName}.");
+            if (!IsIntegralType(key.DataType))
+                throw new InvalidOperationException("The read-only entity key column must be integral to support the generated long Id service contract.");
+        }
+        else if (hasPrimaryKey != false)
+        {
+            key = columns.FirstOrDefault(item => IsIntegralType(item.DataType));
+            if (key is null && hasPrimaryKey == true)
+                throw new InvalidOperationException(
+                    $"View {viewName} exposes no integral column to key on. Register it with HasPrimaryKey=false to make it a keyless read-only consumer.");
+        }
 
         var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return columns
-            .OrderBy(column => string.Equals(column.Name, key.Name, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .OrderBy(column => key is not null && string.Equals(column.Name, key.Name, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(column => column.Ordinal)
             .Select((column, index) =>
             {
-                var isKey = string.Equals(column.Name, key.Name, StringComparison.OrdinalIgnoreCase);
+                var isKey = key is not null && string.Equals(column.Name, key.Name, StringComparison.OrdinalIgnoreCase);
                 var propertyName = isKey ? "Id" : ToPascalIdentifier(column.Name);
                 if (!propertyNames.Add(propertyName))
                     throw new InvalidOperationException($"View columns map to duplicate entity property name: {propertyName}.");
@@ -1243,7 +1289,7 @@ public sealed class ProjectViewBuilderService : IProjectViewBuilderService
     private static bool IsSemanticColumn(string propertyName, string semanticName)
         => string.Equals(propertyName, semanticName, StringComparison.OrdinalIgnoreCase);
 
-    private sealed record MappedViewField(
+    internal sealed record MappedViewField(
         string Name,
         string DisplayName,
         string ColumnName,

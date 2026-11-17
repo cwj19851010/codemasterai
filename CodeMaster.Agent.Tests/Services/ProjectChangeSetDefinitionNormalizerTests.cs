@@ -128,6 +128,158 @@ public sealed class ProjectChangeSetDefinitionNormalizerTests
         Assert.Equal("number", fields[1].FormControlType);
     }
 
+    /// <summary>
+    /// A binding whose field is gone must not fail the stage. The plan's control bindings are compiled
+    /// from the declared field list, but a read-only view entity rebuilds its fields from the SELECT's
+    /// result columns when it is created — its key column is renamed to Id, so a binding that was
+    /// correct at compile time can point at a column that no longer exists. Throwing here failed the
+    /// whole stage and skipped every task queued behind it, which made the run permanently stuck.
+    /// </summary>
+    [Fact]
+    public void Drops_a_binding_whose_field_no_longer_exists()
+    {
+        var json = """
+        {
+          "action": "configureFieldControls",
+          "generationMode": "None",
+          "controlBindings": [
+            { "entity": "Order", "field": "RemovedColumnId", "formControlType": "select-table", "relatedEntityName": "Customer" },
+            { "entity": "Order", "field": "CustomerId", "formControlType": "number" }
+          ]
+        }
+        """;
+
+        var result = ProjectChangeSetDefinitionNormalizer.NormalizeForTest(
+            "setup_field_controls",
+            json,
+            CreateBlueprint());
+
+        var fieldUpdate = Assert.Single(Assert.Single(result.EntityUpdates).UpdatedFields);
+        Assert.Equal(13, fieldUpdate.FieldId);
+        Assert.Equal("number", fieldUpdate.FormControlType);
+    }
+
+    /// <summary>
+    /// A plan's field-control stage is compiled from the declared field list, which can name a
+    /// label column the target entity never got. In a real run this rejected the whole change set
+    /// with "references missing field(s) Name on related entity 'MaterialReceiptItem'", failed the
+    /// stage, skipped every task behind it and forced two full plan regenerations. Repair it to a
+    /// real label column instead of refusing the change set.
+    /// </summary>
+    [Fact]
+    public void Repairs_a_related_display_field_the_target_entity_does_not_have()
+    {
+        var blueprint = CreateBlueprint();
+        var customer = blueprint.Modules[0].Entities.Single(item => item.Name == "Customer");
+        customer.HasPrimaryKey = true;
+        customer.Fields.Clear();
+        customer.Fields.Add(new AiFieldBlueprintDto
+        {
+            Id = 21, Name = "Id", Description = "Id", DataType = "long",
+            IsPrimaryKey = true, FormControlType = "number"
+        });
+        customer.Fields.Add(new AiFieldBlueprintDto
+        {
+            Id = 22, Name = "ReceiptNo", Description = "单号", DataType = "string",
+            FormControlType = "input"
+        });
+
+        var json = """
+        {
+          "action": "configureFieldControls",
+          "generationMode": "None",
+          "controlBindings": [
+            {
+              "entity": "Order", "field": "CustomerId", "formControlType": "select-table",
+              "relatedEntityName": "Customer", "relatedEntityIdField": "Id",
+              "relatedEntityDisplayFields": ["Name"]
+            }
+          ]
+        }
+        """;
+
+        var result = ProjectChangeSetDefinitionNormalizer.NormalizeForTest(
+            "setup_engineeringmanagement_controls", json, blueprint);
+
+        var fieldUpdate = Assert.Single(Assert.Single(result.EntityUpdates).UpdatedFields);
+        // The picker survives; only the impossible label is replaced by a real text column.
+        Assert.Equal("select-table", fieldUpdate.FormControlType);
+        Assert.Equal("Customer", fieldUpdate.RelatedEntityName);
+        Assert.Equal("Id", fieldUpdate.RelatedEntityIdField);
+        Assert.Equal("[\"ReceiptNo\"]", fieldUpdate.RelatedEntityDisplayFields);
+
+        var validation = CodeMasterProjectChangeSetRules.Validate(blueprint, result);
+        Assert.DoesNotContain(validation.Errors,
+            error => error.Contains("references missing field", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Falls_back_to_the_key_column_when_the_related_entity_has_no_text_column()
+    {
+        var blueprint = CreateBlueprint();
+        var customer = blueprint.Modules[0].Entities.Single(item => item.Name == "Customer");
+        customer.HasPrimaryKey = true;
+        customer.Fields.Clear();
+        customer.Fields.Add(new AiFieldBlueprintDto
+        {
+            Id = 21, Name = "Id", Description = "Id", DataType = "long",
+            IsPrimaryKey = true, FormControlType = "number"
+        });
+        customer.Fields.Add(new AiFieldBlueprintDto
+        {
+            Id = 22, Name = "Amount", Description = "金额", DataType = "decimal",
+            FormControlType = "number"
+        });
+
+        var json = """
+        {
+          "action": "configureFieldControls", "generationMode": "None",
+          "controlBindings": [
+            { "entity": "Order", "field": "CustomerId", "formControlType": "select-table",
+              "relatedEntityName": "Customer", "relatedEntityIdField": "Id",
+              "relatedEntityDisplayFields": "[\"Name\"]" }
+          ]
+        }
+        """;
+
+        var result = ProjectChangeSetDefinitionNormalizer.NormalizeForTest(
+            "setup_engineeringmanagement_controls", json, blueprint);
+
+        var fieldUpdate = Assert.Single(Assert.Single(result.EntityUpdates).UpdatedFields);
+        Assert.Equal("select-table", fieldUpdate.FormControlType);
+        Assert.Equal("[\"Id\"]", fieldUpdate.RelatedEntityDisplayFields);
+
+        var validation = CodeMasterProjectChangeSetRules.Validate(blueprint, result);
+        Assert.DoesNotContain(validation.Errors,
+            error => error.Contains("references missing field", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// A correct binding must be passed through byte-for-byte — the repair is only allowed to touch
+    /// what is provably wrong.
+    /// </summary>
+    [Fact]
+    public void Leaves_a_valid_related_display_field_untouched()
+    {
+        var json = """
+        {
+          "action": "configureFieldControls", "generationMode": "None",
+          "controlBindings": [
+            { "entity": "Order", "field": "CustomerId", "formControlType": "select-table",
+              "relatedEntityName": "Customer", "relatedEntityIdField": "Id",
+              "relatedEntityDisplayFields": "[\"Name\"]" }
+          ]
+        }
+        """;
+
+        var result = ProjectChangeSetDefinitionNormalizer.NormalizeForTest(
+            "setup_field_controls", json, CreateBlueprint());
+
+        var fieldUpdate = Assert.Single(Assert.Single(result.EntityUpdates).UpdatedFields);
+        Assert.Equal("[\"Name\"]", fieldUpdate.RelatedEntityDisplayFields);
+        Assert.Equal("Id", fieldUpdate.RelatedEntityIdField);
+    }
+
     [Fact]
     public void Converts_top_level_relations_into_source_entity_updates()
     {

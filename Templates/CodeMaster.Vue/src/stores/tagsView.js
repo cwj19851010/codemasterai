@@ -1,5 +1,9 @@
 import { defineStore } from 'pinia'
 
+// 新增/编辑/详情页每次进入都要按 query 里的 id 重新加载数据，不能进 keep-alive：
+// 缓存按组件名命中，同路由不同 query 的多个标签会共用同一个实例，切回来仍是第一次的数据
+const RECORD_PATH_PATTERN = /\/(add|edit|detail)\/?$/i
+
 export const useTagsViewStore = defineStore('tagsView', {
   state: () => ({
     visitedViews: [], // 访问过的视图
@@ -26,16 +30,20 @@ export const useTagsViewStore = defineStore('tagsView', {
 
     // 添加访问过的视图
     addVisitedView(view) {
-      // 检查是否已存在（包括参数）
-      const exists = this.visitedViews.some(v => {
-        if (v.path !== view.path) return false
-        // 比较查询参数
-        const vQuery = JSON.stringify(v.query || {})
-        const viewQuery = JSON.stringify(view.query || {})
-        return vQuery === viewQuery
-      })
+      // 同一路由只保留一个标签，参数（如 id）变化时更新为最近一次访问
+      const exists = this.visitedViews.find(v => v.path === view.path)
 
-      if (exists) return
+      if (exists) {
+        Object.assign(exists, {
+          name: view.name,
+          title: view.meta?.title || exists.title || 'no-name',
+          query: view.query,
+          params: view.params,
+          fullPath: view.fullPath,
+          meta: { ...view.meta }
+        })
+        return
+      }
 
       this.visitedViews.push({
         name: view.name,
@@ -53,7 +61,7 @@ export const useTagsViewStore = defineStore('tagsView', {
       if (!view?.name) return
 
       // 如果路由配置了不缓存，则不添加
-      if (view.meta?.noCache) {
+      if (view.meta?.noCache || RECORD_PATH_PATTERN.test(view.path || '')) {
         this.delCachedView(view)
         return
       }
@@ -78,12 +86,7 @@ export const useTagsViewStore = defineStore('tagsView', {
 
     // 删除访问过的视图
     delVisitedView(view) {
-      for (const [i, v] of this.visitedViews.entries()) {
-        if (v.path === view.path && JSON.stringify(v.query) === JSON.stringify(view.query)) {
-          this.visitedViews.splice(i, 1)
-          break
-        }
-      }
+      this.visitedViews = this.visitedViews.filter(v => v.path !== view.path)
     },
 
     // 删除缓存视图
@@ -108,9 +111,7 @@ export const useTagsViewStore = defineStore('tagsView', {
 
     // 删除其他访问过的视图
     delOthersVisitedViews(view) {
-      this.visitedViews = this.visitedViews.filter(v => {
-        return v.meta?.affix || (v.path === view.path && JSON.stringify(v.query) === JSON.stringify(view.query))
-      })
+      this.visitedViews = this.visitedViews.filter(v => v.meta?.affix || v.path === view.path)
     },
 
     // 删除其他缓存视图
@@ -148,12 +149,17 @@ export const useTagsViewStore = defineStore('tagsView', {
 
     // 更新访问过的视图
     updateVisitedView(view) {
-      for (let v of this.visitedViews) {
-        if (v.path === view.path) {
-          v = Object.assign(v, view)
-          break
-        }
+      const target = this.visitedViews.find(v => v.path === view.path)
+      if (target) {
+        Object.assign(target, view.meta ? { ...view, meta: { ...view.meta } } : view)
       }
+    },
+
+    // 清理历史持久化里的重复标签（同一路由只保留最后访问的一次）
+    dedupeVisitedViews() {
+      const lastIndex = new Map()
+      this.visitedViews.forEach((view, index) => lastIndex.set(view.path, index))
+      this.visitedViews = this.visitedViews.filter((view, index) => lastIndex.get(view.path) === index)
     }
   }
 })

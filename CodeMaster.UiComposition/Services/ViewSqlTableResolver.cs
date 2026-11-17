@@ -202,7 +202,10 @@ internal static class ViewSqlTableResolver
 
             var alias = ReadAlias(match);
             var effectiveAlias = alias ?? table;
-            if (mapping.ColumnsByEntity.TryGetValue(table, out var columns))
+            // 列名表按实体名登记，而 FROM 后面可能是实体名、写出来的表名或物理表名，
+            // 所以要先把这三个都反查成实体名，否则 s.Xxx 的别名不会被登记。
+            var entityName = mapping.EntityByTable.TryGetValue(table, out var fromTable) ? fromTable : table;
+            if (mapping.ColumnsByEntity.TryGetValue(entityName, out var columns))
                 aliasColumns[effectiveAlias] = columns;
             // 没有别名时补上实体名，让原有的 <Entity>.<Property> 引用继续可解析。
             // 正则的别名组会把 WHERE / GROUP 这类关键字也吞进去，替换时要原样吐回，
@@ -436,6 +439,16 @@ internal static class ViewSqlTableResolver
             tableByEntity[entity.Name] = physical;
             entityByTable[physical] = entity.Name;
             entityNameById[entity.Id] = entity.Name;
+            // 模型经常直接照抄实体目录里的物理表名（"FROM eng_supplier s"）。只登记实体名时
+            // ReplaceTables 匹配不到这个 FROM，别名就不会登记，后面所有 s.Xxx 都保持设计期
+            // 列名，PostgreSQL 折成小写后必然找不到列。把写出来的表名和物理名一起登记。
+            if (!string.IsNullOrWhiteSpace(entity.TableName))
+            {
+                var declared = entity.TableName.Trim();
+                tableByEntity.TryAdd(declared, physical);
+                entityByTable.TryAdd(declared, entity.Name);
+            }
+            tableByEntity.TryAdd(physical, physical);
         }
 
         foreach (var field in fields)

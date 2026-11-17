@@ -535,7 +535,10 @@ internal sealed class AiProjectValidationRunner : IAiProjectValidationRunner
             ["agent-regression"] = ("dotnet", ["test", "CodeMaster.Agent.Tests/CodeMaster.Agent.Tests.csproj", "-c", "Release", "--no-restore"], null),
             ["codegen-regression"] = ("dotnet", ["test", "CodeMaster.CodeGenerator.Tests/CodeMaster.CodeGenerator.Tests.csproj", "-c", "Release", "--no-restore"], null),
             ["webapi-build"] = ("dotnet", ["build", "CodeMaster.WebApi/CodeMaster.WebApi.csproj", "-c", "Release", "--no-restore"], null),
-            ["vue-build"] = (OperatingSystem.IsWindows() ? "npm.cmd" : "npm", ["run", "build"], "CodeMaster.Vue")
+            // npm 经 cmd.exe 启动，否则 npm.cmd 的 %~dp0 会退化成 cwd，node 报 Cannot find module。
+            ["vue-build"] = OperatingSystem.IsWindows()
+                ? ("cmd.exe", ["/c", "npm", "run", "build"], "CodeMaster.Vue")
+                : ("npm", ["run", "build"], "CodeMaster.Vue")
         };
 
     public AiProjectValidationRunner()

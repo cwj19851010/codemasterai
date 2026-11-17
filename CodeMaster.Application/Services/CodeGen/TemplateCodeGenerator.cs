@@ -153,6 +153,12 @@ public class TemplateCodeGenerator
                     if (cs != null)
                     {
                         childSection.Merge(ScriptBuilder.ScriptSection.FromMarker(cs));
+                        // A detail page has no child composable (there is no detail dialog and the
+                        // card is read-only), so its column scripts would otherwise be dropped and
+                        // the card would reference helpers the page scope never declares. Merging
+                        // the field section into the page scope keeps getDictLabel/formatDate bound.
+                        if (pageType == "detail")
+                            globalSection.Merge(ScriptBuilder.ScriptSection.FromMarker(cs));
                         var baseGenId = BuildColumnGenId(f);
                         var genIds = BuildActualGenIds(baseGenId, fieldContext, "list");
                         RecordChildFieldScript(result, f, cs, genIds, childEntity.Name, BuildFieldScriptLookupGenIds(baseGenId, f, "col"));
@@ -393,12 +399,16 @@ public class TemplateCodeGenerator
         if (childExportsByEntity.Count > 0)
         {
             var childLines = new List<string>();
-            var mainExportSet = new HashSet<string>(mainExports);
+            // Shared helpers (formatDate, getDictLabel, toDisplayBool …) are exported by every
+            // child composable that needs them. Binding the same name twice in one <script setup>
+            // is a redeclaration error, so names already bound by the page or an earlier child
+            // are dropped instead of re-imported.
+            var boundExportSet = new HashSet<string>(mainExports, StringComparer.Ordinal);
             foreach (var rel in relations)
             {
                 if (!_relationContexts.TryGetValue(rel.Id, out var relCtx)) continue;
                 if (!childExportsByEntity.TryGetValue(relCtx.ChildEntityName, out var exports) || exports.Count == 0) continue;
-                var childExportNames = string.Join(", ", exports.Where(e => !mainExportSet.Contains(e)));
+                var childExportNames = string.Join(", ", exports.Where(e => boundExportSet.Add(e)));
                 if (string.IsNullOrWhiteSpace(childExportNames)) continue;
                 childLines.Add($"import {{ use{relCtx.ChildEntityName}Child }} from './{relCtx.ChildEntityNameLower}.{pageType}.auto.js';");
                 childLines.Add($"const {{ {childExportNames} }} = use{relCtx.ChildEntityName}Child(form);");
@@ -717,6 +727,14 @@ public class TemplateCodeGenerator
         if (pageSection == "list")
             await MergeListSupportScriptAsync(script, field, fctx);
         AddSelectTableDisplaySupportScript(script, fctx, pageSection);
+
+        // The list column slot emits formatDate(...) for plain date/datetime fields, but the helper
+        // used to be injected only as a side effect of a select-table display field. A page without
+        // such a field therefore rendered {{ formatDate(row.signDate, true) }} into a composable
+        // that never declared it — the child card inside add.vue/edit.vue was the common case.
+        if (pageSection == "list" && UsesDateFormatSlot(field))
+            AddOrReplaceMarkerFunction(script, BuildDateFormatFunction());
+
         return (html, script, fctx);
     }
 
@@ -1094,21 +1112,7 @@ public class TemplateCodeGenerator
         });
 
         if (typedFields.Any(IsDateDisplayField))
-        {
-            AddOrReplaceMarkerFunction(script, new FunctionBlock
-            {
-                Name = "formatDate",
-                Parameters = "val, withTime",
-                Body =
-                {
-                    "if (!val) return '-'",
-                    "const d = new Date(val)",
-                    "const pad = (n) => String(n).padStart(2, '0')",
-                    "const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`",
-                    "return withTime ? `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}` : date"
-                }
-            });
-        }
+            AddOrReplaceMarkerFunction(script, BuildDateFormatFunction());
 
         if (typedFields.Any(IsSwitchDisplayField))
         {
@@ -1186,6 +1190,29 @@ public class TemplateCodeGenerator
         string.Equals(field.FormControlType, "datetime", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(field.DataType, "DateTime", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(field.DataType, "DateTime?", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when the list column template wraps the cell in a formatDate(...) slot. Keep this in
+    /// sync with the slot switch in <see cref="RenderFieldControl"/>: emitting the call without
+    /// declaring the helper breaks the page at render time.
+    /// </summary>
+    private static bool UsesDateFormatSlot(EntityField field) =>
+        string.Equals(field.FormControlType, "date", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(field.FormControlType, "datetime", StringComparison.OrdinalIgnoreCase);
+
+    private static FunctionBlock BuildDateFormatFunction() => new()
+    {
+        Name = "formatDate",
+        Parameters = "val, withTime",
+        Body =
+        {
+            "if (!val) return '-'",
+            "const d = new Date(val)",
+            "const pad = (n) => String(n).padStart(2, '0')",
+            "const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`",
+            "return withTime ? `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}` : date"
+        }
+    };
 
     private static bool IsSwitchDisplayField(DisplayFieldContext field) =>
         string.Equals(field.FormControlType, "switch", StringComparison.OrdinalIgnoreCase) ||

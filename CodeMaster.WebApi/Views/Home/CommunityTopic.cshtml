@@ -1,108 +1,323 @@
+@using CodeMaster.WebApi.ContentRendering
 @model CodeMaster.WebApi.Models.CommunityTopicViewModel
 @{
-    ViewData["Title"] = $"{Model.Topic.Title} - CodeMaster 社区";
-    ViewData["Description"] = Model.Topic.Content.Length > 120 ? Model.Topic.Content.Substring(0, 120) : Model.Topic.Content;
+    var topic = Model.Topic;
+    ViewData["Title"] = $"{topic.Title} - CodeMaster 社区";
+    ViewData["Description"] = string.IsNullOrWhiteSpace(topic.Excerpt) ? topic.Title : topic.Excerpt;
+    var canManageTopic = topic.IsOwner || Model.IsAdmin;
+    var acceptedReply = Model.Replies.FirstOrDefault(x => x.IsAccepted);
 }
 
-<section class="page-hero topic-hero">
-    <p class="eyebrow">@Model.Topic.CategoryName</p>
-    <h1>@Model.Topic.Title</h1>
-    <p>@Model.Topic.AuthorName 发布于 @Model.Topic.CreateTime.ToString("yyyy-MM-dd HH:mm")，@Model.Topic.ViewCount 次浏览，@Model.Topic.ReplyCount 条回复。</p>
-</section>
+<div class="forum-page forum-detail-page"
+     id="forumTopic"
+     data-topic-id="@topic.Id"
+     data-topic-title="@topic.Title"
+     data-logged-in="@(Model.CurrentUserId.HasValue ? "true" : "false")"
+     data-owner="@(topic.IsOwner ? "true" : "false")"
+     data-admin="@(Model.IsAdmin ? "true" : "false")"
+     data-locked="@(topic.IsLocked ? "true" : "false")"
+     data-pinned="@(topic.IsPinned ? "true" : "false")"
+     data-featured="@(topic.IsFeatured ? "true" : "false")">
 
-<section class="section topic-detail-page">
-    <article class="topic-detail-card">
-        <div class="topic-detail-meta">
-            <span>@Model.Topic.CategoryName</span>
-            @if (Model.Topic.IsPinned)
-            {
-                <span>置顶</span>
-            }
-            @if (Model.Topic.IsFeatured)
-            {
-                <span>精华</span>
-            }
-        </div>
-        <div class="topic-content">@Model.Topic.Content</div>
-    </article>
+    <nav class="forum-breadcrumb" aria-label="面包屑">
+        <a href="/community">社区</a>
+        <span aria-hidden="true">/</span>
+        <a href="/community?categoryId=@topic.CategoryId">@topic.CategoryName</a>
+        <span aria-hidden="true">/</span>
+        <span class="current" aria-current="page">@topic.Title</span>
+    </nav>
 
-    <section class="reply-section">
-        <div class="reply-head">
-            <h2>回复</h2>
-            <span>@Model.Replies.Count 条</span>
-        </div>
-
-        @if (!Model.Replies.Any())
-        {
-            <div class="empty-state">
-                <h3>还没有回复</h3>
-                <p>你可以成为第一个参与讨论的人。</p>
-            </div>
-        }
-        else
-        {
-            @foreach (var reply in Model.Replies)
-            {
-                <article class="reply-row">
-                    <div class="reply-avatar">@reply.AuthorName.FirstOrDefault()</div>
-                    <div>
-                        <div class="reply-meta">
-                            <strong>@reply.AuthorName</strong>
-                            <span>@reply.CreateTime.ToString("yyyy-MM-dd HH:mm")</span>
-                            @if (reply.IsAccepted)
-                            {
-                                <span>已采纳</span>
-                            }
-                        </div>
-                        <p>@reply.Content</p>
+    <div class="forum-detail">
+        <div class="forum-detail-main">
+            <article class="forum-topic-card">
+                @if (topic.IsPinned || topic.IsFeatured || topic.IsSolved || topic.IsLocked)
+                {
+                    <div class="forum-topic-badges">
+                        @if (topic.IsPinned)
+                        {
+                            <span class="forum-badge pinned">置顶</span>
+                        }
+                        @if (topic.IsFeatured)
+                        {
+                            <span class="forum-badge featured">精华</span>
+                        }
+                        @if (topic.IsSolved)
+                        {
+                            <span class="forum-badge solved">已解决</span>
+                        }
+                        @if (topic.IsLocked)
+                        {
+                            <span class="forum-badge locked">已锁定</span>
+                        }
                     </div>
-                </article>
-            }
-        }
+                }
 
-        <form id="replyForm" class="reply-form">
-            <h2>发表回复</h2>
-            <textarea name="content" rows="6" required minlength="2" placeholder="写下你的看法、补充信息或解决方案"></textarea>
-            <div class="form-actions">
-                <button class="button primary" type="submit">回复</button>
-                <a class="button secondary" href="/community">返回社区</a>
-                <span id="replyMessage" class="form-message"></span>
+                <h1 class="forum-topic-h1">@topic.Title</h1>
+
+                <div class="forum-byline">
+                    <span class="forum-avatar sm" style="background:@CommunityViewHelpers.AvatarColor(topic.AuthorName)" aria-hidden="true">
+                        @CommunityViewHelpers.Initial(topic.AuthorName)
+                    </span>
+                    <div class="forum-byline-text">
+                        <strong>@topic.AuthorName</strong>
+                        <span>
+                            发布于 <time datetime="@CommunityViewHelpers.Iso(topic.CreateTime)" data-relative>@topic.CreateTime.ToString("yyyy-MM-dd HH:mm")</time>
+                            <span class="forum-sep" aria-hidden="true">·</span>
+                            @topic.ViewCount 次浏览
+                        </span>
+                    </div>
+                </div>
+
+                <div class="forum-markdown forum-topic-body" data-topic-body>
+                    @Html.Raw(CommunityMarkdown.ToHtml(topic.Content))
+                </div>
+
+                <textarea class="forum-edit-source" id="topicEditSource" hidden>@topic.Content</textarea>
+
+                <section class="forum-edit-panel" id="topicEditPanel" hidden>
+                    <h2 class="forum-edit-title">编辑主题</h2>
+                    <form id="topicEditForm" class="forum-form">
+                        <label class="forum-field">
+                            <span>标题</span>
+                            <input name="title" required minlength="4" maxlength="120" />
+                        </label>
+                        <div class="forum-field">
+                            <span>正文 <small>支持 Markdown</small></span>
+                            <div class="md-editor" data-editor>
+                                @await Html.PartialAsync("_ForumMarkdownToolbar")
+                                <textarea name="content" required minlength="10" rows="10" aria-label="主题正文"></textarea>
+                                <div class="md-preview forum-markdown" hidden></div>
+                            </div>
+                        </div>
+                        <div class="forum-form-foot">
+                            <button class="forum-btn primary" type="submit">保存修改</button>
+                            <button class="forum-btn" type="button" id="cancelEditTopic">取消</button>
+                            <span class="forum-form-msg" data-form-msg></span>
+                        </div>
+                    </form>
+                </section>
+
+                <div class="forum-actions">
+                    <button class="forum-btn like @(topic.Liked ? "active" : "")" type="button"
+                            data-like aria-pressed="@(topic.Liked ? "true" : "false")">
+                        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 16.2S3.4 12.4 3.4 7.9a3.4 3.4 0 0 1 6.6-1.1 3.4 3.4 0 0 1 6.6 1.1c0 4.5-6.6 8.3-6.6 8.3Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+                        <span>赞</span>
+                        <strong data-like-count>@topic.LikeCount</strong>
+                    </button>
+                    <button class="forum-btn" type="button" data-scroll-reply>
+                        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M4 4.8h12v8.4H8.6L5 16V13.2H4Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+                        回复 <span>@topic.ReplyCount</span>
+                    </button>
+                    <button class="forum-btn" type="button" data-share>
+                        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8 12 16 4M12 4h4v4M14.4 11.2V16H4V5.6h4.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                        分享
+                    </button>
+                    <span class="forum-actions-spacer"></span>
+                    @if (canManageTopic)
+                    {
+                        <button class="forum-btn" type="button" data-edit-topic>编辑</button>
+                        <button class="forum-btn danger" type="button" data-delete-topic>删除</button>
+                    }
+                </div>
+
+                @if (Model.IsAdmin)
+                {
+                    <div class="forum-admin">
+                        <span class="forum-admin-label">版主操作</span>
+                        <button class="forum-admin-btn @(topic.IsPinned ? "is-on" : "")" type="button" data-flag="pinned">置顶</button>
+                        <button class="forum-admin-btn @(topic.IsFeatured ? "is-on" : "")" type="button" data-flag="featured">精华</button>
+                        <button class="forum-admin-btn @(topic.IsLocked ? "is-on" : "")" type="button" data-flag="locked">锁定</button>
+                    </div>
+                }
+            </article>
+
+            <section class="forum-replies" id="replies">
+                <div class="forum-replies-head">
+                    <h2>@Model.Replies.Count 条回复</h2>
+                    @if (acceptedReply != null)
+                    {
+                        <span class="forum-solved-hint">已采纳一个回答</span>
+                    }
+                    else if (topic.IsOwner && !topic.IsSolved && Model.Replies.Any(r => r.UserId != topic.UserId))
+                    {
+                        <span class="forum-solved-hint muted">你可以采纳一个回复，标记问题已解决</span>
+                    }
+                </div>
+
+                @if (!Model.Replies.Any())
+                {
+                    <div class="forum-empty compact">
+                        <h3>还没有回复</h3>
+                        <p>写下你的思路或补充信息，成为第一个回答的人。</p>
+                    </div>
+                }
+                else
+                {
+                    @foreach (var reply in Model.Replies)
+                    {
+                        <article class="forum-reply @(reply.IsAccepted ? "accepted" : "")" id="reply-@reply.Id" data-reply-id="@reply.Id" data-reply-author="@reply.AuthorName">
+                            <span class="forum-avatar sm" style="background:@CommunityViewHelpers.AvatarColor(reply.AuthorName)" aria-hidden="true">
+                                @CommunityViewHelpers.Initial(reply.AuthorName)
+                            </span>
+                            <div class="forum-reply-main">
+                                <div class="forum-reply-head">
+                                    <strong>@reply.AuthorName</strong>
+                                    @if (reply.UserId == topic.UserId)
+                                    {
+                                        <span class="forum-tag owner">楼主</span>
+                                    }
+                                    @if (reply.IsAccepted)
+                                    {
+                                        <span class="forum-tag solved">已采纳</span>
+                                    }
+                                    <time datetime="@CommunityViewHelpers.Iso(reply.CreateTime)" data-relative>@reply.CreateTime.ToString("yyyy-MM-dd HH:mm")</time>
+                                    @if (reply.UpdateTime.HasValue)
+                                    {
+                                        <span class="forum-edited">已编辑</span>
+                                    }
+                                </div>
+                                @if (reply.ParentReplyId.HasValue && !string.IsNullOrWhiteSpace(reply.ParentAuthorName))
+                                {
+                                    <div class="forum-quote">回复 @reply.ParentAuthorName</div>
+                                }
+                                <div class="forum-markdown forum-reply-body">
+                                    @Html.Raw(CommunityMarkdown.ToHtml(reply.Content))
+                                </div>
+                                <textarea class="forum-edit-source" hidden>@reply.Content</textarea>
+                                <div class="forum-reply-actions">
+                                    <button type="button" data-reply-to="@reply.Id" data-reply-name="@reply.AuthorName">回复</button>
+                                    @if (topic.IsOwner && reply.UserId != topic.UserId)
+                                    {
+                                        <button type="button" data-accept="@reply.Id" data-accepted="@(reply.IsAccepted ? "true" : "false")">
+                                            @(reply.IsAccepted ? "取消采纳" : "采纳")
+                                        </button>
+                                    }
+                                    @if (reply.IsOwner || Model.IsAdmin)
+                                    {
+                                        <button type="button" data-edit-reply>编辑</button>
+                                        <button type="button" data-delete-reply>删除</button>
+                                    }
+                                </div>
+                            </div>
+                        </article>
+                    }
+                }
+
+                <section class="forum-card forum-reply-compose" id="replyComposer">
+                    <div class="forum-compose-head">
+                        <h2>发表回复</h2>
+                        <span class="forum-compose-hint">支持 Markdown</span>
+                    </div>
+                    @if (topic.IsLocked)
+                    {
+                        <p class="forum-locked">主题已被版主锁定，暂时不能回复。</p>
+                    }
+                    else if (!Model.CurrentUserId.HasValue)
+                    {
+                        <div class="forum-login-cta">
+                            <p>登录后即可参与讨论、点赞和采纳回答。</p>
+                            <a class="forum-btn primary" href="/register">注册 / 登录</a>
+                        </div>
+                    }
+                    else
+                    {
+                        <form id="replyForm" class="forum-form">
+                            <div class="forum-quote-chip" id="replyTarget" hidden>
+                                <span>正在回复 <strong id="replyTargetName"></strong></span>
+                                <button type="button" id="clearReplyTarget" aria-label="取消引用">×</button>
+                            </div>
+                            <div class="md-editor" data-editor>
+                                @await Html.PartialAsync("_ForumMarkdownToolbar")
+                                <textarea name="content" required minlength="2" rows="7" aria-label="回复内容" placeholder="补充信息、给出方案，或者指出问题所在。"></textarea>
+                                <div class="md-preview forum-markdown" hidden></div>
+                            </div>
+                            <div class="forum-form-foot">
+                                <button class="forum-btn primary" type="submit">发布回复</button>
+                                <span class="forum-form-msg" data-form-msg></span>
+                            </div>
+                        </form>
+                    }
+                </section>
+            </section>
+        </div>
+
+        <aside class="forum-detail-rail" aria-label="主题信息">
+            <div class="forum-card">
+                <h2 class="forum-card-title">主题信息</h2>
+                <dl class="forum-facts">
+                    <div>
+                        <dt>版块</dt>
+                        <dd><a href="/community?categoryId=@topic.CategoryId">@topic.CategoryName</a></dd>
+                    </div>
+                    <div>
+                        <dt>作者</dt>
+                        <dd>@topic.AuthorName</dd>
+                    </div>
+                    <div>
+                        <dt>发布</dt>
+                        <dd><time datetime="@CommunityViewHelpers.Iso(topic.CreateTime)" data-relative>@topic.CreateTime.ToString("yyyy-MM-dd HH:mm")</time></dd>
+                    </div>
+                    <div>
+                        <dt>最后回复</dt>
+                        <dd>
+                            @if (topic.LastReplyTime.HasValue)
+                            {
+                                <time datetime="@CommunityViewHelpers.Iso(topic.LastReplyTime.Value)" data-relative>@topic.LastReplyTime.Value.ToString("yyyy-MM-dd HH:mm")</time>
+                            }
+                            else
+                            {
+                                <span>暂无回复</span>
+                            }
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>浏览</dt>
+                        <dd>@topic.ViewCount</dd>
+                    </div>
+                    <div>
+                        <dt>状态</dt>
+                        <dd>
+                            @if (topic.IsLocked)
+                            {
+                                <span class="forum-status locked">已锁定</span>
+                            }
+                            else if (topic.IsSolved)
+                            {
+                                <span class="forum-status solved">已解决</span>
+                            }
+                            else
+                            {
+                                <span class="forum-status open">讨论中</span>
+                            }
+                        </dd>
+                    </div>
+                </dl>
             </div>
-        </form>
-    </section>
-</section>
+
+            <div class="forum-card forum-rules">
+                <h2 class="forum-card-title">回复须知</h2>
+                <ul>
+                    <li>先读懂原文，再给出可执行的建议。</li>
+                    <li>贴代码请用代码块，并说明运行环境。</li>
+                    <li>问题解决后，作者可采纳一条回复。</li>
+                </ul>
+            </div>
+
+            <div class="forum-card forum-about">
+                <h2 class="forum-card-title">继续浏览</h2>
+                <p>回到社区列表，按「精华」或「已解决」筛选，看看别人是怎么解决的。</p>
+                <a class="forum-link" href="/community?sort=featured">查看精华主题 →</a>
+            </div>
+        </aside>
+    </div>
+</div>
+
+@section Head {
+    <link rel="stylesheet" href="/site/vendor/highlight-github-dark.min.css" />
+    <link rel="stylesheet" href="/site/forum.css?v=2" />
+}
 
 @section Scripts {
-<script>
-const tokenKeys = ['Admin-Token', 'access_token', 'token']
-const getToken = () => tokenKeys.map(key => localStorage.getItem(key)).find(Boolean)
-const replyMessage = document.getElementById('replyMessage')
-document.getElementById('replyForm').addEventListener('submit', async (event) => {
-  event.preventDefault()
-  const token = getToken()
-  if (!token) {
-    window.location.href = '/register'
-    return
-  }
-  const form = event.currentTarget
-  replyMessage.textContent = '正在回复...'
-  const response = await fetch('/api/community/replies', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      topicId: Number('@Model.Topic.Id'),
-      content: form.content.value
-    })
-  })
-  const result = await response.json().catch(() => ({}))
-  if (!response.ok || result.code !== 200) {
-    replyMessage.textContent = result.message || '回复失败，请稍后再试'
-    return
-  }
-  window.location.reload()
-})
-</script>
+    <script src="/site/vendor/highlight.min.js"></script>
+    <script src="/site/forum.js?v=2"></script>
 }

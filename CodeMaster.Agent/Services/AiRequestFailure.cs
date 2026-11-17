@@ -101,6 +101,37 @@ public static partial class AiRequestFailure
 
     [GeneratedRegex(@"://[^/@\s:]+:[^/@\s]+@")]
     private static partial Regex UriCredential();
+
+    /// <summary>
+    /// True when the failure is the endpoint refusing image content rather than a transport or
+    /// credential problem.
+    /// <para>
+    /// There is no standard error code for "this model has no vision", so the check looks at
+    /// the vocabulary every OpenAI-compatible implementation shares. Both the server-side
+    /// capability probe and the local execution client use it: the probe to decide whether to
+    /// send images at all, the local client to turn the rejection into an explanation instead
+    /// of an error.
+    /// </para>
+    /// </summary>
+    public static bool LooksLikeVisionRejection(Exception? exception)
+    {
+        var text = DescribeExceptionChain(exception);
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        string[] markers =
+        [
+            "image",
+            "vision",
+            "multimodal",
+            "image_url",
+            "invalid_image",
+            "unsupported content",
+            "content type"
+        ];
+
+        return markers.Any(marker => text.Contains(marker, StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 public sealed class AiFailurePayload

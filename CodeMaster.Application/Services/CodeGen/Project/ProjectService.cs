@@ -578,18 +578,8 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             // 1. 获取最新的模板文件
         var templateZipPath = GetTemplateZipPath();
 
-            // 使用传入的 TargetPath 或项目记录中的 ProjectPath
-            var targetPath = input.TargetPath ?? project.ProjectPath;
-            if (string.IsNullOrWhiteSpace(targetPath))
-                throw new Exception("Target path is required");
-
-            // 检查路径是否已经包含项目名称（避免重复添加）
-            var fullProjectPath = targetPath;
-            if (!targetPath.EndsWith(project.ProjectName, StringComparison.OrdinalIgnoreCase))
-            {
-                // 如果路径不以项目名称结尾，则添加项目名称
-                fullProjectPath = Path.Combine(targetPath, project.ProjectName);
-            }
+            // 使用传入的 TargetPath 或项目记录中的 ProjectPath（同时校验必须是绝对路径）
+            var fullProjectPath = GetFullProjectPath(project, input.TargetPath);
 
             // 2. 初始化项目
             await _initializationService.InitializeProjectAsync(
@@ -676,6 +666,19 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
         var path = targetPath ?? project.ProjectPath;
         if (string.IsNullOrWhiteSpace(path))
             throw new Exception("Target path is required");
+
+        // A relative path was silently resolved against the *backend process* working
+        // directory, which is CodeMaster.WebApi. A project path such as "Foo.db" (the SQLite
+        // file name) therefore extracted an entire generated solution into
+        // CodeMaster.WebApi\Foo.db\Foo, and the host project's default globs then tried to
+        // compile those files and broke the build of CodeMaster itself. Refuse anything that
+        // is not absolute so the mistake surfaces immediately instead of quietly polluting
+        // the repository.
+        if (!Path.IsPathRooted(path))
+        {
+            throw new Exception(
+                $"项目路径必须是绝对路径，例如 D:\\MyCodes\\{project.ProjectName}。当前值：{path}");
+        }
 
         // 检查路径是否已经包含项目名称
         if (!path.EndsWith(project.ProjectName, StringComparison.OrdinalIgnoreCase))
@@ -1044,16 +1047,19 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             if (project == null)
                 throw new Exception("Project not found");
 
-            var projectPath = GetFullProjectPath(project, input.TargetPath);
-
-            var result = await ProjectProcessLauncher.StartBackendAsync(project.ProjectName, projectPath, project.BackendPort);
-            if (!result.Success)
-                throw new Exception(result.Message);
+            // Initialization proper is finished by now: the framework is extracted, the
+            // solution is generated, the database and ports are configured, migrations ran,
+            // packages are restored and npm install completed. Starting the two dev servers
+            // is deliberately left to the user — a long-running dev server must never decide
+            // whether the project counts as initialized, and auto-launching two processes
+            // from a web request also made the generated files impossible to rewrite
+            // (the running backend kept a handle on the Migrator output).
+            await MarkInitializedAsync(project);
 
             return new InitializeStepResultDto
             {
                 Success = true,
-                Message = result.Message,
+                Message = "项目初始化已完成。后端请手动启动：dotnet run（端口见项目配置）。",
                 Step = "start_backend",
                 Progress = 95
             };
@@ -1063,7 +1069,7 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             return new InitializeStepResultDto
             {
                 Success = false,
-                Message = "后端服务启动失败",
+                Message = "项目收尾失败",
                 Step = "start_backend",
                 Progress = 90,
                 Error = ex.Message
@@ -1079,22 +1085,15 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             if (project == null)
                 throw new Exception("Project not found");
 
-            var projectPath = GetFullProjectPath(project, input.TargetPath);
-
-            var result = await ProjectProcessLauncher.StartFrontendAsync(project.ProjectName, projectPath, project.FrontendPort);
-            if (!result.Success)
-                throw new Exception(result.Message);
-
-            // 更新项目状态为已初始化
-            project.Status = Core.Enums.ProjectStatus.Initialized;
-            project.InitializedAt = DateTime.UtcNow;
-            project.InitError = null;
-            await Repository.UpdateAsync(project);
+            // Same reasoning as Step10: everything that defines "initialized" is already done,
+            // and the frontend dev server is the user's to start (npm run dev). Keeping this
+            // step means the existing 11-step UI flow still works and stays idempotent.
+            await MarkInitializedAsync(project);
 
             return new InitializeStepResultDto
             {
                 Success = true,
-                Message = result.Message,
+                Message = "项目初始化已完成。前端请手动启动：npm run dev（端口见项目配置）。",
                 Step = "start_frontend",
                 Progress = 100
             };
@@ -1104,12 +1103,27 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             return new InitializeStepResultDto
             {
                 Success = false,
-                Message = "前端服务启动失败",
+                Message = "项目收尾失败",
                 Step = "start_frontend",
                 Progress = 95,
                 Error = ex.Message
             };
         }
+    }
+
+    /// <summary>
+    /// Marks the project as initialized once the preparation work is done. Idempotent, and
+    /// never downgrades a project that is already running.
+    /// </summary>
+    private async Task MarkInitializedAsync(Domain.Entities.CodeGen.Project project)
+    {
+        if (project.Status is Core.Enums.ProjectStatus.Initialized or Core.Enums.ProjectStatus.Running)
+            return;
+
+        project.Status = Core.Enums.ProjectStatus.Initialized;
+        project.InitializedAt = DateTime.UtcNow;
+        project.InitError = null;
+        await Repository.UpdateAsync(project);
     }
 
     public async Task<InitializationStateDto> GetInitializationStateAsync(long projectId)
@@ -1924,10 +1938,14 @@ public class ProjectService : CrudApplicationService<Project, ProjectDto, Projec
             if (Directory.Exists(frontendPath) && File.Exists(Path.Combine(frontendPath, "package.json")))
             {
                 outputBuilder.AppendLine("[2/2] 构建前端项目...");
-                var npmExecutable = OperatingSystem.IsWindows() ? "npm.cmd" : "npm";
+                // npm 必须交给 cmd.exe 解析。直接以裸名启动 npm.cmd 时，cmd 收到的 %0 没有
+                // 完整路径，npm.cmd 内部的 %~dp0 会退化成当前工作目录，于是 node 去项目目录里
+                // 找 node_modules/npm 并抛 Cannot find module ...npm-cli.js。
+                var npmExecutable = OperatingSystem.IsWindows() ? "cmd.exe" : "npm";
+                var npmArguments = OperatingSystem.IsWindows() ? "/c npm run build" : "run build";
                 await RunCommandAsync(
                     npmExecutable,
-                    "run build",
+                    npmArguments,
                     frontendPath,
                     outputBuilder,
                     TimeSpan.FromMinutes(5));

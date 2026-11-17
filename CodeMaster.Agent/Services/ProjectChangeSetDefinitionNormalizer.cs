@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeMaster.Agent.Contracts;
 using CodeMaster.Agent.Serialization;
+using CodeMaster.Application.Services.CodeGen;
 
 namespace CodeMaster.Agent.Services;
 
@@ -22,6 +23,14 @@ internal sealed class ProjectChangeSetDefinitionNormalizer : IProjectChangeSetDe
         "isTree", "isReadOnly", "hasTenant", "hasDataPermission", "hasAudit",
         "hasSoftDelete", "generateFrontend", "isChildTable", "frontendRoute",
         "menuIcon", "orderNum", "remark"
+    };
+
+    // Base-entity columns are text but are never a meaningful label in a picker.
+    private static readonly HashSet<string> SystemFieldNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Id", "TenantId", "CreateUserId", "CreateBy", "CreateTime",
+        "UpdateUserId", "UpdateBy", "UpdateTime", "IsDeleted",
+        "DeleteUserId", "DeleteBy", "DeleteTime"
     };
 
     private readonly ICodeMasterProjectBlueprintService _blueprintService;
@@ -185,7 +194,16 @@ internal sealed class ProjectChangeSetDefinitionNormalizer : IProjectChangeSetDe
                     throw PathError(taskKey, $"$.controlBindings[{index}].entity", $"references missing entity '{entityName}'");
                 var field = entity.Fields.FirstOrDefault(item => string.Equals(item.Name, fieldName, StringComparison.OrdinalIgnoreCase));
                 if (field == null)
-                    throw PathError(taskKey, $"$.controlBindings[{index}].field", $"references missing field '{entity.Name}.{fieldName}'");
+                {
+                    // A binding whose field no longer exists has nothing to configure, so it is dropped
+                    // instead of failing the stage. Control bindings are cosmetic metadata: they are
+                    // generated from the plan's declared field list, but the field may legitimately be
+                    // gone by the time this task runs — a read-only view entity, for instance, keeps
+                    // only the columns its SELECT actually returns, and the compiler has no way to know
+                    // that when the plan is written. Throwing here made the whole stage fail and skipped
+                    // every task queued behind it, so a single stale binding blocked the entire run.
+                    continue;
+                }
 
                 var fieldUpdate = binding.DeepClone().AsObject();
                 fieldUpdate.Remove("entity");
@@ -202,6 +220,13 @@ internal sealed class ProjectChangeSetDefinitionNormalizer : IProjectChangeSetDe
                 {
                     fieldUpdate.Remove("formControlType");
                 }
+
+                // A binding compiled from the declared field list can name a label column the target
+                // entity never ended up with. The rules reject the whole change set for that single
+                // cosmetic mistake, which fails the stage and skips every task behind it. Repair it
+                // here, where the blueprint still has the real target columns.
+                if (!TryRepairRelatedControlFields(fieldUpdate, entitiesByName))
+                    continue;
 
                 var update = GetOrCreateUpdate(entity.Id, canonicalUpdates, updatesByEntityId);
                 MergeFieldUpdate(GetOrCreateArray(update, "updatedFields"), fieldUpdate);
@@ -394,6 +419,141 @@ internal sealed class ProjectChangeSetDefinitionNormalizer : IProjectChangeSetDe
         var array = new JsonArray();
         owner[propertyName] = array;
         return array;
+    }
+
+    /// <summary>
+    /// Keeps a related control's value/label columns pointing at columns that actually exist on the
+    /// target entity.
+    /// <para>
+    /// The field-control stage of a plan is compiled from the plan's <em>declared</em> field list.
+    /// The target entity may have been created with a different list (a column was dropped, renamed,
+    /// or never emitted by the model), so a binding such as
+    /// <c>ReceiptItemId -&gt; MaterialReceiptItem, display ["Name"]</c> can reference a label that
+    /// is simply not there. <c>ValidateRelatedControl</c> then rejects the entire change set with
+    /// "references missing field(s) Name on related entity 'X'", the stage fails and every task
+    /// queued behind it is skipped — which in practice forced two full plan regenerations.
+    /// </para>
+    /// <para>
+    /// This is cosmetic metadata, so it is repaired rather than refused: drop only the labels that
+    /// do not exist, substitute a real text column when none survive, and fall all the way back to
+    /// the key column. The picker is preserved (an FK must not degrade to a plain number input).
+    /// Returns false only when the target has no usable column at all, meaning the binding has
+    /// nothing it can display and should be dropped like any other stale binding.
+    /// </para>
+    /// </summary>
+    private static bool TryRepairRelatedControlFields(
+        JsonObject fieldUpdate,
+        IReadOnlyDictionary<string, AiEntityBlueprintDto> entitiesByName)
+    {
+        var relatedName = ReadString(fieldUpdate, "relatedEntityName")?.Trim();
+        if (string.IsNullOrWhiteSpace(relatedName))
+            return true;
+
+        List<(string Name, string DataType)> targetFields;
+        bool hasPrimaryKey;
+        if (SystemReferenceEntityCatalog.TryGet(relatedName, out var builtIn))
+        {
+            targetFields = builtIn.Fields.Select(item => (item.Name, item.DataType)).ToList();
+            hasPrimaryKey = builtIn.Fields.Any(item => item.IsPrimaryKey);
+        }
+        else if (entitiesByName.TryGetValue(relatedName, out var target))
+        {
+            targetFields = target.Fields.Select(item => (item.Name, item.DataType)).ToList();
+            hasPrimaryKey = target.HasPrimaryKey;
+        }
+        else
+        {
+            // The target itself is unresolved; DeferUnresolvedRelatedTargets owns that repair.
+            return true;
+        }
+
+        var available = targetFields.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (hasPrimaryKey)
+            available.Add("Id");
+        if (available.Count == 0)
+            return false;
+
+        var valueField = ReadString(fieldUpdate, "relatedEntityIdField");
+        // Only rewrite the value column when the right answer is provable. Picking an arbitrary
+        // column as a key would silently corrupt the picker, so an unprovable case is left alone.
+        if (!string.IsNullOrWhiteSpace(valueField) &&
+            !available.Contains(valueField.Trim()) &&
+            available.Contains("Id"))
+        {
+            SetString(fieldUpdate, "relatedEntityIdField", "Id");
+        }
+
+        var displayFields = ReadDisplayFields(FindProperty(fieldUpdate, "relatedEntityDisplayFields"));
+        var kept = displayFields
+            .Where(available.Contains)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (kept.Count > 0 && kept.Count == displayFields.Count)
+            return true;
+
+        if (kept.Count == 0)
+            kept.Add(PickDisplayField(targetFields, available) ?? available.First());
+        SetString(fieldUpdate, "relatedEntityDisplayFields", JsonSerializer.Serialize(kept, JsonOptions));
+        return true;
+    }
+
+    private static string? PickDisplayField(
+        IReadOnlyList<(string Name, string DataType)> targetFields,
+        IReadOnlySet<string> available)
+    {
+        var textFields = targetFields
+            .Where(item => (item.DataType ?? string.Empty).StartsWith("string", StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.Name)
+            .Where(name => !SystemFieldNames.Contains(name))
+            .ToList();
+
+        return textFields.FirstOrDefault(name => name.Equals("Name", StringComparison.OrdinalIgnoreCase))
+            ?? textFields.FirstOrDefault(name => name.EndsWith("Name", StringComparison.OrdinalIgnoreCase))
+            ?? textFields.FirstOrDefault(name => name.EndsWith("Title", StringComparison.OrdinalIgnoreCase))
+            ?? textFields.FirstOrDefault(name => name.EndsWith("Code", StringComparison.OrdinalIgnoreCase))
+            ?? textFields.FirstOrDefault()
+            ?? (available.Contains("Id") ? "Id" : null);
+    }
+
+    private static List<string> ReadDisplayFields(JsonNode? node)
+    {
+        if (node is JsonArray array)
+        {
+            return array
+                .Select(item => item is JsonValue value && value.TryGetValue<string>(out var text) ? text?.Trim() ?? string.Empty : string.Empty)
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .ToList();
+        }
+        if (node is not JsonValue scalar || !scalar.TryGetValue<string>(out var raw) || string.IsNullOrWhiteSpace(raw))
+            return new List<string>();
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<List<string>>(raw, JsonOptions);
+            if (parsed is { Count: > 0 })
+            {
+                return parsed
+                    .Where(text => !string.IsNullOrWhiteSpace(text))
+                    .Select(text => text.Trim())
+                    .ToList();
+            }
+        }
+        catch (JsonException)
+        {
+            // A comma-separated list is accepted too; handled below.
+        }
+
+        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+    }
+
+    private static void SetString(JsonObject owner, string propertyName, string value)
+    {
+        var existingKey = owner
+            .Select(pair => pair.Key)
+            .FirstOrDefault(key => string.Equals(key, propertyName, StringComparison.OrdinalIgnoreCase));
+        if (existingKey != null)
+            owner.Remove(existingKey);
+        owner[propertyName] = JsonValue.Create(value);
     }
 
     private static void MergeFieldUpdate(JsonArray updates, JsonObject incoming)

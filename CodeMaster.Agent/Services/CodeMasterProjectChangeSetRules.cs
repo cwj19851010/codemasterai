@@ -227,7 +227,13 @@ public static class CodeMasterProjectChangeSetRules
 
             var moduleName = module.ModuleName.Trim();
             if (existingModulesByName.ContainsKey(moduleName))
-                result.Errors.Add($"Module '{module.ModuleName}' already exists in this project.");
+            {
+                // 执行阶段会认领同名模块（ExecuteAsync 的 adoptedId 分支），所以这里不能判错。
+                // 一批任务在并发或客户端重试时会晚到：模块已被别的批次建好，此时判错会让整批
+                // 回滚并抛 "already exists"，但项目元数据其实是完整的。
+                result.Warnings.Add(
+                    $"Module '{module.ModuleName}' already exists in this project; the change set will reuse it instead of creating a duplicate.");
+            }
 
             ValidateProjectRootNamespaceReuse(moduleName, projectName, result);
 
@@ -333,7 +339,12 @@ public static class CodeMasterProjectChangeSetRules
         ValidateDescriptionLengths($"Entity '{entity.Name}'", entity.Description, entity.BusinessDescription, result);
 
         if (existingEntitiesByName.ContainsKey(entity.Name.Trim()))
-            result.Errors.Add($"Entity '{entity.Name}' already exists in this project.");
+        {
+            // 同 ValidateCreatedModules：执行阶段会把同名实体转成更新（合并描述、补齐缺失字段），
+            // 所以重名不是错误。真正的错误是"字段/关系不合法"，那些检查在下面照常执行。
+            result.Warnings.Add(
+                $"Entity '{entity.Name}' already exists in this project; the change set will merge into it instead of creating a duplicate.");
+        }
 
         var moduleFound = entity.ModuleId > 0
             ? existingModulesById.ContainsKey(entity.ModuleId)
@@ -1122,7 +1133,9 @@ public static class CodeMasterProjectChangeSetRules
             .Select(x => moduleUpdates.TryGetValue(x.Id, out var update) && !string.IsNullOrWhiteSpace(update.ModuleName)
                 ? update.ModuleName.Trim()
                 : x.ModuleName)
-            .Concat(proposal.Modules.Select(x => x.ModuleName));
+            .Concat(proposal.Modules
+                .Where(x => !AdoptsExistingModule(x.ModuleName, blueprint, moduleUpdates, deletedModuleIds))
+                .Select(x => x.ModuleName));
         AddDuplicateErrors(finalModuleNames, "final module", result.Errors);
 
         var entityUpdates = proposal.EntityUpdates
@@ -1133,8 +1146,75 @@ public static class CodeMasterProjectChangeSetRules
             .Select(x => entityUpdates.TryGetValue(x.Id, out var update) && !string.IsNullOrWhiteSpace(update.Name)
                 ? update.Name.Trim()
                 : x.Name)
-            .Concat(proposal.Entities.Select(x => x.Name));
+            .Concat(proposal.Entities
+                .Where(x => !AdoptsExistingEntity(x.Name, blueprint, entityUpdates, deletedEntityIds))
+                .Select(x => x.Name));
         AddDuplicateErrors(finalEntityNames, "final entity", result.Errors);
+    }
+
+    /// <summary>
+    /// A proposed module that reuses a name the project already owns is adopted by
+    /// <c>ExecuteAsync</c> rather than inserted, so it must not be counted a second time when the
+    /// final name set is checked — otherwise a replayed change set reports "Duplicate final module
+    /// name" for a module that is only ever going to exist once.
+    ///
+    /// A module that this same change set renames away is excluded from the adoptable set: its name
+    /// really is about to be taken by the new module, and that collision has to stay an error.
+    /// </summary>
+    private static bool AdoptsExistingModule(
+        string? proposedName,
+        AiProjectBlueprintDto blueprint,
+        IReadOnlyDictionary<long, UpdateModuleProposal> moduleUpdates,
+        IReadOnlySet<long> deletedModuleIds)
+    {
+        if (string.IsNullOrWhiteSpace(proposedName))
+            return false;
+
+        var name = proposedName.Trim();
+        foreach (var module in blueprint.Modules)
+        {
+            if (deletedModuleIds.Contains(module.Id) ||
+                !string.Equals(module.ModuleName.Trim(), name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // Renamed away by this same change set -> the name is genuinely being freed up.
+            if (moduleUpdates.TryGetValue(module.Id, out var update) &&
+                !string.IsNullOrWhiteSpace(update.ModuleName) &&
+                !string.Equals(update.ModuleName.Trim(), module.ModuleName.Trim(), StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Entity counterpart of <see cref="AdoptsExistingModule"/>.</summary>
+    private static bool AdoptsExistingEntity(
+        string? proposedName,
+        AiProjectBlueprintDto blueprint,
+        IReadOnlyDictionary<long, UpdateEntityProposal> entityUpdates,
+        IReadOnlySet<long> deletedEntityIds)
+    {
+        if (string.IsNullOrWhiteSpace(proposedName))
+            return false;
+
+        var name = proposedName.Trim();
+        foreach (var entity in blueprint.Modules.SelectMany(x => x.Entities))
+        {
+            if (deletedEntityIds.Contains(entity.Id) ||
+                !string.Equals(entity.Name.Trim(), name, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (entityUpdates.TryGetValue(entity.Id, out var update) &&
+                !string.IsNullOrWhiteSpace(update.Name) &&
+                !string.Equals(update.Name.Trim(), entity.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return true;
+        }
+
+        return false;
     }
 
     private static void ValidateFinalRelationDependencies(

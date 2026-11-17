@@ -35,6 +35,7 @@ public class AuthController : ControllerBase
         {
            
             var result = await _authService.LoginAsync(loginDto);
+            WriteAuthCookie(result.AccessToken, result.ExpiresIn);
             return Ok(ApiResponse<LoginResultDto>.Success(result, "登录成功"));
         }
         catch (Exception ex)
@@ -90,13 +91,44 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
+    /// 用当前 Bearer 令牌建立浏览器 Cookie 会话，供服务端渲染页面识别登录用户
+    /// </summary>
+    [HttpPost("session")]
+    [Authorize]
+    public IActionResult CreateSession()
+    {
+        var header = Request.Headers.Authorization.ToString();
+        if (header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteAuthCookie(header["Bearer ".Length..].Trim(), null);
+        }
+
+        return Ok(ApiResponse.Success("会话已建立"));
+    }
+
+    /// <summary>
     /// 退出登录
     /// </summary>
     [HttpPost("logout")]
     [Authorize]
     public IActionResult Logout()
     {
+        Response.Cookies.Delete("cm_token", new CookieOptions { Path = "/" });
         return Ok(new { message = "退出成功" });
+    }
+
+    private void WriteAuthCookie(string token, int? expiresIn)
+    {
+        Response.Cookies.Append("cm_token", token, new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = Request.IsHttps,
+            Path = "/",
+            Expires = expiresIn.HasValue && expiresIn.Value > 0
+                ? DateTimeOffset.UtcNow.AddSeconds(expiresIn.Value)
+                : DateTimeOffset.UtcNow.AddHours(2)
+        });
     }
 
     /// <summary>

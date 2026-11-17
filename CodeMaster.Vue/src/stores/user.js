@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { login as loginApi, getUserInfo as getUserInfoApi } from '@/api/auth'
+import { login as loginApi, getUserInfo as getUserInfoApi, logout as logoutApi } from '@/api/auth'
 import { usePermissionStore } from './permission'
 
 export const useUserStore = defineStore('user', {
@@ -68,6 +68,8 @@ export const useUserStore = defineStore('user', {
 
     // 退出登录
     logout() {
+      logoutApi().catch(() => {})
+
       this.token = ''
       this.userInfo = null
       this.roles = []

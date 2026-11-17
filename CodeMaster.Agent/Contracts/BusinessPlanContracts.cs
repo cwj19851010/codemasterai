@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json.Serialization;
 using CodeMaster.Agent.Serialization;
 
@@ -29,6 +30,51 @@ public sealed class BusinessPlanDefinition
 
     [JsonPropertyName("pages")]
     public List<BusinessPageDefinition> Pages { get; set; } = [];
+
+    /// <summary>
+    /// Dictionary types the generated project needs. A field that declares
+    /// <see cref="BusinessFieldDefinition.Dictionary"/> must be backed by an entry here, otherwise
+    /// the generated select renders an empty list: the field only stores the dictionary code, it
+    /// never creates the dictionary itself.
+    /// </summary>
+    [JsonPropertyName("dictionaries")]
+    public List<BusinessDictionaryDefinition> Dictionaries { get; set; } = [];
+}
+
+public sealed class BusinessDictionaryDefinition
+{
+    /// <summary>Stable dictionary code referenced by field dictionary / SelectOptions, e.g. contract_status.</summary>
+    [JsonPropertyName("dictType")]
+    [Description("Stable snake_case code, e.g. invoice_type. This is the value a field's `dictionary` property references — NOT a data type such as string.")]
+    public string DictType { get; set; } = string.Empty;
+
+    /// <summary>Localized dictionary title shown in the generated project's dictionary page.</summary>
+    [JsonPropertyName("dictName")]
+    [Description("Human-readable title shown in the dictionary page, e.g. 发票类型. Not the code.")]
+    public string DictName { get; set; } = string.Empty;
+
+    [JsonPropertyName("remark")]
+    public string? Remark { get; set; }
+
+    /// <summary>Optional entries. The type alone is already useful; entries may be filled later in the generated project.</summary>
+    [JsonPropertyName("items")]
+    public List<BusinessDictionaryItemDefinition> Items { get; set; } = [];
+}
+
+public sealed class BusinessDictionaryItemDefinition
+{
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>Stored value written to the business column.</summary>
+    [JsonPropertyName("value")]
+    public string Value { get; set; } = string.Empty;
+
+    [JsonPropertyName("isDefault")]
+    public bool? IsDefault { get; set; }
+
+    [JsonPropertyName("sort")]
+    public int? Sort { get; set; }
 }
 
 public sealed class BusinessModuleDefinition
@@ -119,6 +165,7 @@ public sealed class BusinessFieldDefinition
     public int? MaxLength { get; set; }
 
     [JsonPropertyName("dictionary")]
+    [Description("Dictionary code for an enumeration field (status, type, category, level, method …), e.g. contract_status. The field then renders as a select bound to that dictionary. Declare the same code under dictionaries — a code that is referenced but not declared renders an empty select.")]
     public string? Dictionary { get; set; }
 
     /// <summary>Free-form hint: "primary key", "foreign key", "lookup", "summary", etc.</summary>

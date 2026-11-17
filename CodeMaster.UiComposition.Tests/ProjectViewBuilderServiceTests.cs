@@ -151,7 +151,12 @@ public sealed class ProjectViewBuilderServiceTests : IDisposable
             Sql = sql
         });
 
-        Assert.Equal(sql, preview.Sql);
+        // 预览返回的是「实际会执行」的 SQL：FROM <实体名> 会被补成
+        // FROM <物理表> AS <实体别名>（列映射需要这个别名）。这是无害改写，
+        // 除此之外 CTE、投影、条件必须逐字保留。
+        var withoutInjectedAlias = preview.Sql.Replace(
+            "FROM customer AS customer", "FROM customer", StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(sql, withoutInjectedAlias);
         Assert.Empty(preview.SelectedFields);
         Assert.Empty(preview.Joins);
     }

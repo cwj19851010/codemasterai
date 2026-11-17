@@ -896,7 +896,7 @@ public class ProjectPageServiceTests : IDisposable
         Assert.True(generated.Success, generated.Error);
         var autoScript = await File.ReadAllTextAsync(
             generated.Files.Single(path => path.EndsWith("registered-api.auto.js", StringComparison.OrdinalIgnoreCase)));
-        Assert.Contains("/api/services/registeredreport/getreport", autoScript);
+        Assert.Contains("/api/app/registeredreport/getreport", autoScript);
         Assert.Contains("method: \"get\"", autoScript);
     }
 

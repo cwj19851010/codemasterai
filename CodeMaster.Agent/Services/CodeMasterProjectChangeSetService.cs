@@ -50,10 +50,11 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
         var blueprint = await _blueprintService.GetProjectAsync(projectId);
 
         // Every entry point — the standalone proposal tool, the work-batch adapter's readiness
-        // check and the execution path itself — reaches the rules through here, so resolving the
-        // module references before validating is the only place the repair cannot be missed.
-        ProjectChangeSetIssueRepairs.ResolveIdlessModuleUpdates(proposal, blueprint.Modules);
-        ProjectChangeSetIssueRepairs.AssignSingleCandidateModule(proposal, blueprint.Modules);
+        // check and the execution path itself — reaches the rules through here, so the known-issue
+        // repairs have to run here too. Validating the raw model output before repair used to reject
+        // a change set that the execution path would have repaired a moment later: the readiness
+        // check failed, the tool execution was recorded as Failed, and the plan was superseded.
+        ApplyKnownIssueRepairs(proposal, blueprint);
 
         // Module names become namespace segments in the generated project, so one that reuses the
         // project name has to be refused here rather than repaired after generation.
@@ -63,8 +64,21 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
 
     public async Task<List<string>> RepairKnownIssuesAsync(long projectId, ProjectChangeSetProposal proposal)
     {
-        var repairs = ProjectChangeSetIssueRepairs.NormalizeOneToManyRelations(proposal);
         var blueprint = await _blueprintService.GetProjectAsync(projectId);
+        return ApplyKnownIssueRepairs(proposal, blueprint);
+    }
+
+    /// <summary>
+    /// Idempotent by construction: every repair either rewrites a value into its canonical shape or
+    /// removes the offending entry, so a second pass (ValidateAsync runs again inside ExecuteAsync)
+    /// returns no additional repairs.
+    /// </summary>
+    private static List<string> ApplyKnownIssueRepairs(
+        ProjectChangeSetProposal proposal,
+        AiProjectBlueprintDto blueprint)
+    {
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
+        repairs.AddRange(ProjectChangeSetIssueRepairs.NormalizeOneToManyRelations(proposal));
         repairs.AddRange(ProjectChangeSetIssueRepairs.ResolveIdlessModuleUpdates(proposal, blueprint.Modules));
         repairs.AddRange(ProjectChangeSetIssueRepairs.AssignSingleCandidateModule(proposal, blueprint.Modules));
         repairs.AddRange(ProjectChangeSetIssueRepairs.DeferUnresolvedRelatedTargets(
@@ -313,29 +327,44 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
 
         // Dictionaries target the generated project's database and must run after
         // entity metadata has been committed in the same ordered approval.
+        //
+        // A dictionary is decoration: a missing dictionary only leaves a select empty. The target
+        // database, however, is created by the generated project's own migration — a project that
+        // has not been initialised yet has no sys_dict_types table at all. Failing the whole change
+        // set (and with it the plan stage) over a table that does not exist yet would be far more
+        // damaging than an empty select, so the failure is recorded and execution continues.
         foreach (var dictionary in proposal.Dictionaries)
         {
-            await _projectService.SaveProjectDictionaryAsync(projectId, new SaveProjectDictionaryDto
+            try
             {
-                TenantId = dictionary.TenantId,
-                DictType = dictionary.DictType,
-                DictName = dictionary.DictName,
-                LangKey = dictionary.LangKey,
-                Status = dictionary.Status,
-                Sort = dictionary.Sort,
-                Remark = dictionary.Remark,
-                Items = dictionary.Items.Select(item => new SaveProjectDictionaryItemDto
+                await _projectService.SaveProjectDictionaryAsync(projectId, new SaveProjectDictionaryDto
                 {
-                    Label = item.Label,
-                    Value = item.Value,
-                    LangKey = item.LangKey,
-                    IsDefault = item.IsDefault,
-                    Status = item.Status,
-                    Sort = item.Sort,
-                    Remark = item.Remark
-                }).ToList()
-            });
-            result.CreatedDictionaryCount++;
+                    TenantId = dictionary.TenantId,
+                    DictType = dictionary.DictType,
+                    DictName = dictionary.DictName,
+                    LangKey = dictionary.LangKey,
+                    Status = dictionary.Status,
+                    Sort = dictionary.Sort,
+                    Remark = dictionary.Remark,
+                    Items = dictionary.Items.Select(item => new SaveProjectDictionaryItemDto
+                    {
+                        Label = item.Label,
+                        Value = item.Value,
+                        LangKey = item.LangKey,
+                        IsDefault = item.IsDefault,
+                        Status = item.Status,
+                        Sort = item.Sort,
+                        Remark = item.Remark
+                    }).ToList()
+                });
+                result.CreatedDictionaryCount++;
+            }
+            catch (Exception ex)
+            {
+                result.AutomaticRepairs.Add(
+                    $"字典 '{dictionary.DictType}' 未写入生成项目数据库：{ex.Message.Trim()} " +
+                    "（通常是项目尚未初始化/迁移；初始化后在字典页补建即可）");
+            }
         }
 
         foreach (var entityId in proposal.DeleteEntityIds.Distinct())
@@ -742,7 +771,62 @@ internal sealed class CodeMasterProjectChangeSetService : ICodeMasterProjectChan
                 OrderNum = 0
             });
         }
+
+        ApplyDefaultSearchFields(fields);
         return fields;
+    }
+
+    /// <summary>实体一个查询字段都没有时，最多补这么多个。</summary>
+    private const int DefaultSearchFieldCount = 4;
+
+    /// <summary>
+    /// 模型几乎不会主动写 <c>showInSearch</c>：<see cref="CreateEntityFieldProposal"/> 里
+    /// showInList / showInDetail / showInAddForm / showInEditForm 都默认 true，只有 showInSearch
+    /// 默认 false。于是整条链路下来 <c>sys_entity_field.show_in_search</c> 全是 false，
+    /// 生成的列表页搜索区只剩两个按钮，一个查询条件都没有。
+    /// </summary>
+    /// <remarks>
+    /// 兜底只在「整个实体一个查询字段都没有」时生效——模型显式指定过任意一个查询字段，
+    /// 就认为它想清楚了，完全不插手。
+    /// </remarks>
+    private static void ApplyDefaultSearchFields(List<CreateEntityFieldDto> fields)
+    {
+        if (fields.Any(field => field.ShowInSearch))
+            return;
+
+        var picked = fields
+            .Select((field, index) => (field, index))
+            .Where(item => IsDefaultSearchCandidate(item.field))
+            .OrderBy(item => item.field.OrderNum)
+            .ThenBy(item => item.index)
+            .Take(DefaultSearchFieldCount)
+            .Select(item => item.field);
+
+        foreach (var field in picked)
+            field.ShowInSearch = true;
+    }
+
+    private static readonly HashSet<string> NonSearchableControlTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "textarea", "editor", "file", "image", "upload", "table-column"
+    };
+
+    private static bool IsDefaultSearchCandidate(CreateEntityFieldDto field)
+    {
+        if (field.IsPrimaryKey || field.IsSystemField || field.IsIgnore)
+            return false;
+
+        if (!string.Equals(field.FieldCategory, "Normal", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(field.Formula) || !string.IsNullOrWhiteSpace(field.AggregateType))
+            return false;
+
+        if (NonSearchableControlTypes.Contains(field.FormControlType ?? string.Empty))
+            return false;
+
+        // 长文本塞进查询条件没意义，还会把搜索区撑得很宽。
+        return field.MaxLength is null or <= 200;
     }
 
     private static UpdateEntityFieldWithIdDto MapUpdatedField(

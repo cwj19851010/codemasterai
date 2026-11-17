@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using CodeMaster.Agent.Contracts;
 using CodeMaster.Agent.Services;
 using CodeMaster.Agent.Tools;
 using Microsoft.Extensions.AI;
@@ -26,9 +27,17 @@ public sealed class AiResponseCompletionTests
             AIFunctionFactory.Create(() => "write", name: CodeMasterAgentToolCatalog.ProposeProjectChangeSet),
             AIFunctionFactory.Create(() => "write", name: "propose_view_data_source_plan")
         };
-        var selected = AiTurnToolSelector.SelectForRequest(tools, Request);
-        Assert.Equal(CodeMasterAgentToolCatalog.GetProjectSummary, Assert.Single(selected).Name);
-        Assert.Equal(tools.Count, AiTurnToolSelector.SelectForRequest(tools, "按你的需求开始吧").Count);
+        var selected = AiTurnToolSelector.SelectForMode(tools, AiAgentModes.Requirements);
+        var names = selected.OfType<AIFunction>().Select(item => item.Name).ToList();
+        Assert.Contains(CodeMasterAgentToolCatalog.GetProjectSummary, names);
+        Assert.Contains(CodeMasterAgentToolCatalog.GetProjectDictionaries, names);
+        Assert.DoesNotContain(CodeMasterAgentToolCatalog.UpsertProjectWorkPlan, names);
+        Assert.DoesNotContain(CodeMasterAgentToolCatalog.ProposeProjectChangeSet, names);
+        Assert.DoesNotContain("propose_view_data_source_plan", names);
+
+        // Code mode is the only mode that exposes the full surface, and it is decided by the
+        // persisted Agent mode — never by message keywords.
+        Assert.Equal(tools.Count, AiTurnToolSelector.SelectForMode(tools, AiAgentModes.Code).Count);
     }
 
     [Theory]
@@ -50,11 +59,11 @@ public sealed class AiResponseCompletionTests
         var reads = 0;
         using var provider = new ScriptedClient(callReadTool);
         using var trace = new AiResponseTraceChatClient(provider);
-        var tools = AiTurnToolSelector.SelectForRequest(
+        var tools = AiTurnToolSelector.SelectForMode(
         [
             AIFunctionFactory.Create(() => { reads++; return "{\"modules\":[],\"entities\":[]}"; }, name: CodeMasterAgentToolCatalog.GetProjectSummary),
             AIFunctionFactory.Create((Func<string>)(() => throw new InvalidOperationException("No writes authorized")), name: CodeMasterAgentToolCatalog.UpsertProjectWorkPlan)
-        ], Request);
+        ], AiAgentModes.Requirements);
         var agent = AiChatClientFactory.CreateAgent(trace,
             AiResponseCompletion.BuildRequirementsInstructions("工程管理软件", 1), "test", "test", tools, "Standard");
         var session = await agent.CreateSessionAsync();

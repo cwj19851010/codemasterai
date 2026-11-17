@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CodeMaster.Agent.Contracts;
 
 namespace CodeMaster.Agent.Services;
@@ -53,6 +54,7 @@ public sealed class BusinessCompileReport
     public int Relations { get; init; }
     public int Views { get; init; }
     public int Pages { get; init; }
+    public int Dictionaries { get; init; }
     public int Tasks { get; init; }
 }
 
@@ -81,6 +83,7 @@ public static class BusinessPlanCompiler
         // Phase 1: validate and normalise
         await EmitAsync(progressAsync, new BusinessPlanCompileEvent("validate", "Validating business plan", 5, "Cross-referencing modules, entities and fields against project blueprint"), cancellationToken);
         Normalise(definition);
+        RepairDictionaries(definition, warnings);
         EnsureReferentialIntegrity(definition, warnings);
 
         var existingModules = blueprint.Modules
@@ -98,6 +101,14 @@ public static class BusinessPlanCompiler
             $"Generating one project_change_set task per module ({definition.Entities.Count} entity/entities across {definition.Modules.Count} module(s))"),
             cancellationToken);
         var entityFieldsTasks = CompileEntityFieldsTasks(definition, blueprint);
+
+        // Dictionaries are written into the generated project's database, so they ride the same
+        // project_change_set task kind as entities. The task sits first inside the EntityFields
+        // stage: a field that references a dictionary code must never exist before the dictionary
+        // itself, otherwise the generated select has nothing to render.
+        var dictionaryTask = CompileDictionaryTask(definition);
+        if (dictionaryTask != null)
+            entityFieldsTasks.Insert(0, dictionaryTask);
 
         // Phase 4: stage Views (depends on entity existence)
         await EmitAsync(progressAsync, new BusinessPlanCompileEvent("compile", "Compiling Views stage", 50,
@@ -159,6 +170,7 @@ public static class BusinessPlanCompiler
             Relations = definition.Relations.Count,
             Views = definition.Views.Count,
             Pages = definition.Pages.Count,
+            Dictionaries = definition.Dictionaries.Count,
             Tasks = totalTasks
         };
 
@@ -207,7 +219,61 @@ public static class BusinessPlanCompiler
             p.Key = p.Key?.Trim() ?? string.Empty;
             p.EntityKey = p.EntityKey?.Trim() ?? string.Empty;
         }
+        foreach (var d in def.Dictionaries)
+        {
+            d.DictType = d.DictType?.Trim() ?? string.Empty;
+            d.DictName = string.IsNullOrWhiteSpace(d.DictName) ? d.DictType : d.DictName.Trim();
+            foreach (var item in d.Items)
+            {
+                item.Label = item.Label?.Trim() ?? string.Empty;
+                item.Value = item.Value?.Trim() ?? string.Empty;
+            }
+        }
     }
+
+    /// <summary>
+    /// The chat model regularly swaps dictType and dictName — it reads dictType as the field's
+    /// data type and dictName as the dictionary code. The field reference is authoritative: the
+    /// generator writes the field's dictionary value into SelectOptions, so a declared dictionary
+    /// whose name matches a referenced code (while its own code does not) is swapped instead of
+    /// being rejected or silently merged with a sibling that shares the bogus code.
+    /// </summary>
+    private static void RepairDictionaries(BusinessPlanDefinition def, List<string> warnings)
+    {
+        if (def.Dictionaries.Count == 0)
+            return;
+
+        var referencedCodes = new HashSet<string>(
+            def.Entities
+                .SelectMany(entity => entity.Fields)
+                .Select(field => field.Dictionary?.Trim())
+                .Where(code => !string.IsNullOrWhiteSpace(code))
+                .Select(code => code!),
+            StringComparer.OrdinalIgnoreCase);
+        if (referencedCodes.Count == 0)
+            return;
+
+        foreach (var dictionary in def.Dictionaries)
+        {
+            var code = dictionary.DictType?.Trim() ?? string.Empty;
+            var name = dictionary.DictName?.Trim() ?? string.Empty;
+            if (referencedCodes.Contains(code) || !referencedCodes.Contains(name))
+                continue;
+
+            dictionary.DictType = name;
+            dictionary.DictName = string.IsNullOrWhiteSpace(code) || IsDataTypeKeyword(code)
+                ? (string.IsNullOrWhiteSpace(dictionary.Remark) ? name : dictionary.Remark.Trim())
+                : code;
+            warnings.Add($"字典 '{name}' 的 dictType/dictName 写反了，已自动纠正为 dictType={name}。");
+        }
+    }
+
+    private static bool IsDataTypeKeyword(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "string" or "text" or "int" or "integer" or "long" or "short" or "decimal" or "double"
+            or "float" or "bool" or "boolean" or "date" or "datetime" or "datetimeoffset" => true,
+        _ => false
+    };
 
     private static void EnsureReferentialIntegrity(BusinessPlanDefinition def, List<string> warnings)
     {
@@ -238,13 +304,91 @@ public static class BusinessPlanCompiler
             if (!entityKeys.Contains(p.EntityKey))
                 throw new ArgumentException($"Page '{p.Key}' references unknown entityKey '{p.EntityKey}'.");
         }
+
+        // A field only stores the dictionary code; the dictionary itself has to be declared here.
+        // Missing entries are a warning, not an error: the metadata is still valid, the select is
+        // just empty until someone fills the dictionary in the generated project.
+        var declaredDictTypes = new HashSet<string>(
+            def.Dictionaries.Select(d => d.DictType).Where(t => !string.IsNullOrWhiteSpace(t)),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var entity in def.Entities)
+        {
+            foreach (var field in entity.Fields)
+            {
+                if (string.IsNullOrWhiteSpace(field.Dictionary))
+                    continue;
+                if (declaredDictTypes.Contains(field.Dictionary.Trim()))
+                    continue;
+                warnings.Add(
+                    $"字段 {entity.Key}.{field.TechnicalName} 引用字典 '{field.Dictionary.Trim()}'，" +
+                    "但计划未声明该字典；生成后下拉框会是空的。");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the single dictionary task for the plan, or null when the business plan declares no
+    /// dictionaries. Entries are optional: creating the type alone already makes the generated
+    /// dictionary page non-empty and lets the user fill entries in the generated project.
+    /// </summary>
+    private static AiProjectWorkTaskInput? CompileDictionaryTask(BusinessPlanDefinition def)
+    {
+        var dictionaries = def.Dictionaries
+            .Where(item => !string.IsNullOrWhiteSpace(item.DictType))
+            .GroupBy(item => item.DictType.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+        if (dictionaries.Count == 0)
+            return null;
+
+        var definition = JsonSerializer.SerializeToElement(new
+        {
+            summary = $"创建或更新 {dictionaries.Count} 个数据字典",
+            dictionaries = dictionaries.Select(dictionary => new
+            {
+                // Every dictionary entry needs its own summary: the change-set validator treats
+                // each item as a standalone dictionary change.
+                summary = $"创建或更新字典 {(string.IsNullOrWhiteSpace(dictionary.DictName) ? dictionary.DictType.Trim() : dictionary.DictName.Trim())}",
+                tenantId = 0,
+                dictType = dictionary.DictType.Trim(),
+                dictName = string.IsNullOrWhiteSpace(dictionary.DictName)
+                    ? dictionary.DictType.Trim()
+                    : dictionary.DictName.Trim(),
+                remark = dictionary.Remark,
+                items = dictionary.Items
+                    .Where(item => !string.IsNullOrWhiteSpace(item.Value))
+                    .Select((item, index) => new
+                    {
+                        label = string.IsNullOrWhiteSpace(item.Label) ? item.Value.Trim() : item.Label.Trim(),
+                        value = item.Value.Trim(),
+                        isDefault = item.IsDefault == true ? 1 : (int?)null,
+                        sort = item.Sort ?? index + 1
+                    })
+                    .ToList()
+            }).ToList()
+        });
+
+        return new AiProjectWorkTaskInput
+        {
+            TaskKey = "create_business_dictionaries",
+            Title = "创建数据字典",
+            Summary = $"创建或更新 {dictionaries.Count} 个数据字典",
+            OperationKind = "project_change_set",
+            ExecutionLocation = "Server",
+            SafetyClass = "Metadata",
+            SemanticReferences = dictionaries.Select(item => $"dictionary:{item.DictType.Trim()}").ToList(),
+            DependsOnTaskKeys = new List<string>(),
+            SortOrder = 0,
+            RequiresGeneration = false,
+            RequiresBuild = false,
+            Definition = definition
+        };
     }
 
     private static List<AiProjectWorkTaskInput> CompileEntityFieldsTasks(
         BusinessPlanDefinition def,
         AiProjectOverviewDto blueprint)
-    {
-        var tasks = new List<AiProjectWorkTaskInput>();
+    {        var tasks = new List<AiProjectWorkTaskInput>();
         var entitiesByModule = def.Entities
             .GroupBy(e => e.ModuleKey, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -536,19 +680,34 @@ public static class BusinessPlanCompiler
         List<AiProjectWorkTaskInput> viewTasks,
         List<AiProjectWorkTaskInput> relationTasks)
     {
+        // A read-only entity is a reporting projection: it has no add/edit form, and when it is backed
+        // by a view its field list is rebuilt from the SELECT's result columns — the view's key column
+        // is renamed to Id, so a binding computed from the declared list can name a column that no
+        // longer exists. Emitting bindings for it produces noise at best and, before the normalizer
+        // learned to drop them, failed the whole stage.
+        var formlessEntityKeys = def.Entities
+            .Where(entity => entity.IsReadOnly == true)
+            .Select(entity => entity.Key)
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var bindings = def.Entities
+            .Where(entity => !formlessEntityKeys.Contains(entity.Key))
             .SelectMany(entity => entity.Fields
                 .Where(field => !string.IsNullOrWhiteSpace(field.Dictionary) ||
                                 !string.Equals(InferControlType((field.DataType ?? "string").Trim().ToLowerInvariant(), field.Dictionary), "input", StringComparison.OrdinalIgnoreCase))
-                .Select(field => new
+                .Select(field => new ControlBindingSpec
                 {
-                    entity = PascalCase(entity.TechnicalName),
-                    field = PascalCase(field.TechnicalName),
-                    formControlType = InferControlType((field.DataType ?? "string").Trim().ToLowerInvariant(), field.Dictionary),
-                    selectDataSource = string.IsNullOrWhiteSpace(field.Dictionary) ? null : "dict",
-                    selectOptions = field.Dictionary
+                    Entity = PascalCase(entity.TechnicalName),
+                    Field = PascalCase(field.TechnicalName),
+                    FormControlType = InferControlType((field.DataType ?? "string").Trim().ToLowerInvariant(), field.Dictionary),
+                    SelectDataSource = string.IsNullOrWhiteSpace(field.Dictionary) ? null : "dict",
+                    SelectOptions = field.Dictionary
                 }))
             .ToList();
+
+        ApplyReferenceControls(def, bindings, formlessEntityKeys);
+
         if (bindings.Count == 0)
             return [];
 
@@ -579,6 +738,137 @@ public static class BusinessPlanCompiler
                 })
             }
         ];
+    }
+
+    /// <summary>
+    /// A field that points at another entity must be edited with a picker, not a number box.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="InferControlType"/> only looks at the C# type, so every <c>long</c> foreign key came out
+    /// as <c>number</c>: the generated add/edit form asked the user to type a raw id, and the relation that
+    /// already said which entity the field points at was ignored. The relation definition is the only place
+    /// that knows the target, so the control is materialized from it here instead of hoping the model sets it.
+    ///
+    /// Both reference shapes are handled, because models use them interchangeably for the same fact:
+    /// <list type="bullet">
+    /// <item><c>ManyToOne</c> from the child — the key is <c>sourceField</c> and the picker points at the target.</item>
+    /// <item><c>OneToMany</c> from the parent — the key is <c>targetField</c> and the picker points at the source.</item>
+    /// </list>
+    /// Owned relations are skipped: their child is an inline grid, not a lookup.
+    /// </remarks>
+    private static void ApplyReferenceControls(
+        BusinessPlanDefinition def,
+        List<ControlBindingSpec> bindings,
+        IReadOnlySet<string> formlessEntityKeys)
+    {
+        if (def.Relations.Count == 0)
+            return;
+
+        var entityByKey = def.Entities
+            .GroupBy(entity => entity.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var relation in def.Relations)
+        {
+            var kind = relation.Kind?.Trim() ?? string.Empty;
+            if (kind.Contains("Owned", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var manyToOne = kind.Contains("ManyToOne", StringComparison.OrdinalIgnoreCase);
+            var oneToMany = !manyToOne && kind.Contains("OneToMany", StringComparison.OrdinalIgnoreCase);
+            if (!manyToOne && !oneToMany)
+                continue;
+
+            // The foreign key and the entity a picker must list sit on opposite ends of the relation.
+            var holderKey = manyToOne ? relation.SourceEntityKey : relation.TargetEntityKey;
+            var holderField = manyToOne ? relation.SourceField : relation.TargetField;
+            var relatedKey = manyToOne ? relation.TargetEntityKey : relation.SourceEntityKey;
+
+            if (string.IsNullOrWhiteSpace(holderField) ||
+                !entityByKey.TryGetValue(holderKey ?? string.Empty, out var holder) ||
+                !entityByKey.TryGetValue(relatedKey ?? string.Empty, out var related) ||
+                string.Equals(holder.Key, related.Key, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // A read-only projection carries no form, and its field list is rebuilt from the SELECT when
+            // the view is created, so a control derived from the declared list would point at nothing.
+            if (formlessEntityKeys.Contains(holder.Key))
+                continue;
+
+            var entityName = PascalCase(holder.TechnicalName);
+            var fieldName = PascalCase(holderField);
+            if (!holder.Fields.Any(field => string.Equals(PascalCase(field.TechnicalName), fieldName, StringComparison.OrdinalIgnoreCase)))
+            {
+                // The relation names a field the entity never declares. Binding it anyway used to
+                // produce a controlBinding for a field that cannot exist, which failed the whole stage
+                // when the change set was normalized.
+                continue;
+            }
+
+            var binding = bindings.FirstOrDefault(item =>
+                string.Equals(item.Entity, entityName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Field, fieldName, StringComparison.OrdinalIgnoreCase));
+            if (binding == null)
+            {
+                // Defensive: the projection above drops plain `input` fields, and a foreign key is never one
+                // of those. Adding the binding anyway keeps this derivation independent of that filter.
+                binding = new ControlBindingSpec { Entity = entityName, Field = fieldName };
+                bindings.Add(binding);
+            }
+
+            binding.FormControlType = "select-table";
+            binding.SelectDataSource = null;
+            binding.SelectOptions = null;
+            binding.RelatedEntityName = PascalCase(related.TechnicalName);
+            binding.RelatedEntityIdField = "Id";
+            binding.RelatedEntityDisplayFields = [ResolveDisplayField(related)];
+        }
+    }
+
+    /// <summary>
+    /// Picks the label a picker shows for a row of <paramref name="entity"/>.
+    /// </summary>
+    /// <remarks>
+    /// "First text field" is not good enough: models emit fields in business order, so a project's
+    /// <c>Location</c> can precede its <c>ProjectName</c> and the picker ends up listing cities. The name
+    /// suffix is the reliable signal — <c>ProjectName</c>, <c>SupplierName</c>, <c>MaterialName</c> — so it
+    /// is preferred, then a code-like column, then declaration order. Falls back to <c>Name</c> when the
+    /// target has no text field at all, so the picker still loads instead of rendering an empty column.
+    /// </remarks>
+    private static string ResolveDisplayField(BusinessEntityDefinition entity)
+    {
+        var text = entity.Fields
+            .Where(field => string.Equals((field.DataType ?? string.Empty).Trim(), "string", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(field.Role?.Trim(), "primary key", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var candidate = text.FirstOrDefault(field => string.Equals(field.TechnicalName?.Trim(), "Name", StringComparison.OrdinalIgnoreCase))
+                        ?? text.FirstOrDefault(field => (field.TechnicalName ?? string.Empty).Trim().EndsWith("Name", StringComparison.OrdinalIgnoreCase))
+                        ?? text.FirstOrDefault(field => (field.TechnicalName ?? string.Empty).Trim().EndsWith("Title", StringComparison.OrdinalIgnoreCase))
+                        ?? text.FirstOrDefault(field => (field.TechnicalName ?? string.Empty).Trim().EndsWith("Code", StringComparison.OrdinalIgnoreCase) ||
+                                                        (field.TechnicalName ?? string.Empty).Trim().EndsWith("No", StringComparison.OrdinalIgnoreCase))
+                        ?? text.FirstOrDefault();
+
+        return PascalCase(candidate?.TechnicalName ?? "Name");
+    }
+
+    /// <summary>
+    /// Mutable shape for one entry of <c>controlBindings</c>. The property names are exactly the ones
+    /// <see cref="ProjectChangeSetDefinitionNormalizer"/> forwards to <c>UpdateEntityFieldProposal</c>, so a
+    /// binding can carry the whole select-table configuration and not just the control id.
+    /// </summary>
+    private sealed class ControlBindingSpec
+    {
+        [JsonPropertyName("entity")] public string Entity { get; set; } = string.Empty;
+        [JsonPropertyName("field")] public string Field { get; set; } = string.Empty;
+        [JsonPropertyName("formControlType")] public string FormControlType { get; set; } = "input";
+        [JsonPropertyName("selectDataSource")] public string? SelectDataSource { get; set; }
+        [JsonPropertyName("selectOptions")] public string? SelectOptions { get; set; }
+        [JsonPropertyName("relatedEntityName")] public string? RelatedEntityName { get; set; }
+        [JsonPropertyName("relatedEntityIdField")] public string? RelatedEntityIdField { get; set; }
+        [JsonPropertyName("relatedEntityDisplayFields")] public string[]? RelatedEntityDisplayFields { get; set; }
     }
 
     private static List<AiProjectWorkTaskInput> CompileComplexPagesTasks(

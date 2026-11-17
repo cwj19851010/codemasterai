@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Markdig" Version="1.6.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <!-- Microsoft.Playwright (the private printing module) requires assembly version 6.0.0.0.
          Keep the host on the same assembly version so optional modules can load in the

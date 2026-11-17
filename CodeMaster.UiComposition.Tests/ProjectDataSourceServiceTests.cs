@@ -127,7 +127,10 @@ public sealed class ProjectDataSourceServiceTests : IDisposable
         var reportCapability = Assert.Single(capabilities.ApiServices, item => item.ServiceName == nameof(RegisteredReportService));
         var reportMethod = Assert.Single(reportCapability.Methods, item => item.MethodName == nameof(RegisteredReportService.GetReportAsync));
         Assert.Equal("GET", reportMethod.HttpMethod);
-        Assert.Equal("/api/services/registeredreport/getreport", reportMethod.RoutePath);
+        // 动态 API 路由是 /api/{module}/{controller}/{action}，module 取命名空间的第 4 段，
+        // 不足 4 段时回落为 "app"。RegisteredReportService 在 CodeMaster.UiComposition.Tests
+        // （3 段）下，预期应是 /api/app/...，与 DynamicApiControllerConvention 保持一致。
+        Assert.Equal("/api/app/registeredreport/getreport", reportMethod.RoutePath);
 
         var unregistered = new CreateProjectDataSourceDto
         {

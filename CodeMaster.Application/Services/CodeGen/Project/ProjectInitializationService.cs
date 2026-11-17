@@ -233,6 +233,16 @@ public partial class ProjectInitializationService
     private static string ResolveFullProjectPath(Project project)
     {
         var target = project.ProjectPath!.Trim();
+
+        // Same guard as ProjectService.GetFullProjectPath: a relative path resolves against
+        // the backend's working directory (CodeMaster.WebApi) and used to dump a whole
+        // generated solution inside the host repository, which then failed to build.
+        if (!Path.IsPathRooted(target))
+        {
+            throw new InvalidOperationException(
+                $"项目 '{project.ProjectName}' 的路径必须是绝对路径，当前值：{target}");
+        }
+
         return target.TrimEnd('/', '\\').EndsWith(project.ProjectName, StringComparison.OrdinalIgnoreCase)
             ? target
             : Path.Combine(target, project.ProjectName);
@@ -398,23 +408,13 @@ public partial class ProjectInitializationService
             await SaveInitializationStateAsync(projectPath, state);
         }
 
-        // 10. 启动后端服务
-        if (!state.BackendStarted && backendPort > 0)
-        {
-            SendProgress(projectId, "start_backend", "启动后端服务...", 93);
-            await StartBackendAsync(projectPath, projectName, backendPort);
-            state.BackendStarted = true;
-            await SaveInitializationStateAsync(projectPath, state);
-        }
-
-        // 11. 启动前端服务
-        if (!state.FrontendStarted && frontendPort > 0)
-        {
-            SendProgress(projectId, "start_frontend", "启动前端服务...", 96);
-            await StartFrontendAsync(projectPath, projectName, frontendPort);
-            state.FrontendStarted = true;
-            await SaveInitializationStateAsync(projectPath, state);
-        }
+        // 10/11. 前后端 dev server 不在初始化里启动。
+        // 原因：这两个进程是长驻的，让初始化请求顺手拉起会带来两个副作用——
+        //   1) 一个慢启动或失败的 dev server 会决定项目是否算"初始化成功"；
+        //   2) 正在运行的后端会锁住生成目录里的文件，后续重写
+        //      GeneratedViewMigrationModule.cs 等产物会报 Access Denied。
+        // 因此初始化的边界止于"依赖装好、数据库迁移就绪"，启动交给用户手动执行。
+        SendProgress(projectId, "finalize", "初始化完成，前后端请手动启动", 100);
     }
 
     /// <summary>

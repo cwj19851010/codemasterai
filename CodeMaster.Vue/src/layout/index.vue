@@ -64,7 +64,7 @@
       <el-main class="main-content">
         <router-view v-slot="{ Component }">
           <keep-alive :include="cachedViews" :max="20">
-            <component :is="Component" />
+            <component :is="Component" :key="viewKey" />
           </keep-alive>
         </router-view>
       </el-main>
@@ -120,6 +120,8 @@ const activeMenu = computed(() => {
 })
 
 const cachedViews = computed(() => tagsViewStore.cachedViews)
+// 不进缓存的页面按完整路径挂载，同路由不同 query（如 edit?id=1 / id=2）各自重载自己的数据
+const viewKey = computed(() => (route.name && cachedViews.value.includes(route.name) ? undefined : route.fullPath))
 
 const toggleSidebar = () => {
   isCollapse.value = !isCollapse.value
@@ -164,7 +166,10 @@ onUnmounted(async () => {
 }
 
 .sidebar {
-  background: var(--sidebar-bg, #152238);
+  background-color: var(--sidebar-bg, #152238);
+  background-image: var(--sidebar-bg-image, none);
+  background-size: cover;
+  background-position: center;
   border-right: 1px solid var(--sidebar-border, rgba(148, 163, 184, 0.16));
   transition: width 0.3s, background-color 0.2s ease;
   overflow-x: hidden;
@@ -174,12 +179,12 @@ onUnmounted(async () => {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.16);
+    background: var(--sidebar-logo-bg, rgba(0, 0, 0, 0.16));
     border-bottom: 1px solid var(--sidebar-border, rgba(148, 163, 184, 0.16));
     transition: all 0.3s;
 
     h2 {
-      color: #fff;
+      color: var(--sidebar-logo-color, #fff);
       font-size: 20px;
       margin: 0;
       font-weight: 600;
@@ -193,6 +198,7 @@ onUnmounted(async () => {
 
     :deep(.el-menu-item),
     :deep(.el-sub-menu__title) {
+      position: relative;
       color: var(--sidebar-text-color, #b8c7e0);
       height: 46px;
       line-height: 46px;
@@ -206,6 +212,18 @@ onUnmounted(async () => {
       &.is-active {
         color: var(--sidebar-active-text-color, #409eff) !important;
         background: var(--sidebar-active-bg, rgba(64, 158, 255, 0.16)) !important;
+
+        &::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 50%;
+          width: 3px;
+          height: 18px;
+          border-radius: 0 3px 3px 0;
+          background: currentColor;
+          transform: translateY(-50%);
+        }
       }
     }
 

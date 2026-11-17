@@ -14,7 +14,11 @@ public static class ProjectProcessLauncher
             command: NpmCommand(),
             args: new[] { "run", "dev" },
             port: port,
-            readyTimeout: TimeSpan.FromSeconds(10));
+            // Vite has to optimise dependencies on a cold start, which regularly takes
+            // 30-60s right after `npm install`. A 10s budget reported a failure for a
+            // dev server that was merely still starting up, and because the project is
+            // only marked Initialized on success, the whole initialization looked broken.
+            readyTimeout: TimeSpan.FromSeconds(60));
     }
 
     public static Task<ProjectActionResultDto> StartBackendAsync(string projectName, string projectPath, int? port)

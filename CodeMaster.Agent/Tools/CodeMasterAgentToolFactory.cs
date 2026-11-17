@@ -61,6 +61,7 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
     private readonly ICodeMasterProjectChangeSetService _changeSetService;
     private readonly IProjectChangeSetDefinitionNormalizer _definitionNormalizer;
     private readonly IAiProjectWorkPlanService _workPlanService;
+    private readonly IAiAttachmentStore _attachmentStore;
     private readonly IRepository<AiToolExecution> _executionRepository;
     private readonly IRepository<AiConversation> _conversationRepository;
     private readonly IAgentEventStore _eventStore;
@@ -93,9 +94,11 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         IEnumerable<ICodeMasterAgentToolExtension>? toolExtensions = null,
         IEnumerable<ICodeMasterAgentBatchOperationAdapter>? batchAdapters = null,
         IPlatformConstraintsProvider? platformConstraints = null,
-        AiConversationReadCacheManager? cacheManager = null)
+        AiConversationReadCacheManager? cacheManager = null,
+        IAiAttachmentStore? attachmentStore = null)
     {
         _cacheManager = cacheManager;
+        _attachmentStore = attachmentStore ?? new AiAttachmentStore();
         _projectService = projectService;
         _moduleService = moduleService;
         _entityService = entityService;
@@ -389,6 +392,19 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                                 : "项目方案已保存，当前没有可执行任务。"
                 }, JsonOptions);
             }
+            catch (AiProjectWorkPlanInProgressException ex)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    code = ActivePlanInProgressCode,
+                    projectId,
+                    planId = ex.PlanId,
+                    planStatus = ex.PlanStatus.ToString(),
+                    diagnostic = ex.Message,
+                    message = $"当前计划（{ex.PlanId}）还有未完成的工作，本次没有新建计划。请先完成或驳回当前批次；确需放弃该计划时，显式调用 supersede_project_work_plan。"
+                }, JsonOptions);
+            }
             catch (Exception ex)
             {
                 return JsonSerializer.Serialize(new
@@ -419,6 +435,18 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                     success = true,
                     plan,
                     message = "旧项目方案已撤销，可以重新提交。"
+                }, JsonOptions);
+            }
+            catch (AiProjectWorkPlanInProgressException ex)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    code = ActivePlanInProgressCode,
+                    planId = ex.PlanId,
+                    projectId,
+                    diagnostic = ex.Message,
+                    message = $"计划（{ex.PlanId}）正在执行中，暂时不能撤销。请等当前批次结束后再试。"
                 }, JsonOptions);
             }
             catch (Exception ex)
@@ -493,6 +521,19 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                                 string.Equals(t.Status, "Ready", StringComparison.OrdinalIgnoreCase))
                                 ? $"业务计划已编译保存，存在就绪任务但本轮未能启动执行。"
                                 : $"业务计划已编译保存，当前没有可执行任务。"
+                }, JsonOptions);
+            }
+            catch (AiProjectWorkPlanInProgressException ex)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    code = ActivePlanInProgressCode,
+                    projectId,
+                    planId = ex.PlanId,
+                    planStatus = ex.PlanStatus.ToString(),
+                    diagnostic = ex.Message,
+                    message = $"当前计划（{ex.PlanId}）还有未完成的工作，本次没有新建计划。请先完成或驳回当前批次；确需放弃该计划时，显式调用 supersede_project_work_plan。"
                 }, JsonOptions);
             }
             catch (ArgumentException ex)
@@ -688,6 +729,91 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             }, JsonOptions);
         }
 
+        async Task<string> ListProjectFilesAsync(AiProjectFileListQuery query)
+        {
+            var project = await GetProjectAsync(projectId);
+            if (string.IsNullOrWhiteSpace(project.ProjectPath) || !Directory.Exists(project.ProjectPath))
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    message = "这个项目还没有可读取的生成目录，无法列出文档。"
+                }, JsonOptions);
+            }
+
+            var limit = Math.Clamp(query?.MaxResults ?? AiProjectFileReader.MaxListedFiles, 1, AiProjectFileReader.MaxListedFiles);
+            var files = AiProjectFileReader.EnumerateDocuments(project.ProjectPath, query?.Directory, limit);
+            return JsonSerializer.Serialize(new
+            {
+                success = true,
+                root = project.ProjectPath,
+                directory = string.IsNullOrWhiteSpace(query?.Directory) ? "." : query!.Directory,
+                count = files.Count,
+                truncated = files.Count >= limit,
+                files = files.Select(item => new { path = item.RelativePath, size = item.Size }),
+                message = files.Count == 0
+                    ? "项目目录下没有找到 .md/.txt 文档。可以让用户把需求文档放到项目目录后再读。"
+                    : "使用 read_project_file 读取其中任意一个文件。"
+            }, JsonOptions);
+        }
+
+        async Task<string> ReadProjectFileAsync(AiProjectFileReadQuery query)
+        {
+            var project = await GetProjectAsync(projectId);
+            if (!AiProjectFileReader.TryResolve(project.ProjectPath, query?.Path, out var fullPath, out var error))
+                return JsonSerializer.Serialize(new { success = false, message = error }, JsonOptions);
+
+            var size = new FileInfo(fullPath).Length;
+            if (size > AiProjectFileReader.MaxFileBytes)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    message = $"「{Path.GetFileName(fullPath)}」有 {size / 1024} KB，超过 {AiProjectFileReader.MaxFileBytes / 1024} KB 上限，无法整体读取。请让用户精简后再试。"
+                }, JsonOptions);
+            }
+
+            var text = AiAttachmentStore.DecodeText(await File.ReadAllBytesAsync(fullPath));
+            var slice = SliceDocument(text, query?.Offset, query?.MaxChars);
+            return JsonSerializer.Serialize(new
+            {
+                success = true,
+                path = Path.GetRelativePath(project.ProjectPath!, fullPath).Replace('\\', '/'),
+                totalChars = text.Length,
+                offset = slice.Offset,
+                returnedChars = slice.Content.Length,
+                truncated = slice.NextOffset.HasValue,
+                nextOffset = slice.NextOffset,
+                content = slice.Content
+            }, JsonOptions);
+        }
+
+        async Task<string> ReadAttachmentAsync(AiAttachmentReadQuery query)
+        {
+            var text = await _attachmentStore.ReadAllTextAsync(conversationId, query?.Token);
+            if (text == null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    message = "找不到这个附件。附件只在它被发送的那条消息上有效，请使用该消息附件列表里的 token。"
+                }, JsonOptions);
+            }
+
+            var slice = SliceDocument(text, query?.Offset, query?.MaxChars);
+            return JsonSerializer.Serialize(new
+            {
+                success = true,
+                token = query!.Token,
+                totalChars = text.Length,
+                offset = slice.Offset,
+                returnedChars = slice.Content.Length,
+                truncated = slice.NextOffset.HasValue,
+                nextOffset = slice.NextOffset,
+                content = slice.Content
+            }, JsonOptions);
+        }
+
         var canRead = await _authorizationService.HasAnyAsync("codegen:project:list", "codegen:project:view");
         var canChange = await _authorizationService.HasAnyAsync(
                 "codegen:projectModule:create",
@@ -725,7 +851,11 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             proposeProjectWorkBatch: ProposeProjectWorkBatchAsync,
             supersedeProjectWorkPlan: SupersedeProjectWorkPlanAsync,
             includeSubmitBusinessPlan: canChange,
-            submitBusinessPlan: SubmitBusinessPlanAsync);
+            submitBusinessPlan: SubmitBusinessPlanAsync,
+            includeDocumentRead: canRead,
+            listProjectFiles: ListProjectFilesAsync,
+            readProjectFile: ReadProjectFileAsync,
+            readAttachment: ReadAttachmentAsync);
 
         if (_toolExtensions.Count == 0)
             return tools;
@@ -934,6 +1064,12 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
 
     public async Task<AiToolExecutionDto> ApproveAsync(long executionId)
     {
+        // Checked before AcceptAsync: accepting flips the row to Approved, which is the last point
+        // where a stale approval is still cheap to drop.
+        var stale = await RejectIfStaleAsync(await GetOwnedExecutionAsync(executionId));
+        if (stale != null)
+            return stale;
+
         var accepted = await AcceptAsync(executionId);
         return string.Equals(accepted.Status, "Approved", StringComparison.Ordinal)
             ? await ExecuteApprovedAsync(executionId)
@@ -945,6 +1081,16 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         var execution = await GetOwnedExecutionAsync(executionId);
         if (execution.Status is "Completed" or "AwaitingClientExecution" or "Failed" or "Rejected")
             return ToDto(execution);
+
+        // Stale-snapshot guard. An approval is a change-set compiled against the blueprint as it
+        // looked when the plan was compiled; by the time it is approved the plan may already have
+        // been superseded, and executing it then replays outdated metadata against a project that
+        // has moved on. The resume path always had this check (ExecuteNextWorkPlanBatchAsync);
+        // direct approval — including the client's automatic approval loop — bypassed it entirely.
+        var stale = await RejectIfStaleAsync(execution);
+        if (stale != null)
+            return stale;
+
         if (string.Equals(execution.Status, "PendingApproval", StringComparison.Ordinal))
         {
             var accepted = await AcceptAsync(executionId);
@@ -1033,7 +1179,8 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                         ErrorMessage = execution.ErrorMessage,
                         DiagnosticOutput = ex.ToString(),
                         ReproducedInCodeMasterOwnedPath = IsCodeMasterOwnedFailure(ex)
-                    });
+                    },
+                    ReadCompletedTaskKeys(ex));
             // Return the handled failure so the conversation can render the
             // diagnostic and continue with a repair turn instead of producing
             // an empty/400 response from the approval endpoint.
@@ -1063,7 +1210,7 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             throw new InvalidOperationException("The work plan is not owned by this conversation and project.");
         if (plan.RequiresConfirmation)
             throw new InvalidOperationException("The work plan must be confirmed before automatic execution starts.");
-        if (plan.Status is "Completed" or "Cancelled" or "Superseded")
+        if (IsTerminalPlanStatus(plan.Status))
             return null;
 
         if (plan.ActiveBatchId.HasValue)
@@ -1264,6 +1411,98 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         return ToDto(execution);
     }
 
+    /// <summary>
+    /// A retired plan can no longer produce work: its batches are cancelled and its snapshot is
+    /// stale by definition. Shared so the resume path and the approval path cannot drift apart.
+    /// </summary>
+    internal static bool IsTerminalPlanStatus(string? status)
+        => status is "Completed" or "Cancelled" or "Superseded";
+
+    /// <summary>Carries the committed task keys out of a failed batch execution.</summary>
+    internal const string CompletedTaskKeysDataKey = "CodeMaster.Agent.CompletedWorkTaskKeys";
+
+    /// <summary>
+    /// Stable machine code returned when a plan submission is rejected because the active plan
+    /// still has work in flight. The model is expected to report it instead of retrying, and the
+    /// UI can special-case it without parsing prose.
+    /// </summary>
+    internal const string ActivePlanInProgressCode = "active_plan_in_progress";
+
+    private static void AttachCompletedTaskKeys(Exception exception, IReadOnlyCollection<string> completedTaskKeys)
+        => exception.Data[CompletedTaskKeysDataKey] = completedTaskKeys.ToArray();
+
+    private static IReadOnlyCollection<string>? ReadCompletedTaskKeys(Exception exception)
+        => exception.Data[CompletedTaskKeysDataKey] as string[];
+
+    private async Task<bool> IsRetiredWorkPlanAsync(long planId)
+    {
+        try
+        {
+            var plan = await _workPlanService.GetAsync(planId);
+            return IsTerminalPlanStatus(plan.Status);
+        }
+        catch (KeyNotFoundException)
+        {
+            // The plan row is gone; the approval points at nothing that can still be applied.
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Returns the rejected record when the approval must not run, or <c>null</c> when it may.
+    /// Both approval entry points call this so a stale snapshot cannot slip in through one of them.
+    /// </summary>
+    private async Task<AiToolExecutionDto?> RejectIfStaleAsync(AiToolExecution execution)
+    {
+        if (!execution.WorkPlanId.HasValue)
+            return null;
+        if (execution.Status is "Completed" or "AwaitingClientExecution" or "Failed" or "Rejected")
+            return null;
+        return await IsRetiredWorkPlanAsync(execution.WorkPlanId.Value)
+            ? await RejectStaleApprovalAsync(execution)
+            : null;
+    }
+
+    /// <summary>
+    /// Drops an approval whose plan has been retired, instead of executing it.
+    ///
+    /// Rejecting (rather than throwing) is deliberate: the client's automatic approval loop looks
+    /// for PendingApproval records and would retry a thrown error forever. Flipping the record to
+    /// Rejected removes it from that set once and for all, and the reason stays visible on the row.
+    /// </summary>
+    private async Task<AiToolExecutionDto> RejectStaleApprovalAsync(AiToolExecution execution)
+    {
+        var completedAt = DateTime.UtcNow;
+        const string message =
+            "This approval belongs to a work plan that has already been superseded, completed or cancelled, "
+            + "so its change set is stale and was not applied. Use the current work plan instead.";
+
+        // AcceptAsync runs before execution on the approve path, so an already-accepted row has to
+        // match too — otherwise the rejection would silently update nothing.
+        var updated = await _db.Updateable<AiToolExecution>()
+            .SetColumns(item => item.Status == "Rejected")
+            .SetColumns(item => item.ErrorMessage == message)
+            .SetColumns(item => item.CompletedAt == completedAt)
+            .SetColumns(item => item.UpdateUserId == _currentUser.UserId)
+            .SetColumns(item => item.UpdateBy == _currentUser.UserName)
+            .SetColumns(item => item.UpdateTime == completedAt)
+            .Where(item => item.Id == execution.Id &&
+                           item.UserId == _currentUser.UserId &&
+                           (item.Status == "PendingApproval" || item.Status == "Approved"))
+            .ExecuteCommandAsync();
+
+        if (updated == 0)
+            return ToDto(await GetOwnedExecutionAsync(execution.Id));
+
+        execution = await GetOwnedExecutionAsync(execution.Id);
+        // The batch is normally already cancelled by AiProjectWorkPlanService.RetirePlanAsync;
+        // RejectBatchAsync also clears the plan's ActiveBatchId, which keeps the projection clean
+        // for plans retired before that fix shipped.
+        if (execution.WorkBatchId.HasValue)
+            await _workPlanService.RejectBatchAsync(execution.WorkBatchId.Value);
+        return ToDto(execution);
+    }
+
     private async Task<object> ExecuteCreateModuleAsync(AiToolExecution execution)
     {
         var proposal = DeserializeInput<CreateModuleProposal>(execution);
@@ -1400,6 +1639,9 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             BatchId = proposal.Batch.Id,
             Summary = proposal.Summary
         };
+        // Tasks whose operation already committed. Carried on the exception when a later task
+        // fails so the batch bookkeeping can keep them Completed (see CompleteBatchAsync).
+        var completedTaskKeys = new List<string>();
         foreach (var operation in proposal.Operations)
         {
             await PublishTaskEventAsync(proposal, operation, "task_started", requestId);
@@ -1412,9 +1654,19 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
             {
                 await PublishTaskEventAsync(proposal, operation, "task_completed", requestId, success: false, errorMessage: ex.GetBaseException().Message);
                 await PublishStageEventAsync(proposal, batchStage, "stage_completed", requestId, success: false, errorMessage: ex.GetBaseException().Message);
+                AttachCompletedTaskKeys(ex, completedTaskKeys);
                 throw;
             }
-            await VerifyWorkBatchOperationAsync(execution.ProjectId, operation, operationResult);
+            try
+            {
+                await VerifyWorkBatchOperationAsync(execution.ProjectId, operation, operationResult);
+            }
+            catch (Exception ex)
+            {
+                AttachCompletedTaskKeys(ex, completedTaskKeys);
+                throw;
+            }
+            completedTaskKeys.Add(operation.TaskKey);
             result.OperationResults.Add(operationResult);
             var actions = operationResult switch
             {
@@ -1564,7 +1816,10 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
                     $"Task '{operation.TaskKey}' reported only {result.CreatedEntities.Count} created entities for {expectedEntities.Count} requested entities.");
         }
 
-        if (proposal.Dictionaries.Count > 0)
+        // Dictionaries are decoration: when the generated project's database has not been migrated
+        // yet the change set records the skip instead of failing, and there is nothing to verify
+        // either. Reading them back would only re-throw the same missing-table error.
+        if (proposal.Dictionaries.Count > 0 && result.CreatedDictionaryCount > 0)
         {
             foreach (var group in proposal.Dictionaries.GroupBy(item => item.TenantId))
             {
@@ -1685,7 +1940,7 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
         long projectId,
         ProjectChangeSetProposal proposal)
     {
-        var repairs = RepairImplicitPrimaryKeys(proposal);
+        var repairs = ProjectChangeSetIssueRepairs.RepairImplicitPrimaryKeys(proposal);
         repairs.AddRange(ProjectChangeSetIssueRepairs.NormalizeOneToManyRelations(proposal));
         repairs.AddRange(await DeferUnresolvedRelatedTargetsAsync(projectId, proposal));
 
@@ -1748,30 +2003,6 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
     /// stored proposal self-consistent instead of relying on that implicit fallback.
     /// </para>
     /// </summary>
-    internal static List<string> RepairImplicitPrimaryKeys(ProjectChangeSetProposal proposal)
-    {
-        var repairs = new List<string>();
-
-        foreach (var entity in proposal.Entities)
-        {
-            if (!entity.HasPrimaryKey)
-                continue;
-            if (entity.Fields.Any(field => field.IsPrimaryKey))
-                continue;
-
-            var idField = entity.Fields.FirstOrDefault(field =>
-                string.Equals(field.Name, "Id", StringComparison.OrdinalIgnoreCase));
-            if (idField == null)
-                continue;
-
-            idField.IsPrimaryKey = true;
-            repairs.Add(
-                $"Marked {entity.Name}.{idField.Name} as the primary key; the entity declares a primary key but no field was flagged as one.");
-        }
-
-        return repairs;
-    }
-
     private static bool IsSelfRelation(
         string sourceEntityName,
         long sourceEntityId,
@@ -2046,6 +2277,28 @@ internal sealed class CodeMasterAgentToolFactory : ICodeMasterAgentToolFactory
     {
         var project = await _projectService.GetByIdAsync(projectId);
         return project ?? throw new KeyNotFoundException("The project bound to this conversation was not found.");
+    }
+
+    /// <summary>Default and maximum number of characters returned by one document read.</summary>
+    internal const int DefaultDocumentSliceChars = AiAttachmentLimits.MaxCharsPerDocument;
+
+    /// <summary>
+    /// Takes one window out of a document and reports where the next window starts.
+    /// Paging keeps a large requirement document readable without ever returning a payload
+    /// the model cannot fit into its context.
+    /// </summary>
+    internal static (int Offset, string Content, int? NextOffset) SliceDocument(
+        string text,
+        int? offset,
+        int? maxChars)
+    {
+        var total = text.Length;
+        var start = Math.Clamp(offset ?? 0, 0, total);
+        var limit = Math.Clamp(maxChars ?? DefaultDocumentSliceChars, 1000, DefaultDocumentSliceChars);
+        var length = Math.Min(limit, total - start);
+        var content = text.Substring(start, length);
+        int? nextOffset = start + length < total ? start + length : null;
+        return (start, content, nextOffset);
     }
 
     private async Task ValidateEntityProposalAsync(long projectId, CreateEntityProposal proposal)

@@ -1,6 +1,8 @@
 using CodeMaster.Application.Dtos.Community;
 using CodeMaster.Application.Services.Community;
 using CodeMaster.Core.Common;
+using CodeMaster.WebApi.ContentRendering;
+using CodeMaster.WebApi.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -65,5 +67,69 @@ public class CommunityController : ControllerBase
     {
         var id = await _communityService.CreateReplyAsync(dto);
         return Ok(ApiResponse<object>.Success(new { id }, "Reply created."));
+    }
+
+    [Authorize]
+    [HttpPut("topics/{id:long}")]
+    public async Task<IActionResult> UpdateTopic(long id, [FromBody] UpdateCommunityTopicDto dto)
+    {
+        await _communityService.UpdateTopicAsync(id, dto);
+        return Ok(ApiResponse.Success("已保存"));
+    }
+
+    [Authorize]
+    [HttpDelete("topics/{id:long}")]
+    public async Task<IActionResult> DeleteTopic(long id)
+    {
+        await _communityService.DeleteTopicAsync(id);
+        return Ok(ApiResponse.Success("已删除"));
+    }
+
+    [Authorize]
+    [HttpPost("topics/{id:long}/like")]
+    public async Task<IActionResult> ToggleTopicLike(long id)
+    {
+        var result = await _communityService.ToggleTopicLikeAsync(id);
+        return Ok(ApiResponse<CommunityLikeResultDto>.Success(result));
+    }
+
+    [Authorize]
+    [HttpPost("topics/{id:long}/flags")]
+    public async Task<IActionResult> SetTopicFlags(long id, [FromBody] CommunityModerationDto dto)
+    {
+        await _communityService.SetTopicFlagsAsync(id, dto);
+        return Ok(ApiResponse.Success("已更新"));
+    }
+
+    [Authorize]
+    [HttpPut("replies/{id:long}")]
+    public async Task<IActionResult> UpdateReply(long id, [FromBody] UpdateCommunityReplyDto dto)
+    {
+        await _communityService.UpdateReplyAsync(id, dto);
+        return Ok(ApiResponse.Success("已保存"));
+    }
+
+    [Authorize]
+    [HttpDelete("replies/{id:long}")]
+    public async Task<IActionResult> DeleteReply(long id)
+    {
+        await _communityService.DeleteReplyAsync(id);
+        return Ok(ApiResponse.Success("已删除"));
+    }
+
+    [Authorize]
+    [HttpPost("topics/{id:long}/accept/{replyId:long}")]
+    public async Task<IActionResult> AcceptReply(long id, long replyId)
+    {
+        await _communityService.AcceptReplyAsync(id, replyId);
+        return Ok(ApiResponse.Success("已更新"));
+    }
+
+    [AllowAnonymous]
+    [HttpPost("preview")]
+    public IActionResult Preview([FromBody] CommunityPreviewRequest request)
+    {
+        var html = CommunityMarkdown.ToHtml(request.Content);
+        return Ok(ApiResponse<object>.Success(new { html }));
     }
 }

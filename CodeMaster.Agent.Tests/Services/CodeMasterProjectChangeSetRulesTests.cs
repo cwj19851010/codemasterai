@@ -248,6 +248,73 @@ public class CodeMasterProjectChangeSetRulesTests
         Assert.True(primaryKey.IsSystemField);
     }
 
+    /// <summary>
+    /// 模型不写 showInSearch 时，列表页会一个查询条件都没有（showInList 等四个开关默认 true，
+    /// 只有 showInSearch 默认 false）。这里补一次确定性兜底。
+    /// </summary>
+    [Fact]
+    public void MapFields_FallsBackToDefaultSearchFieldsWhenModelSpecifiesNone()
+    {
+        var fields = CodeMasterProjectChangeSetService.MapFields(new CreateEntityProposal
+        {
+            Name = "Supplier",
+            Description = "Supplier",
+            HasPrimaryKey = true,
+            Fields =
+            {
+                Field("Name", "名称"),
+                Field("Contact", "联系人"),
+                new CreateEntityFieldProposal
+                {
+                    Name = "Notes",
+                    Description = "备注",
+                    DataType = "string",
+                    FormControlType = "textarea",
+                    MaxLength = 1000
+                },
+                new CreateEntityFieldProposal
+                {
+                    Name = "Amount",
+                    Description = "金额",
+                    DataType = "decimal",
+                    FormControlType = "number"
+                }
+            }
+        });
+
+        // Id 是系统主键；Notes 是长文本域，两者都不该进查询条件。
+        Assert.Equal(
+            new[] { "Name", "Contact", "Amount" },
+            fields.Where(field => field.ShowInSearch).Select(field => field.Name));
+    }
+
+    [Fact]
+    public void MapFields_KeepsModelChosenSearchFieldsUntouched()
+    {
+        var fields = CodeMasterProjectChangeSetService.MapFields(new CreateEntityProposal
+        {
+            Name = "Supplier",
+            Description = "Supplier",
+            HasPrimaryKey = false,
+            Fields =
+            {
+                new CreateEntityFieldProposal
+                {
+                    Name = "Code",
+                    Description = "编码",
+                    DataType = "string",
+                    FormControlType = "input",
+                    ShowInSearch = true
+                },
+                Field("Contact", "联系人")
+            }
+        });
+
+        Assert.Equal(
+            new[] { "Code" },
+            fields.Where(field => field.ShowInSearch).Select(field => field.Name));
+    }
+
     [Fact]
     public void MapFields_NormalizesAgentDataTypeAliases()
     {
@@ -623,12 +690,15 @@ public class CodeMasterProjectChangeSetRulesTests
     }
 
     [Fact]
-    public void Validate_RejectsDuplicateExistingNames()
+    public void Validate_TreatsExistingNamesAsAdoptionInsteadOfFailure()
     {
+        // 一个批次在客户端超时重试、或与另一个批次并发时，会晚于真正的建库批次到达。
+        // ExecuteAsync 对同名模块/实体的处理是"认领"（见其 adoptedId / adoptedEntityId 分支），
+        // 所以校验阶段不能把它判成错误——否则整批回滚，而项目元数据其实是完整的。
         var blueprint = CreateBlueprint();
         var proposal = new ProjectChangeSetProposal
         {
-            Summary = "Duplicate names",
+            Summary = "Replayed change set",
             Modules =
             {
                 new CreateModuleProposal { ModuleName = "System", ModuleDescription = "Duplicate" }
@@ -640,16 +710,45 @@ public class CodeMasterProjectChangeSetRulesTests
                     ModuleId = 10,
                     Name = "Customer",
                     Description = "Duplicate",
-                    Fields = { Field("Name", "Name") }
+                    Fields = { Field("Phone", "Phone") }
                 }
             }
         };
 
         var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
 
+        Assert.True(result.IsValid);
+        Assert.Contains(result.Warnings, x => x.Contains("Module 'System' already exists", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, x => x.Contains("Entity 'Customer' already exists", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Errors, x => x.Contains("already exists", StringComparison.Ordinal));
+        // 认领项只会有一次实体行，不能既算"已存在"又算"最终重名"。
+        Assert.DoesNotContain(result.Errors, x => x.Contains("Duplicate final", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_StillRejectsDuplicateWhenExistingModuleIsRenamedAwayInSameChangeSet()
+    {
+        // 被本变更集改名让出的名字不算"认领"：那个名字确实要腾出来给新模块，
+        // 若新模块又和别的东西撞名，必须继续报错。
+        var blueprint = CreateBlueprint();
+        var proposal = new ProjectChangeSetProposal
+        {
+            Summary = "Rename away and recreate",
+            ModuleUpdates =
+            {
+                new UpdateModuleProposal { ModuleId = 10, ModuleName = "SystemRenamed" }
+            },
+            Modules =
+            {
+                new CreateModuleProposal { ModuleName = "System", ModuleDescription = "Recreated" },
+                new CreateModuleProposal { ModuleName = "SystemRenamed", ModuleDescription = "Collides with the rename" }
+            }
+        };
+
+        var result = CodeMasterProjectChangeSetRules.Validate(blueprint, proposal);
+
         Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, x => x.Contains("Module 'System' already exists", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, x => x.Contains("Entity 'Customer' already exists", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.Contains("Duplicate final module name", StringComparison.Ordinal));
     }
 
     [Fact]

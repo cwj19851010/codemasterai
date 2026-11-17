@@ -156,10 +156,21 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
         });
 
         var path = modulePath;
-        // 4. 检查菜单是否已存在
+        var remark = ProjectModuleMenuPolicy.BuildRemark(module.Id);
+
+        // 4. 检查菜单是否已存在。模块 Id 标记优先：模块改名后 Path 已经变了，
+        // 只有它能把这个模块的老目录认回来，否则每改一次名就会多一个孤儿目录。
         var existingMenu = await targetDb.Queryable<SysMenu>()
-            .Where(m => m.Path == path && m.MenuType == "M" && m.ParentId == null)
+            .Where(m => m.MenuType == "M" && m.ParentId == null && m.Remark == remark)
             .FirstAsync();
+
+        if (existingMenu == null)
+        {
+            existingMenu = await targetDb.Queryable<SysMenu>()
+                .Where(m => m.Path == path && m.MenuType == "M" && m.ParentId == null)
+                .FirstAsync();
+        }
+
         if (existingMenu == null)
         {
             var candidates = await targetDb.Queryable<SysMenu>()
@@ -185,6 +196,7 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
             existingMenu.DeleteTime = null;
             existingMenu.UpdateTime = DateTime.UtcNow;
             existingMenu.Component = "Layout";
+            existingMenu.Remark = remark;
 
             await targetDb.Updateable(existingMenu).ExecuteCommandAsync();
         }
@@ -208,6 +220,7 @@ public class ProjectModuleService : CrudApplicationService<ProjectModule, Projec
                 Visible = true,
                 Status = 0,
                 Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon,
+                Remark = remark,
                 CreateTime = DateTime.UtcNow,
                 IsDeleted = false
             };

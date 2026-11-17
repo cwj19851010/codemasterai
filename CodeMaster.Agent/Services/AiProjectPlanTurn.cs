@@ -120,11 +120,9 @@ public static class AiProjectPlanTurn
     public static async Task<AiProjectPlanTurnResult> EnsureSavedAsync(
         Func<CancellationToken, Task<AiProjectWorkPlanDto?>> readPlan,
         Func<string, CancellationToken, Task> continueRun,
-        Func<long, long, CancellationToken, Task<AiProjectWorkPlanDto?>>? directUpsertAsync,
         Func<int, CancellationToken, Task>? reportContinuation = null,
         CancellationToken cancellationToken = default,
-        long? fallbackProjectId = null,
-        long? fallbackConversationId = null)
+        Action<int, Exception>? reportFailure = null)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -135,19 +133,11 @@ public static class AiProjectPlanTurn
 
             if (attempt >= MaximumContinuationAttempts)
             {
-                if (directUpsertAsync != null)
-                {
-                    // The fallback delegate receives the actual project and
-                    // conversation ids from the caller. The retry counter is
-                    // only a local control value and must never be passed as
-                    // an identifier.
-                    var fallback = await directUpsertAsync(
-                        fallbackProjectId ?? 0,
-                        fallbackConversationId ?? 0,
-                        cancellationToken);
-                    if (fallback is { TotalTasks: > 0 })
-                        return new(fallback, attempt);
-                }
+                // No plan means no plan. This used to substitute a built-in engineering template so the
+                // workflow could advance, and the user was then told "the task plan is ready" — with
+                // metadata that had nothing to do with their requirement and no way to tell the difference.
+                // Failing loudly keeps the requirement and the generated project in sync: if the model
+                // cannot produce a plan, the caller reports it instead of inventing one.
                 return new(plan is { TotalTasks: > 0 } ? plan : null, attempt);
             }
 
@@ -167,21 +157,45 @@ public static class AiProjectPlanTurn
                     "The existing workflow handles confirmation and execution after the plan is saved.",
                     cancellationToken);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // continueRun failures (timeout, HTTP 400, parse errors) must NOT abort the loop.
-                // The fallback path is invoked below once we exhaust the attempt budget.
+                // continueRun failures (timeout, HTTP 400, parse errors) must NOT abort the loop: the next
+                // attempt may still succeed. They must not disappear either. A silent catch here made every
+                // failed continuation indistinguishable from a model that simply refused to call the plan
+                // tool, and the built-in template then replaced the user's requirement with no trace at all.
+                reportFailure?.Invoke(attempt, ex);
             }
         }
     }
 
-    public static string BuildOutcomeMessage(AiProjectWorkPlanDto? plan) => plan switch
+    public static string BuildOutcomeMessage(AiProjectWorkPlanDto? plan, Exception? lastFailure = null) => plan switch
     {
-        null => UnfulfilledMessage,
+        null => BuildUnfulfilledMessage(lastFailure),
         { RequiresConfirmation: true } => "任务计划已准备好，请点击“确认并开始执行”。",
         { Status: "Blocked" or "Failed" } => $"任务计划已保存，当前完成 {plan.CompletedTasks}/{plan.TotalTasks} 项；执行遇到阻塞，请查看具体任务的错误信息。",
         _ => $"任务计划已保存，当前完成 {plan.CompletedTasks}/{plan.TotalTasks} 项。"
     };
+
+    /// <summary>
+    /// Tells the user that nothing was generated, and why. The reason matters: without it "the model did
+    /// not submit a plan" is indistinguishable from a provider outage, an expired key, or a rejected tool
+    /// schema, and the only way to find out was to read server logs.
+    /// </summary>
+    public static string BuildUnfulfilledMessage(Exception? lastFailure = null)
+    {
+        if (lastFailure == null)
+            return UnfulfilledMessage;
+
+        var reason = lastFailure.GetBaseException().Message;
+        if (string.IsNullOrWhiteSpace(reason))
+            return UnfulfilledMessage;
+
+        const int maximumReasonLength = 300;
+        if (reason.Length > maximumReasonLength)
+            reason = reason[..maximumReasonLength] + "…";
+
+        return $"{UnfulfilledMessage}{Environment.NewLine}{Environment.NewLine}最后一次尝试失败的原因：{reason}";
+    }
 
     public static string BuildDiagnostics(IEnumerable<string> availableTools, bool planRequired, AiProjectPlanTurnResult? result,
         AiResponseCompletionResult? answerResult = null, object[]? modelCalls = null) =>

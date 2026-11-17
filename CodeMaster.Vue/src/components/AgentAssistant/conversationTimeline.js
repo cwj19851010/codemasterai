@@ -17,6 +17,8 @@ const compareStableIds = (left, right) => {
   return left.sourceOrder - right.sourceOrder
 }
 
+export const TIME_ORDER_THRESHOLD_MS = 3000
+
 export const buildConversationTimeline = ({
   messages = [],
   pendingApprovals = [],
@@ -43,7 +45,12 @@ export const buildConversationTimeline = ({
   const sortedConversationItems = conversationItems
     .sort((left, right) => {
       const timeDifference = toTimestamp(left.value) - toTimestamp(right.value)
-      return timeDifference || compareStableIds(left, right)
+      // For items created within a short window, preserve the original array
+      // order to prevent server/client clock skew from reordering messages.
+      if (Math.abs(timeDifference) <= TIME_ORDER_THRESHOLD_MS) {
+        return left.sourceOrder - right.sourceOrder
+      }
+      return timeDifference || left.sourceOrder - right.sourceOrder
     })
     .map(({ sourceOrder: _, ...item }) => item)
 
@@ -57,7 +64,10 @@ export const buildConversationTimeline = ({
     }))
     .sort((left, right) => {
       const timeDifference = toTimestamp(left.value) - toTimestamp(right.value)
-      return timeDifference || compareStableIds(left, right)
+      if (Math.abs(timeDifference) <= TIME_ORDER_THRESHOLD_MS) {
+        return left.sourceOrder - right.sourceOrder
+      }
+      return timeDifference || left.sourceOrder - right.sourceOrder
     })
     .map(({ sourceOrder: _, ...item }) => item)
 

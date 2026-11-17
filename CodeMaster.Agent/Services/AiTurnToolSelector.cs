@@ -6,29 +6,41 @@ namespace CodeMaster.Agent.Services;
 
 public static class AiTurnToolSelector
 {
-    private static readonly HashSet<string> RequirementsReadTools = new(StringComparer.Ordinal)
-    {
-        CodeMasterAgentToolCatalog.GetProjectSummary,
-        CodeMasterAgentToolCatalog.GetProjectStructure,
-        CodeMasterAgentToolCatalog.GetCodegenCatalog,
-        CodeMasterAgentToolCatalog.GetProjectWorkPlan,
-        CodeMasterAgentToolCatalog.GetProjectCompletionStatus
-    };
-
+    /// <summary>
+    /// Tools allowed while a brand-new plan is being created.
+    ///
+    /// <c>upsert_project_work_plan</c> is deliberately absent. A new plan has exactly one
+    /// supported writer — <c>submit_business_plan</c>, which compiles the business definition
+    /// into the fixed six-stage plan. Leaving the hand-written writer reachable let one model
+    /// turn create two plans: a coarse hand-written one, then the compiled one, the second
+    /// silently superseding the first. Its in-flight batch then replayed stale metadata and
+    /// produced a wall of "already exists" errors. Repair turns keep the hand-written writer,
+    /// because that is the only way to patch a single task in an existing plan.
+    /// </summary>
     private static readonly HashSet<string> NewPlanTools = new(StringComparer.Ordinal)
     {
         CodeMasterAgentToolCatalog.GetProjectSummary,
         CodeMasterAgentToolCatalog.GetCodegenCatalog,
         CodeMasterAgentToolCatalog.GetProjectCompletionStatus,
         CodeMasterAgentToolCatalog.GetProjectWorkPlan,
-        CodeMasterAgentToolCatalog.UpsertProjectWorkPlan,
         CodeMasterAgentToolCatalog.SubmitBusinessPlan,
-        CodeMasterAgentToolCatalog.SupersedeProjectWorkPlan
+        CodeMasterAgentToolCatalog.SupersedeProjectWorkPlan,
+        // A new plan is often grounded in a requirement document, either uploaded with the
+        // message or already sitting in the project folder. These three are read-only.
+        CodeMasterAgentToolCatalog.ListProjectFiles,
+        CodeMasterAgentToolCatalog.ReadProjectFile,
+        CodeMasterAgentToolCatalog.ReadAttachment
     };
 
+    /// <summary>
+    /// Tools allowed on a "repair one task" turn. Mirrors the tool names the repair prompt
+    /// (BuildWorkPlanRepairInstructions) tells the model to call — including
+    /// <c>get_codegen_catalog</c>, which that prompt demands before drafting any task.
+    /// </summary>
     private static readonly HashSet<string> WorkPlanRepairTools = new(StringComparer.Ordinal)
     {
         CodeMasterAgentToolCatalog.GetProjectSummary,
+        CodeMasterAgentToolCatalog.GetCodegenCatalog,
         CodeMasterAgentToolCatalog.GetEntityBlueprint,
         CodeMasterAgentToolCatalog.GetProjectWorkPlan,
         CodeMasterAgentToolCatalog.GetProjectCompletionStatus,
@@ -56,7 +68,12 @@ public static class AiTurnToolSelector
         CodeMasterAgentToolCatalog.GetProjectWorkTask,
         CodeMasterAgentToolCatalog.GetViewBuilderContext,
         CodeMasterAgentToolCatalog.GetUiCompositionContext,
-        CodeMasterAgentToolCatalog.GetComplexPageContext
+        CodeMasterAgentToolCatalog.GetComplexPageContext,
+        // Document reading is read-only, so it belongs to requirements mode: analysing an
+        // uploaded or project-resident requirement document is exactly what that mode is for.
+        CodeMasterAgentToolCatalog.ListProjectFiles,
+        CodeMasterAgentToolCatalog.ReadProjectFile,
+        CodeMasterAgentToolCatalog.ReadAttachment
     };
 
     /// <summary>
@@ -152,12 +169,15 @@ public static class AiTurnToolSelector
             .ToList();
     }
 
-    public static IList<AITool> SelectForRequest(IList<AITool> tools, string? content)
+    /// <summary>
+    /// Narrows a "repair one task" turn to the tool set the repair prompt actually names.
+    ///
+    /// This used to be reached through <c>SelectForRequest</c>, which also carried a
+    /// requirements-mode branch. Mode routing is now authoritative (<see cref="SelectForMode"/>),
+    /// so only the repair branch survives here.
+    /// </summary>
+    public static IList<AITool> SelectForWorkPlanRepair(IList<AITool> tools, string? content)
     {
-        if (AiResponseCompletion.IsRequirementsRequest(content))
-            return tools.Where(tool => tool is AIFunction function &&
-                RequirementsReadTools.Contains(function.Name)).ToList();
-
         if (!IsWorkPlanRepairRequest(content))
             return tools;
 

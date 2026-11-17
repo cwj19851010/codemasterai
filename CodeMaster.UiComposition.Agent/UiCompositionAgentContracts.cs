@@ -61,7 +61,7 @@ public class ViewAgentPlanDto
 
     public string DisplayName { get; set; } = string.Empty;
 
-    [Description("Integral SQL output column mapped to the generated entity Id. CodeMaster checks the declared type but does not attempt to prove SQL uniqueness.")]
+    [Description("Integral SQL output column mapped to the generated entity Id. When omitted, CodeMaster defaults to Id; if the SELECT exposes no such column, or names one that is not integral, the consumer is registered keyless (list/query only, no GetById or detail page). That is the correct shape for a UNION/aggregate report whose rows have no unique identity, so such a plan is repaired rather than rejected.")]
     public string KeyColumn { get; set; } = string.Empty;
 
     public bool GenerateFrontend { get; set; } = true;

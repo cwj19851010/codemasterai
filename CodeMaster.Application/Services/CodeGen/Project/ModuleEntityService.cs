@@ -612,17 +612,25 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
         var (project, targetEntities) = await ResolveProjectEntitiesAsync(input);
         var modules = await _db.Queryable<ProjectModule>()
             .Where(module => module.ProjectId == input.ProjectId && !module.IsDeleted)
+            .OrderBy(module => module.OrderNum)
+            .OrderBy(module => module.Id)
             .ToListAsync();
-        var moduleMap = modules.ToDictionary(module => module.Id);
         var targetDb = GetTargetDbClient(project);
         var menuEntities = targetEntities.Where(entity => !entity.IsChildTable).ToList();
 
+        // 目录菜单就是项目模块，所以先按模块全量建一遍，再让实体去挂页面和按钮。
+        // 以前目录是挂在实体循环里顺手建的，模块下没有实体（或只有子表）时整段被跳过，
+        // 新建的空模块永远出不来。
+        var moduleMenus = new Dictionary<long, (ProjectModule Module, SysMenu DirMenu)>();
+        foreach (var module in modules)
+            moduleMenus[module.Id] = (module, await SyncDirectoryMenuAsync(module, targetDb));
+
         foreach (var entity in menuEntities)
         {
-            if (!moduleMap.TryGetValue(entity.ModuleId, out var module))
+            if (!moduleMenus.TryGetValue(entity.ModuleId, out var owner))
                 throw new Exception($"模块不存在: {entity.ModuleId}");
 
-            await SyncMenuAndPermissionsAsync(entity, module, targetDb);
+            await SyncMenuAndPermissionsAsync(entity, owner.Module, targetDb, owner.DirMenu);
         }
 
         input.EntityIds = menuEntities.Select(entity => entity.Id).ToList();
@@ -1615,20 +1623,26 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
     }
 
     /// <summary>
-    /// 同步菜单和权限到目标项目的 sys_menu 表
+    /// 同步单个项目模块到目标项目的顶层目录菜单（幂等）。
     /// </summary>
-    private async Task SyncMenuAndPermissionsAsync(ModuleEntity entity, ProjectModule module, SqlSugarClient targetDb)
+    /// <remarks>
+    /// 目录菜单和项目模块是一对一的：ModuleDescription → MenuName，ModuleName → TitleKey / Path，
+    /// OrderNum 经 <see cref="ProjectModuleOrderPolicy"/> 收敛，Icon 透传。
+    /// 先按模块 Id 标记找，再按 Path 找，都没有才新建。
+    /// </remarks>
+    private async Task<SysMenu> SyncDirectoryMenuAsync(ProjectModule module, SqlSugarClient targetDb)
     {
-        var moduleName = module.ModuleName;
-        var modulePath = CodeGenNaming.ToPathSegment(moduleName);
-        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
-        var permPrefix = $"{modulePath}:{entityPath}";
-        var entityTitleKey = ToCamelCase(entity.Name);
-        var moduleTitleKey = ToCamelCase(moduleName);
+        var modulePath = CodeGenNaming.ToPathSegment(module.ModuleName);
+        var moduleTitleKey = ToCamelCase(module.ModuleName);
+        var orderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
+            module.OrderNum,
+            module.ModuleName,
+            module.ModuleDescription,
+            module.RoutePath);
+        var icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon;
+        var remark = ProjectModuleMenuPolicy.BuildRemark(module.Id);
 
-        // 1. 查找或创建目录菜单（模块级别）
-
-        var dirMenu = await FindDirectoryMenuAsync(targetDb, modulePath);
+        var dirMenu = await FindDirectoryMenuAsync(targetDb, module.Id, modulePath);
 
         if (dirMenu == null)
         {
@@ -1638,37 +1652,51 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
                 MenuName = module.ModuleDescription,
                 TitleKey = moduleTitleKey,
                 ParentId = null,
-                OrderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
-                    module.OrderNum,
-                    module.ModuleName,
-                    module.ModuleDescription,
-                    module.RoutePath),
+                OrderNum = orderNum,
                 Path = modulePath,
                 MenuType = "M",
                 Visible = true,
                 Status = 0,
-                Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon,
+                Icon = icon,
+                Remark = remark,
                 CreateTime = DateTime.UtcNow,
                 IsDeleted = false
             };
             await InsertMenuAsync(targetDb, dirMenu);
+            return dirMenu;
         }
-        else
-        {
-            dirMenu.MenuName = module.ModuleDescription;
-            dirMenu.TitleKey = moduleTitleKey;
-            dirMenu.OrderNum = ProjectModuleOrderPolicy.NormalizeForMenu(
-                module.OrderNum,
-                module.ModuleName,
-                module.ModuleDescription,
-                module.RoutePath);
-            dirMenu.Icon = string.IsNullOrWhiteSpace(module.Icon) ? "FolderOpened" : module.Icon;
-            dirMenu.Path = modulePath;
-            dirMenu.IsDeleted = false;
-            dirMenu.DeleteTime = null;
-            dirMenu.UpdateTime = DateTime.UtcNow;
-            await targetDb.Updateable(dirMenu).ExecuteCommandAsync();
-        }
+
+        dirMenu.MenuName = module.ModuleDescription;
+        dirMenu.TitleKey = moduleTitleKey;
+        dirMenu.OrderNum = orderNum;
+        dirMenu.Icon = icon;
+        dirMenu.Path = modulePath;
+        dirMenu.Remark = remark;
+        dirMenu.IsDeleted = false;
+        dirMenu.DeleteTime = null;
+        dirMenu.UpdateTime = DateTime.UtcNow;
+        await targetDb.Updateable(dirMenu).ExecuteCommandAsync();
+        return dirMenu;
+    }
+
+    /// <summary>
+    /// 同步菜单和权限到目标项目的 sys_menu 表
+    /// </summary>
+    /// <param name="dirMenu">调用方已建好的目录菜单；为空时按模块现查或现建。</param>
+    private async Task SyncMenuAndPermissionsAsync(
+        ModuleEntity entity,
+        ProjectModule module,
+        SqlSugarClient targetDb,
+        SysMenu? dirMenu = null)
+    {
+        var moduleName = module.ModuleName;
+        var modulePath = CodeGenNaming.ToPathSegment(moduleName);
+        var entityPath = CodeGenNaming.ToPathSegment(entity.Name);
+        var permPrefix = $"{modulePath}:{entityPath}";
+        var entityTitleKey = ToCamelCase(entity.Name);
+
+        // 1. 目录菜单（模块级别）。批量同步时由调用方预先建好并传进来，一个模块只 upsert 一次。
+        dirMenu ??= await SyncDirectoryMenuAsync(module, targetDb);
 
         // 2. 查找或创建页面菜单（列表页）
         var pagePerms = $"{permPrefix}:list";
@@ -3913,8 +3941,21 @@ public class ModuleEntityService : CrudApplicationService<ModuleEntity, ModuleEn
 
     private static async Task<SysMenu?> FindDirectoryMenuAsync(
         SqlSugarClient targetDb,
+        long moduleId,
         string path)
     {
+        var remark = ProjectModuleMenuPolicy.BuildRemark(moduleId);
+
+        // 模块 Id 标记优先：改名后 Path 已经变了，只有它能把这个模块的老目录认回来。
+        var byRemark = await targetDb.Queryable<SysMenu>()
+            .Where(menu => menu.ParentId == null &&
+                           menu.MenuType == "M" &&
+                           menu.Remark == remark)
+            .FirstAsync();
+        if (byRemark != null)
+            return byRemark;
+
+        // 历史目录没有标记，回落到路径匹配。
         var byPath = await targetDb.Queryable<SysMenu>()
             .Where(menu => menu.ParentId == null &&
                            menu.MenuType == "M" &&

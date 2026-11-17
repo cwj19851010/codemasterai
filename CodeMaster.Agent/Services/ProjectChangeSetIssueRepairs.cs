@@ -286,4 +286,35 @@ internal static class ProjectChangeSetIssueRepairs
 
         return repairs;
     }
+
+    /// <summary>
+    /// When an entity claims <c>HasPrimaryKey=true</c> but none of its fields are flagged as the
+    /// primary key, and a field named <c>Id</c> exists, mark that field as the key. The rest of
+    /// the pipeline already assumes this implicit key (the change-set rules' field map synthesises
+    /// an <c>Id</c> primary key for exactly this shape). Making it explicit keeps the stored
+    /// proposal self-consistent.
+    /// </summary>
+    public static List<string> RepairImplicitPrimaryKeys(ProjectChangeSetProposal proposal)
+    {
+        var repairs = new List<string>();
+
+        foreach (var entity in proposal.Entities)
+        {
+            if (!entity.HasPrimaryKey)
+                continue;
+            if (entity.Fields.Any(field => field.IsPrimaryKey))
+                continue;
+
+            var idField = entity.Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, "Id", StringComparison.OrdinalIgnoreCase));
+            if (idField == null)
+                continue;
+
+            idField.IsPrimaryKey = true;
+            repairs.Add(
+                $"Marked {entity.Name}.{idField.Name} as the primary key; the entity declares a primary key but no field was flagged as one.");
+        }
+
+        return repairs;
+    }
 }
