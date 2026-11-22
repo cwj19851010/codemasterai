@@ -85,6 +85,9 @@ public static class BusinessPlanCompiler
         Normalise(definition);
         RepairDictionaries(definition, warnings);
         EnsureReferentialIntegrity(definition, warnings);
+        // 关系引用的外键列必须由 EntityFields 阶段先建出来。Relations 阶段排在它后面，
+        // 校验器会在目标实体字段表里查 targetField，缺列就整批报 "references missing target field"。
+        EnsureRelationForeignKeyFields(definition, warnings);
 
         var existingModules = blueprint.Modules
             .ToDictionary(item => item.ModuleName, item => item, StringComparer.OrdinalIgnoreCase);
@@ -323,6 +326,81 @@ public static class BusinessPlanCompiler
                     $"字段 {entity.Key}.{field.TechnicalName} 引用字典 '{field.Dictionary.Trim()}'，" +
                     "但计划未声明该字典；生成后下拉框会是空的。");
             }
+        }
+    }
+
+    /// <summary>
+    /// 把关系引用的外键列补进外键所属实体的字段列表，让 EntityFields 阶段先于 Relations 阶段建列。
+    /// <para>
+    /// 模型习惯只在 relations 里写出 <c>targetField: "ProjectId"</c>，却忘了在"多"方实体的
+    /// fields 里声明同名列。计划编译后 EntityFields 先执行（建实体，无外键列），Relations 后执行，
+    /// change-set 校验器在目标实体字段表里找不到 targetField，于是整批报
+    /// "references missing target field 'ProjectId'" / "uses removed or renamed target field"，
+    /// 关系一条都写不进去，只能靠失败后重新编译一次再补列。外键归属由关系方向唯一确定，
+    /// 所以这里确定性补齐，不依赖模型或重试。
+    /// </para>
+    /// <para>
+    /// 顺带把 relation 引用的字段名规整成 PascalCase，与 <see cref="BuildFieldForEntity"/> 写出的
+    /// 列名保持一致；否则补了 <c>ProjectId</c> 而关系仍引用 <c>project_id</c>，照样对不上。
+    /// 补建后 <see cref="ApplyReferenceControls"/> 的前置检查（字段必须存在）也会通过，
+    /// 外键自动绑定为 select-table 下拉，而不是退化成纯数字输入框。
+    /// </para>
+    /// </summary>
+    private static void EnsureRelationForeignKeyFields(BusinessPlanDefinition def, List<string> warnings)
+    {
+        if (def.Relations.Count == 0)
+            return;
+
+        var entitiesByKey = def.Entities
+            .Where(entity => !string.IsNullOrWhiteSpace(entity.Key))
+            .GroupBy(entity => entity.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var relation in def.Relations)
+        {
+            var kind = relation.Kind?.Trim() ?? string.Empty;
+            // Owned 聚合的子表是内联网格，父子关联由聚合机制管理，不走独立外键列；
+            // ApplyReferenceControls 也跳过它们。只有 Reference 类关系需要这里补列。
+            if (kind.Contains("Owned", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var manyToOne = kind.Contains("ManyToOne", StringComparison.OrdinalIgnoreCase);
+
+            // OneToMany / OneToOne：外键在"多"方（target entity），名字取 targetField；
+            // ManyToOne Reference：外键在 dependent（source entity），名字取 sourceField。
+            var ownerKey = (manyToOne ? relation.SourceEntityKey : relation.TargetEntityKey)?.Trim() ?? string.Empty;
+            var rawField = (manyToOne ? relation.SourceField : relation.TargetField)?.Trim() ?? string.Empty;
+
+            // 空值走编译器原有的 "Id" 兜底；Id 是主键，不需要补建。
+            if (string.IsNullOrWhiteSpace(rawField) ||
+                string.Equals(rawField, "Id", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var canonical = PascalCase(rawField);
+            if (manyToOne)
+                relation.SourceField = canonical;
+            else
+                relation.TargetField = canonical;
+
+            // EnsureReferentialIntegrity 已为未声明的实体抛错，这里不再重复报错。
+            if (!entitiesByKey.TryGetValue(ownerKey, out var owner))
+                continue;
+
+            if (owner.Fields.Any(field =>
+                    string.Equals(PascalCase(field.TechnicalName), canonical, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            owner.Fields.Add(new BusinessFieldDefinition
+            {
+                TechnicalName = canonical,
+                DisplayName = canonical,
+                DataType = "long",
+                Required = false,
+                Role = "foreign key"
+            });
+            warnings.Add(
+                $"关系 '{relation.Key}' 引用外键 {PascalCase(owner.TechnicalName)}.{canonical}，" +
+                "已自动在外键所属实体补建该 long 字段，避免 Relations 阶段引用不存在的列。");
         }
     }
 

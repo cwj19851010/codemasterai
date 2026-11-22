@@ -290,6 +290,54 @@ public class BusinessPlanCompilerTests
         Assert.Equal("ProjectName", fk.GetProperty("relatedEntityDisplayFields")[0].GetString());
     }
 
+    /// <summary>
+    /// 模型只在 relations 里命名外键（targetField: ProjectId），却没在"多"方实体声明同名列：
+    /// 首次编译会让 Relations 阶段引用不存在的列，change-set 校验整批报
+    /// "references missing target field 'ProjectId'"，关系一条都写不进去。
+    /// 编译器必须自己把列补进 EntityFields 阶段，而不是等失败后重编译一次。
+    /// </summary>
+    [Fact]
+    public async Task Missing_relation_foreign_key_is_created_before_relations_stage()
+    {
+        var def = new BusinessPlanDefinition
+        {
+            Modules = [new BusinessModuleDefinition { Key = "engineering", TechnicalName = "EngineeringManagement", DisplayName = "工程管理" }],
+            Entities =
+            [
+                Entity("project", "engineering", "EngineeringProject", "工程项目",
+                    [Field("ProjectName", "工程名称", "string", true)]),
+                // 故意不声明 ProjectId —— 这正是线上报错时的实体形态
+                Entity("purchase", "engineering", "PurchaseContract", "采购合同",
+                    [Field("ContractNo", "采购合同号", "string", true)])
+            ],
+            Relations =
+            [
+                new() { Key = "project_contracts", Kind = "OneToMany", SourceEntityKey = "project", SourceField = "Id", TargetEntityKey = "purchase", TargetField = "ProjectId" }
+            ]
+        };
+
+        var result = await BusinessPlanCompiler.CompileAsync(def, 1L, 3L, new FakeBlueprintService());
+
+        var entityTask = result.CompiledPlan.Stages.Single(s => s.StageKey == "EntityFields").Tasks.Single();
+        var purchase = entityTask.Definition!.Value.GetProperty("entities").EnumerateArray()
+            .Single(e => e.GetProperty("name").GetString() == "PurchaseContract");
+        var fk = Assert.Single(purchase.GetProperty("fields").EnumerateArray(),
+            f => f.GetProperty("name").GetString() == "ProjectId");
+        Assert.Equal("long", fk.GetProperty("dataType").GetString());
+
+        var relation = result.CompiledPlan.Stages.Single(s => s.StageKey == "Relations")
+            .Tasks.Single().Definition!.Value.GetProperty("relations")[0];
+        Assert.Equal("ProjectId", relation.GetProperty("targetField").GetString());
+
+        // 补列后 ApplyReferenceControls 的前置检查通过，外键不会退化成纯数字输入框
+        var bindings = result.CompiledPlan.Stages.Single(s => s.StageKey == "FieldControls")
+            .Tasks.Single().Definition!.Value.GetProperty("controlBindings").EnumerateArray().ToList();
+        Assert.Equal("select-table", bindings.Single(b => b.GetProperty("field").GetString() == "ProjectId")
+            .GetProperty("formControlType").GetString());
+
+        Assert.Contains(result.Warnings, w => w.Contains("ProjectId"));
+    }
+
     [Fact]
     public async Task Dictionaries_compile_into_a_leading_entity_task()
     {
