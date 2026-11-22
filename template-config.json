@@ -278,8 +278,8 @@
       "CodeMaster.WebApi/Controllers/System/HealthController.cs",
 
 
-      "CodeMaster.WebApi/appsettings.Development.json",
       "CodeMaster.WebApi/appsettings.json",
+      "CodeMaster.WebApi/appsettings.example.json",
       "CodeMaster.WebApi/CodeMaster.WebApi.csproj",
 
       "CodeMaster.WebApi/Converters/LongToStringConverter.cs",
