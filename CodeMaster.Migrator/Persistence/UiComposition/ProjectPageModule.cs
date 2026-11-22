@@ -33,20 +33,23 @@ public sealed class ProjectPageModule : ISeedModule
 
     private static async Task EnsureMenusAsync(CodeMasterDbContext dbContext, long adminRoleId)
     {
-        var dataSourceRoot = await EnsureDataSourceRootAsync(dbContext);
-        var assignedMenuIds = new List<long> { dataSourceRoot.Id };
-
         var codegenRoot = await dbContext.Set<SysMenu>()
             .FirstOrDefaultAsync(item => item.Path == "codegen" && item.MenuType == "M");
-        if (codegenRoot != null)
-            codegenRoot.OrderNum = Math.Max(codegenRoot.OrderNum, 4);
+        if (codegenRoot == null)
+            return;
 
-        var entityMenuIds = await EnsureEntityMenusAsync(dbContext, dataSourceRoot.Id);
+        // 实体 / 视图 / API 从 2026-11 起并入"代码管理"，
+        // 不再单独建立"数据源管理"顶层目录。
+        codegenRoot.OrderNum = Math.Max(codegenRoot.OrderNum, 4);
+
+        var assignedMenuIds = new List<long>();
+
+        var entityMenuIds = await EnsureEntityMenusAsync(dbContext, codegenRoot.Id);
         assignedMenuIds.AddRange(entityMenuIds);
 
         var viewMenu = await EnsurePageMenuAsync(
             dbContext,
-            parentId: dataSourceRoot.Id,
+            parentId: codegenRoot.Id,
             path: "dataSourceView",
             component: "codegen/projectPage/dataSource/view/index",
             menuName: "视图",
@@ -58,7 +61,7 @@ public sealed class ProjectPageModule : ISeedModule
 
         var apiMenu = await EnsurePageMenuAsync(
             dbContext,
-            parentId: dataSourceRoot.Id,
+            parentId: codegenRoot.Id,
             path: "dataSourceApi",
             component: "codegen/projectPage/dataSource/api/index",
             menuName: "API",
@@ -74,33 +77,21 @@ public sealed class ProjectPageModule : ISeedModule
             assignedMenuIds.AddRange(projectPageMenuIds);
         }
 
-        await MenuBuilder.AssignMenusToRoleAsync(dbContext, adminRoleId, assignedMenuIds.Distinct().ToList());
-    }
-
-    private static async Task<SysMenu> EnsureDataSourceRootAsync(CodeMasterDbContext dbContext)
-    {
-        var root = await dbContext.Set<SysMenu>()
+        // 历史库里的"数据源管理"顶层目录：子菜单已迁到代码管理，目录空了就删掉
+        var legacyDirectory = await dbContext.Set<SysMenu>()
             .FirstOrDefaultAsync(item => item.Path == "dataSource" && item.MenuType == "M");
-        if (root == null)
+        if (legacyDirectory != null)
         {
-            root = new SysMenu { Id = YitIdHelper.NextId(), CreateTime = DateTime.UtcNow };
-            await dbContext.Set<SysMenu>().AddAsync(root);
+            var stillHasChildren = await dbContext.Set<SysMenu>()
+                .AnyAsync(item => item.ParentId == legacyDirectory.Id);
+            if (!stillHasChildren)
+                dbContext.Set<SysMenu>().Remove(legacyDirectory);
         }
 
-        root.ParentId = null;
-        root.MenuName = "数据源管理";
-        root.TitleKey = "data_source_management";
-        root.Path = "dataSource";
-        root.Component = "Layout";
-        root.MenuType = "M";
-        root.Visible = true;
-        root.Status = 0;
-        root.IsCache = true;
-        root.Icon = "DataLine";
-        root.OrderNum = 3;
-        root.Perms = null;
-        root.MenuScope = 2;
-        return root;
+        await MenuBuilder.AssignMenusToRoleAsync(dbContext, adminRoleId, assignedMenuIds.Distinct().ToList());
+
+        // 上面的菜单新增、改父级、以及遗留目录的删除都需要落库
+        await dbContext.SaveChangesAsync();
     }
 
     private static async Task<List<long>> EnsureEntityMenusAsync(CodeMasterDbContext dbContext, long parentId)
