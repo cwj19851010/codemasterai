@@ -99,6 +99,10 @@ try
     // 5. 初始化种子数据
     Console.WriteLine("【步骤 2】初始化种子数据...\n");
     await SeedDataAsync(dbContext);
+
+    // 菜单顺序：各模块只在"不存在"时创建菜单，历史库的顺序不会跟着代码变，
+    // 这里统一校正一次（幂等）
+    await MenuOrderNormalizer.NormalizeAsync(dbContext);
     Console.WriteLine("\n✓ 种子数据初始化完成\n");
 
     Console.WriteLine("===========================================");

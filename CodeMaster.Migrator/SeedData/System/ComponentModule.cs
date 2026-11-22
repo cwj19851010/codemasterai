@@ -62,7 +62,7 @@ public class ComponentModule : ISeedModule
             Status = 0,
             IsCache = true,
             Icon = "ElementPlus",
-            OrderNum = 50,
+            OrderNum = 8,
             Perms = "codegen:component:list",
             CreateTime = DateTime.UtcNow
         };

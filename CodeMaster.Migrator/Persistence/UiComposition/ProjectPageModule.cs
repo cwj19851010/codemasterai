@@ -55,7 +55,7 @@ public sealed class ProjectPageModule : ISeedModule
             menuName: "视图",
             titleKey: "data_source_view",
             icon: "View",
-            orderNum: 2,
+            orderNum: 4,
             permission: "codegen:projectpage:list");
         assignedMenuIds.Add(viewMenu.Id);
 
@@ -67,7 +67,7 @@ public sealed class ProjectPageModule : ISeedModule
             menuName: "API",
             titleKey: "data_source_api",
             icon: "Connection",
-            orderNum: 3,
+            orderNum: 5,
             permission: "codegen:projectpage:list");
         assignedMenuIds.Add(apiMenu.Id);
 
@@ -112,7 +112,7 @@ public sealed class ProjectPageModule : ISeedModule
             "moduleEntity",
             "codegen/moduleEntity/index",
             "Document",
-            1,
+            3,
             "codegen:moduleEntity:list");
 
         var ids = new List<long> { listMenu.Id };
@@ -220,7 +220,7 @@ public sealed class ProjectPageModule : ISeedModule
             "projectPage",
             "codegen/projectPage/index",
             "Grid",
-            4,
+            6,
             "codegen:projectpage:list");
 
         var menuIds = new List<long> { menu.Id };
