@@ -702,6 +702,26 @@ public class TemplateExportService
             var result = lines.Where(line => !codeGenTypes.Any(t => line.Contains(t))).ToList();
             await File.WriteAllLinesAsync(programPath, result, utf8WithoutBom);
         }
+
+        // Migrator 的 Program.cs 同样引用了 SeedData.CodeGen（项目/模块/报表种子），
+        // 而生成的模板并不包含该目录（include 只列 Core/Monitor/System），
+        // 不清理会导致生成的项目编译失败：CS0234 找不到 SeedData.CodeGen。
+        var migratorProgramPath = Path.Combine(tempDir, "CodeMaster.Migrator", "Program.cs");
+        if (File.Exists(migratorProgramPath))
+        {
+            var codeGenSeedMarkers = new[]
+            {
+                "SeedData.CodeGen",
+                "PrintTemplateModule",
+                "生成项目打印运行时菜单"
+            };
+            var utf8NoBom = new UTF8Encoding(false);
+            var migratorLines = await File.ReadAllLinesAsync(migratorProgramPath, utf8NoBom);
+            var migratorResult = migratorLines
+                .Where(line => !codeGenSeedMarkers.Any(t => line.Contains(t)))
+                .ToList();
+            await File.WriteAllLinesAsync(migratorProgramPath, migratorResult, utf8NoBom);
+        }
     }
 
     internal async Task RemovePlatformWebApiProjectReferencesAsync(string tempDir)
