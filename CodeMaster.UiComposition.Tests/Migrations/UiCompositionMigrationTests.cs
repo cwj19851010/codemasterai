@@ -15,8 +15,8 @@ namespace CodeMaster.UiComposition.Tests.Migrations;
 
 public sealed class UiCompositionMigrationTests
 {
-    private const string HistoryTable = "__EFMigrationsHistory_UiComposition";
-    private static readonly string MigrationsAssembly = typeof(UiCompositionDbContext).Assembly.GetName().Name!;
+    private const string HistoryTable = "__EFMigrationsHistory";
+    private static readonly string MigrationsAssembly = typeof(CodeMasterDbContext).Assembly.GetName().Name!;
 
     [Theory]
     [InlineData("SqlServer")]
@@ -382,12 +382,12 @@ public sealed class UiCompositionMigrationTests
 
         Assert.NotNull(entityType);
         var table = StoreObjectIdentifier.Table("sys_project_page", null);
-        Assert.True(entityType!.IsTableExcludedFromMigrations(table));
+        Assert.False(entityType!.IsTableExcludedFromMigrations(table));
     }
 
-    private static UiCompositionDbContext CreateScriptContext(string provider)
+    private static CodeMasterDbContext CreateScriptContext(string provider)
     {
-        var builder = new DbContextOptionsBuilder<UiCompositionDbContext>();
+        var builder = new DbContextOptionsBuilder<CodeMasterDbContext>();
         switch (provider)
         {
             case "SqlServer":
@@ -415,16 +415,16 @@ public sealed class UiCompositionMigrationTests
                 throw new ArgumentOutOfRangeException(nameof(provider), provider, null);
         }
 
-        return new UiCompositionDbContext(builder.Options);
+        return new CodeMasterDbContext(builder.Options);
     }
 
-    private static UiCompositionDbContext CreateSqliteContext(string databasePath)
+    private static CodeMasterDbContext CreateSqliteContext(string databasePath)
     {
-        var builder = new DbContextOptionsBuilder<UiCompositionDbContext>();
+        var builder = new DbContextOptionsBuilder<CodeMasterDbContext>();
         builder.UseSqlite(
             $"Data Source={databasePath};Pooling=False",
             options => options.MigrationsAssembly(MigrationsAssembly).MigrationsHistoryTable(HistoryTable));
-        return new UiCompositionDbContext(builder.Options);
+        return new CodeMasterDbContext(builder.Options);
     }
 
     private static MigrationModuleExecutionContext CreateSqliteExecutionContext(string databasePath)
@@ -438,7 +438,7 @@ public sealed class UiCompositionMigrationTests
                     options => options.MigrationsAssembly(migrationsAssembly).MigrationsHistoryTable(historyTable))
         };
 
-    private static async Task<int> CountUiCompositionTablesAsync(UiCompositionDbContext dbContext)
+    private static async Task<int> CountUiCompositionTablesAsync(CodeMasterDbContext dbContext)
     {
         var connection = dbContext.Database.GetDbConnection();
         await connection.OpenAsync();

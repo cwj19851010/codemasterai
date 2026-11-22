@@ -1,4 +1,5 @@
 using CodeMaster.Domain.Entities.CodeGen;
+using CodeMaster.Migrator.Persistence.EfCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace CodeMaster.UiComposition.Migrator.Persistence;
@@ -12,7 +13,7 @@ namespace CodeMaster.UiComposition.Migrator.Persistence;
 internal static class UiCompositionLegacyDataMigrator
 {
     public static async Task MigrateAsync(
-        UiCompositionDbContext dbContext,
+        CodeMasterDbContext dbContext,
         CancellationToken cancellationToken)
     {
         var legacySources = await dbContext.Set<PageDataSource>()
@@ -183,7 +184,7 @@ internal static class UiCompositionLegacyDataMigrator
     }
 
     private static async Task RemapExistingPageBindingsAsync(
-        UiCompositionDbContext dbContext,
+        CodeMasterDbContext dbContext,
         long oldDataSourceId,
         long newDataSourceId,
         CancellationToken cancellationToken)

@@ -1,7 +1,6 @@
 using System.Data;
 using System.Data.Common;
 using CodeMaster.Migrator.Persistence.EfCore;
-using CodeMaster.UiComposition.Migrator.Migrations;
 using CodeMaster.UiComposition.Migrator.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -12,8 +11,6 @@ namespace CodeMaster.UiComposition.Migrator;
 
 public sealed class UiCompositionDatabaseMigrationModule : IDatabaseMigrationModule
 {
-    internal const string HistoryTable = "__EFMigrationsHistory_UiComposition";
-
     private static readonly string[] DefinitionTables =
     {
         "sys_page_component_binding",
@@ -75,30 +72,28 @@ public sealed class UiCompositionDatabaseMigrationModule : IDatabaseMigrationMod
         MigrationModuleExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var optionsBuilder = new DbContextOptionsBuilder<UiCompositionDbContext>();
-        var migrationsAssembly = typeof(UiCompositionDbContext).Assembly.GetName().Name
+        var optionsBuilder = new DbContextOptionsBuilder<CodeMasterDbContext>();
+        var migrationsAssembly = typeof(CodeMasterDbContext).Assembly.GetName().Name
             ?? throw new InvalidOperationException("Unable to resolve the UI Composition migrations assembly name.");
         context.ConfigureDbContext(
             optionsBuilder,
             context.ConnectionString,
             migrationsAssembly,
-            HistoryTable);
+            "__EFMigrationsHistory");
         // SQL Server adds provider-specific filters to nullable unique indexes.
         // The migration itself contains that filter; EF's provider-independent
         // snapshot otherwise reports a false pending-model warning.
         optionsBuilder.ConfigureWarnings(warnings =>
             warnings.Ignore(RelationalEventId.PendingModelChangesWarning));
 
-        await using var dbContext = new UiCompositionDbContext(optionsBuilder.Options);
-        await AdoptExistingSchemaAsync(dbContext, cancellationToken);
-        await dbContext.Database.MigrateAsync(cancellationToken);
+        await using var dbContext = new CodeMasterDbContext(optionsBuilder.Options);
         await UiCompositionLegacyDataMigrator.MigrateAsync(dbContext, cancellationToken);
         await BackfillMetadataOnlyEntitiesAsync(dbContext, cancellationToken);
         await ValidateSchemaAsync(dbContext, cancellationToken);
     }
 
     private static async Task<int> BackfillMetadataOnlyEntitiesAsync(
-        UiCompositionDbContext dbContext,
+        CodeMasterDbContext dbContext,
         CancellationToken cancellationToken)
     {
         var inspector = new UiCompositionSchemaInspector(dbContext.Database.GetDbConnection());
@@ -114,160 +109,8 @@ public sealed class UiCompositionDatabaseMigrationModule : IDatabaseMigrationMod
         return await dbContext.Database.ExecuteSqlInterpolatedAsync(sql, cancellationToken);
     }
 
-    private static async Task AdoptExistingSchemaAsync(
-        UiCompositionDbContext dbContext,
-        CancellationToken cancellationToken)
-    {
-        var pending = (await dbContext.Database.GetPendingMigrationsAsync(cancellationToken))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (pending.Count == 0)
-        {
-            return;
-        }
-
-        var inspector = new UiCompositionSchemaInspector(dbContext.Database.GetDbConnection());
-        var tables = await inspector.GetTablesAsync(cancellationToken);
-
-        if (pending.Contains(UiCompositionDefinition.MigrationId))
-        {
-            await AdoptTablePhaseAsync(
-                dbContext,
-                tables,
-                DefinitionTables,
-                UiCompositionDefinition.MigrationId,
-                cancellationToken);
-        }
-
-        if (pending.Contains(UiCompositionSynchronizationMetadata.MigrationId)
-            && tables.Contains("sys_page_data_source"))
-        {
-            var columns = await inspector.GetColumnsAsync("sys_page_data_source", cancellationToken);
-            var existingColumnCount = SynchronizationColumns.Count(columns.Contains);
-            if (existingColumnCount == SynchronizationColumns.Length)
-            {
-                await RecordMigrationAsync(
-                    dbContext,
-                    UiCompositionSynchronizationMetadata.MigrationId,
-                    cancellationToken);
-            }
-            else if (existingColumnCount > 0)
-            {
-                throw new InvalidOperationException(
-                    "The existing UI Composition data-source table contains only part of the synchronization metadata. " +
-                    "Repair the missing column before applying private migrations.");
-            }
-        }
-
-        if (pending.Contains(UiCompositionProjectDataSource.MigrationId))
-        {
-            await AdoptTablePhaseAsync(
-                dbContext,
-                tables,
-                ProjectDataSourceTables,
-                UiCompositionProjectDataSource.MigrationId,
-                cancellationToken);
-        }
-
-        if (pending.Contains(UiCompositionDisplayTemplate.MigrationId))
-        {
-            await AdoptTablePhaseAsync(
-                dbContext,
-                tables,
-                DisplayTemplateTables,
-                UiCompositionDisplayTemplate.MigrationId,
-                cancellationToken);
-        }
-
-        if (pending.Contains(UiCompositionOpenApiDataSource.MigrationId))
-        {
-            var existingTableCount = OpenApiTables.Count(tables.Contains);
-            var projectDataSourceColumns = tables.Contains("sys_project_data_source")
-                ? await inspector.GetColumnsAsync("sys_project_data_source", cancellationToken)
-                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var existingColumnCount = OpenApiProjectDataSourceColumns.Count(projectDataSourceColumns.Contains);
-
-            if (existingTableCount == OpenApiTables.Length
-                && existingColumnCount == OpenApiProjectDataSourceColumns.Length)
-            {
-                await RecordMigrationAsync(
-                    dbContext,
-                    UiCompositionOpenApiDataSource.MigrationId,
-                    cancellationToken);
-            }
-            else if (existingTableCount > 0 || existingColumnCount > 0)
-            {
-                var missingTables = OpenApiTables.Where(table => !tables.Contains(table));
-                var missingColumns = OpenApiProjectDataSourceColumns.Where(column => !projectDataSourceColumns.Contains(column));
-                throw new InvalidOperationException(
-                    $"The existing UI Composition OpenAPI schema is incomplete. " +
-                    $"Missing tables: {string.Join(", ", missingTables)}. " +
-                    $"Missing sys_project_data_source columns: {string.Join(", ", missingColumns)}.");
-            }
-        }
-
-        if (pending.Contains(UiCompositionPageProjectDataSource.MigrationId)
-            && tables.Contains("sys_page_data_source"))
-        {
-            var columns = await inspector.GetColumnsAsync("sys_page_data_source", cancellationToken);
-            if (columns.Contains("project_data_source_id"))
-            {
-                await RecordMigrationAsync(
-                    dbContext,
-                    UiCompositionPageProjectDataSource.MigrationId,
-                    cancellationToken);
-            }
-        }
-
-        if (pending.Contains(UiCompositionProjectViewDefinition.MigrationId))
-        {
-            await AdoptTablePhaseAsync(
-                dbContext,
-                tables,
-                ProjectViewDefinitionTables,
-                UiCompositionProjectViewDefinition.MigrationId,
-                cancellationToken);
-        }
-    }
-
-    private static async Task AdoptTablePhaseAsync(
-        UiCompositionDbContext dbContext,
-        IReadOnlySet<string> existingTables,
-        IReadOnlyCollection<string> requiredTables,
-        string migrationId,
-        CancellationToken cancellationToken)
-    {
-        var existingCount = requiredTables.Count(existingTables.Contains);
-        if (existingCount == requiredTables.Count)
-        {
-            await RecordMigrationAsync(dbContext, migrationId, cancellationToken);
-            return;
-        }
-
-        if (existingCount > 0)
-        {
-            var missing = requiredTables.Where(table => !existingTables.Contains(table));
-            throw new InvalidOperationException(
-                $"The existing UI Composition schema is incomplete for migration {migrationId}. " +
-                $"Missing tables: {string.Join(", ", missing)}.");
-        }
-    }
-
-    private static async Task RecordMigrationAsync(
-        UiCompositionDbContext dbContext,
-        string migrationId,
-        CancellationToken cancellationToken)
-    {
-        var historyRepository = dbContext.GetService<IHistoryRepository>();
-        await dbContext.Database.ExecuteSqlRawAsync(
-            historyRepository.GetCreateIfNotExistsScript(),
-            cancellationToken);
-        await dbContext.Database.ExecuteSqlRawAsync(
-            historyRepository.GetInsertScript(new HistoryRow(migrationId, ProductInfo.GetVersion())),
-            cancellationToken);
-    }
-
     private static async Task ValidateSchemaAsync(
-        UiCompositionDbContext dbContext,
+        CodeMasterDbContext dbContext,
         CancellationToken cancellationToken)
     {
         var inspector = new UiCompositionSchemaInspector(dbContext.Database.GetDbConnection());

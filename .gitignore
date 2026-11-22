@@ -293,3 +293,7 @@ webapi.pid
 /validate_gen.py
 /生成需求.txt
 CodeMaster.Vue/启动下前后端.md
+
+# Local publish output and superseded frontend bundles
+.publish/
+CodeMaster.Vue/dist-old-*/

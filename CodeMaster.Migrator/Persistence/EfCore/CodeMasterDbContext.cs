@@ -22,6 +22,13 @@ public partial class CodeMasterDbContext : DbContext
         // 调用 Source Generator 生成的配置方法
         OnModelCreatingPartial(modelBuilder);
 
+        // 各模块通过 IMigrationModelContributor 把自己的实体注册进来，
+        // 主上下文不直接引用任何模块的配置类型。
+        foreach (var contributor in MigrationModuleCatalog.CreateModelContributors())
+        {
+            contributor.Configure(modelBuilder);
+        }
+
         modelBuilder.Entity<AiMessage>()
             .Property(x => x.RequestId)
             .HasMaxLength(64);

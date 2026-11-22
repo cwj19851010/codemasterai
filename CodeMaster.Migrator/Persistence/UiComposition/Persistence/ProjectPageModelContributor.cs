@@ -6,5 +6,5 @@ namespace CodeMaster.UiComposition.Migrator.Persistence;
 public sealed class ProjectPageModelContributor : IMigrationModelContributor
 {
     public void Configure(ModelBuilder modelBuilder)
-        => UiCompositionModelConfiguration.Configure(modelBuilder, excludeFromMigrations: true);
+        => UiCompositionModelConfiguration.Configure(modelBuilder, excludeFromMigrations: false);
 }
