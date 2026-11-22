@@ -283,8 +283,16 @@ public class TemplateExportService
                 normalized.Replace('/', Path.DirectorySeparatorChar)));
             var overlayPrefix = Path.GetFullPath(overlayRoot)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            if (!sourcePath.StartsWith(overlayPrefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(sourcePath))
-                throw new FileNotFoundException($"模板 overlay 文件不存在: {relativePath}", sourcePath);
+            if (!sourcePath.StartsWith(overlayPrefix, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"模板 overlay 路径无效: {relativePath}");
+
+            // overlay 从 Templates 基线目录读取。报表等私有能力在开源发行版里
+            // 不随基线提供，此时跳过该文件而不是中断整个模板导出。
+            if (!File.Exists(sourcePath))
+            {
+                Console.WriteLine($"  - 跳过缺失的模板 overlay: {relativePath}");
+                continue;
+            }
 
             var targetPath = Path.Combine(tempDir, normalized.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);

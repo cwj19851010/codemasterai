@@ -5,19 +5,31 @@
   "overlays": [
     ".gitignore",
     "README.md",
+    "CodeMaster.WebApi/appsettings.json",
+    "CodeMaster.WebApi/appsettings.Development.json",
     "CodeMaster.WebApi/CodeMaster.WebApi.csproj",
     "CodeMaster.WebApi/Program.cs",
     "CodeMaster.WebApi/Controllers/System/HealthController.cs",
+    "CodeMaster.WebApi/Hubs/OnlineUserHub.cs",
+    "CodeMaster.Infrastructure/DynamicApi/RuntimeWebModuleLoader.cs",
     "CodeMaster.Migrator/CodeMaster.Migrator.csproj",
+    "CodeMaster.Migrator/appsettings.json",
     "CodeMaster.Migrator/Program.cs",
     "CodeMaster.Migrator/Persistence/EfCore/MigrationModuleCatalog.cs",
+    "CodeMaster.Migrator/Persistence/EfCore/RuntimeMigrationModuleLoader.cs",
     "CodeMaster.Migrator/SeedData/Core/BaseDataModule.cs",
     "CodeMaster.Migrator/SeedData/Core/GlobalTranslations.cs",
+    "CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs",
     "CodeMaster.Vue/index.html",
     "CodeMaster.Vue/package.json",
     "CodeMaster.Vue/package-lock.json",
     "CodeMaster.Vue/vite.config.js",
-    "CodeMaster.Vue/src/views/dashboard/index.vue"
+    "CodeMaster.Vue/src/views/dashboard/index.vue",
+    "CodeMaster.Vue/src/api/codegen/printTemplate.js",
+    "CodeMaster.Vue/src/utils/printReport.js",
+    "CodeMaster.Vue/src/views/codegen/print/preview.vue",
+    "CodeMaster.Vue/src/views/codegen/printTemplate/index.vue",
+    "CodeMaster.Vue/src/views/codegen/printTemplate/detail.vue"
   ],
   "templateSettings": {
     "excludedModules": [
@@ -317,7 +329,8 @@
 
 
 
-        "CodeMaster.Migrator/CodeMaster.Migrator.csproj"
+      "CodeMaster.Migrator/appsettings.example.json",
+      "CodeMaster.Migrator/CodeMaster.Migrator.csproj"
     ],
     "frontend": [
       "CodeMaster.Vue/src/api/auth.js",
