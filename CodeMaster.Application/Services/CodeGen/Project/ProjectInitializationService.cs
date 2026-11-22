@@ -342,6 +342,9 @@ public partial class ProjectInitializationService
         // 3. 生成 .sln 文件
         await RemoveClientShellBridgeFromGeneratedMainAsync(projectPath, projectName);
 
+        // 兼容历史模板 ZIP：开源版不含 SeedData/CodeGen，清掉孤立的 CodeGen/打印种子引用
+        await RemoveDanglingCodeGenSeedReferencesAsync(projectPath, projectName);
+
         if (!state.SolutionGenerated)
         {
             SendProgress(projectId, "generate_sln", "生成解决方案文件...", 60);
@@ -502,6 +505,40 @@ public partial class ProjectInitializationService
             var content = await File.ReadAllTextAsync(loginPath, utf8WithoutBom);
             content = GeneratedTemplateCleanup.RemoveLoginClientBridge(content);
             await File.WriteAllTextAsync(loginPath, content, utf8WithoutBom);
+        }
+    }
+
+    /// <summary>
+    /// 兼容历史模板 ZIP：开源版模板不含 SeedData/CodeGen 目录，但早期导出的
+    /// Migrator/Program.cs 仍 using 它并 new PrintTemplateModule()，解压后编译会报 CS0234。
+    /// 完整版模板带 SeedData/CodeGen/PrintTemplateModule.cs，引用有效，必须保留报表种子。
+    /// </summary>
+    internal static async Task RemoveDanglingCodeGenSeedReferencesAsync(string projectPath, string projectName)
+    {
+        var migratorDirectory = Path.Combine(projectPath, $"{projectName}.Migrator");
+        var programPath = Path.Combine(migratorDirectory, "Program.cs");
+        if (!File.Exists(programPath))
+        {
+            return;
+        }
+
+        var codeGenSeedDirectory = Path.Combine(migratorDirectory, "SeedData", "CodeGen");
+        var hasCodeGenSeeds = Directory.Exists(codeGenSeedDirectory) &&
+            Directory.EnumerateFiles(codeGenSeedDirectory, "*.cs", SearchOption.AllDirectories).Any();
+        if (hasCodeGenSeeds)
+        {
+            return;
+        }
+
+        var markers = new[] { "SeedData.CodeGen", "PrintTemplateModule", "生成项目打印运行时菜单" };
+        var utf8WithoutBom = new UTF8Encoding(false);
+        var lines = await File.ReadAllLinesAsync(programPath, utf8WithoutBom);
+        var result = lines
+            .Where(line => !markers.Any(marker => line.Contains(marker, StringComparison.Ordinal)))
+            .ToList();
+        if (result.Count != lines.Length)
+        {
+            await File.WriteAllLinesAsync(programPath, result, utf8WithoutBom);
         }
     }
 
@@ -1870,6 +1907,9 @@ export default service
             await SaveInitializationStateAsync(projectPath, state);
         }
         await RemoveClientShellBridgeFromGeneratedMainAsync(projectPath, projectName);
+
+        // 兼容历史模板 ZIP：开源版不含 SeedData/CodeGen，清掉孤立的 CodeGen/打印种子引用
+        await RemoveDanglingCodeGenSeedReferencesAsync(projectPath, projectName);
     }
 
     /// <summary>
