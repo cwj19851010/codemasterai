@@ -26,9 +26,10 @@ public static class AgentServiceCollectionExtensions
         services.AddScoped<ICodeMasterProjectChangeSetService, CodeMasterProjectChangeSetService>();
         services.AddScoped<IProjectChangeSetDefinitionNormalizer, ProjectChangeSetDefinitionNormalizer>();
         services.AddScoped<IProjectWorkOperationDefinitionNormalizer, ProjectWorkOperationDefinitionNormalizer>();
-        services.AddScoped<ICodeMasterAgentBatchOperationAdapter, ProjectChangeSetBatchOperationAdapter>();
-        services.AddScoped<ICodeMasterAgentBatchOperationAdapter, ProjectConsistencyCheckBatchOperationAdapter>();
-        services.AddScoped<ICodeMasterAgentBatchOperationAdapter, GenerateProjectBatchOperationAdapter>();
+        // 批操作适配器实现了 ICodeMasterAgentBatchOperationAdapter，
+        // 而该接口继承 ICodeMasterExtension，AddCodeMasterExtensions 会把它们
+        // 按接口统一扫描注册。这里不再显式注册，否则同一实现会进 DI 两次，
+        // 导致 CodeMasterAgentToolFactory 按 OperationKind 建字典时抛重复键。
         services.AddScoped<IAiProjectWorkPlanService, AiProjectWorkPlanService>();
         services.AddScoped<IAiAttachmentStore, AiAttachmentStore>();
         services.TryAddSingleton<IAiProjectValidationRunner, AiProjectValidationRunner>();
