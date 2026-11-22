@@ -17,6 +17,17 @@ public class TemplateConfig
     public IncludeConfig Include { get; set; } = new();
     public List<string> Overlays { get; set; } = new();
     public ExcludeConfig Exclude { get; set; } = new();
+    public PrintingConfig Printing { get; set; } = new();
+}
+
+/// <summary>
+/// 打印能力开关。开源发行版不提供报表，保持 false；
+/// 完整版通过 template-config.private.json 打开，导出时会把独立打印运行时
+/// 注入生成的项目模板。
+/// </summary>
+public class PrintingConfig
+{
+    public bool Enabled { get; set; }
 }
 
 public class IncludeConfig
@@ -77,7 +88,12 @@ public class TemplateExportService
     /// </summary>
     private TemplateConfig LoadTemplateConfig()
     {
-        var configPath = Path.Combine(_solutionRoot, "template-config.json");
+        // 完整版把报表等私有能力写在 template-config.private.json（不入库）；
+        // 开源发行版只有 template-config.json，天然不含任何私有覆盖项。
+        var privateConfigPath = Path.Combine(_solutionRoot, "template-config.private.json");
+        var configPath = File.Exists(privateConfigPath)
+            ? privateConfigPath
+            : Path.Combine(_solutionRoot, "template-config.json");
 
         if (!File.Exists(configPath))
         {
@@ -118,7 +134,8 @@ public class TemplateExportService
             // 3. 复制配置中列出的文件
             await CopyIncludedFilesAsync(sourceDir, tempDir, config);
             await ApplyConfiguredOverlaysAsync(tempDir, config);
-            await CopyGeneratedProjectRuntimeModulesAsync(tempDir);
+            if (config.Printing.Enabled)
+                await CopyGeneratedProjectRuntimeModulesAsync(tempDir);
 
             // 4. 在 Program.cs 中删除额外种子数据调用
             await RemoveAdditionalSeedCallAsync(tempDir);
@@ -337,11 +354,15 @@ public class TemplateExportService
         if (forbiddenPath != null)
             throw new InvalidOperationException($"纯净模板 include 包含平台专用文件: {forbiddenPath}");
 
-        RequireFile(tempDir, "modules/CM.Printing.Runtime.dll");
-        RequireFile(tempDir, "modules/CM.Printing.Migrations.dll");
-        RequireFile(tempDir, "CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs");
-        RequireFile(tempDir, "CodeMaster.Vue/src/views/codegen/print/preview.vue");
-        RequireFile(tempDir, "CodeMaster.Vue/src/views/codegen/printTemplate/index.vue");
+        // 报表能力属于高级版：只有打开 printing.enabled 的完整版才要求这些文件
+        if (config.Printing.Enabled)
+        {
+            RequireFile(tempDir, "modules/CM.Printing.Runtime.dll");
+            RequireFile(tempDir, "modules/CM.Printing.Migrations.dll");
+            RequireFile(tempDir, "CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs");
+            RequireFile(tempDir, "CodeMaster.Vue/src/views/codegen/print/preview.vue");
+            RequireFile(tempDir, "CodeMaster.Vue/src/views/codegen/printTemplate/index.vue");
+        }
 
         var packageJson = ReadTemplateText(tempDir, "CodeMaster.Vue/package.json");
         var dashboard = ReadTemplateText(tempDir, "CodeMaster.Vue/src/views/dashboard/index.vue");

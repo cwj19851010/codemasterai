@@ -123,14 +123,22 @@ CodeMaster.Private.sln
 # Its back end is a module under CodeMaster.Private/, so the UI goes with it.
 # （复杂页的 views/codegen/projectPage 与 api/codegen/projectPage.js 已开源，不要再加回来。）
 #
-# 注意：这里只排除「平台自己用的」报表设计器。
-# Templates/ 基线下的报表文件是「生成的项目」必需的运行时（打印预览页、
-# printReport 工具、模板种子模块），与平台版本无关，必须入库，不要加回排除。
+# 报表能力整体属于高级版：开源版导出模板时不带任何报表文件（template-config.json
+# 中不含相关 overlay，printing.enabled=false），因此 Templates/ 下的报表基线
+# 也一并排除，只在完整版的 template-config.private.json 里引用。
 CodeMaster.Vue/src/views/codegen/print/
 CodeMaster.Vue/src/views/codegen/printTemplate/
 CodeMaster.Vue/src/components/PrintDesigner/
 CodeMaster.Vue/src/api/codegen/printTemplate.js
 CodeMaster.Vue/src/utils/printReport.js
+Templates/CodeMaster.Vue/src/views/codegen/print/
+Templates/CodeMaster.Vue/src/views/codegen/printTemplate/
+Templates/CodeMaster.Vue/src/api/codegen/printTemplate.js
+Templates/CodeMaster.Vue/src/utils/printReport.js
+Templates/CodeMaster.Migrator/SeedData/CodeGen/PrintTemplateModule.cs
+
+# 完整版模板配置（含报表 overlay 与打印运行时开关），不入库
+template-config.private.json
 
 # Docs that describe the private features
 docs/print-template-schema.md
