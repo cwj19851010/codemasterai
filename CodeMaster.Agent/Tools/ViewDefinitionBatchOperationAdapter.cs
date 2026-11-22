@@ -10,7 +10,7 @@ using CodeMaster.Domain.Entities.Ai;
 using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.UiComposition.Dtos;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 /// <summary>
 /// Bridges the durable Views work-plan stage to the existing SQL-first view builder.

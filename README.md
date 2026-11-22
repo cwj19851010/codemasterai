@@ -119,16 +119,16 @@ Templates                  生成项目使用的源码模板包
 
 ## 快速开始
 
-开始前请安装 .NET SDK 10、Node.js 20+，以及任意一种受支持的数据库。下面以 MySQL 8 为例；仓库只提交不含真实密码的示例配置，首次运行需要复制并填写本地配置。
+开始前请安装 .NET SDK 10 与 Node.js 20+。默认使用 SQLite，克隆后无需安装任何数据库即可运行；要换成 MySQL 等数据库见下文「切换数据库」。
 
-1. 创建本地配置：
+1. 创建本地配置（仓库只提交示例配置，不含真实密码）：
 
 ```powershell
 Copy-Item CodeMaster.WebApi/appsettings.example.json CodeMaster.WebApi/appsettings.json
 Copy-Item CodeMaster.Migrator/appsettings.example.json CodeMaster.Migrator/appsettings.json
 ```
 
-修改两个 `appsettings.json` 中的 MySQL 密码，并确保它们连接同一个 `CodeMasterDB` 数据库。Migrator 会自动创建数据库、初始化表结构并写入种子数据。
+示例配置默认 `DbProvider=Sqlite`，连接串为 `Data Source=../CodeMaster.db`。两个项目目录同级，会指向仓库根目录下的同一个数据库文件，不需要改动任何值。
 
 2. 还原并构建：
 
@@ -137,13 +137,14 @@ dotnet restore CodeMaster.sln
 dotnet build CodeMaster.sln
 ```
 
-3. 使用 MySQL Provider 构建迁移程序并初始化数据库：
+3. 初始化数据库（建表并写入种子数据）：
 
 ```bash
 cd CodeMaster.Migrator
-dotnet build -p:DbProvider=MySql
-dotnet run --no-build
+dotnet run
 ```
+
+`CodeMaster.Migrator` 的 `DbProvider` 默认值为 `Sqlite`，与示例配置一致，不需要额外传参。如果之前用其它数据库构建过，先执行 `dotnet build -p:DbProvider=Sqlite` 重新编译。
 
 4. 启动后端：
 
@@ -159,12 +160,6 @@ cd CodeMaster.Vue
 npm install
 npm run dev
 ```
-
-不想安装数据库时可用 SQLite 零依赖体验：
-
-1. 两份 `appsettings.json` 的 `DbProvider` 都改为 `Sqlite`，连接串改为 `Data Source=../CodeMaster.db`（两个项目目录是同级，会指向同一个库文件）。
-2. `cd CodeMaster.Migrator && dotnet build -p:DbProvider=Sqlite && dotnet run --no-build`
-3. 后端与前端启动方式不变。
 
 默认开发账号：
 

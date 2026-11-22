@@ -13,7 +13,7 @@ using CodeMaster.UiComposition.Dtos;
 using CodeMaster.UiComposition.Entities;
 using Microsoft.Extensions.AI;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 public sealed class UiCompositionAgentToolExtension : ICodeMasterAgentToolExtension
 {

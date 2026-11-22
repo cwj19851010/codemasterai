@@ -8,7 +8,7 @@ using CodeMaster.LocalAgent.Models;
 using CodeMaster.UiComposition.Entities;
 using SqlSugar;
 
-namespace CodeMaster.UiComposition.LocalAgent;
+namespace CodeMaster.LocalAgent.Extensibility;
 
 public sealed class UiCompositionLocalMetadataContributor : ILocalMetadataBundleContributor
 {

@@ -7,7 +7,7 @@ using CodeMaster.Agent.Tools;
 using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.Application.Services.CodeGen;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 /// <summary>
 /// Connects the durable ComplexPages work-plan stage to the structured complex-page

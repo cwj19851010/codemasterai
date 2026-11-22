@@ -1,6 +1,6 @@
 ﻿using System.Reflection;
 using CodeMaster.Agent.Tools;
-using CodeMaster.UiComposition.Agent;
+using CodeMaster.Agent.Tools;
 
 namespace CodeMaster.UiComposition.Tests;
 

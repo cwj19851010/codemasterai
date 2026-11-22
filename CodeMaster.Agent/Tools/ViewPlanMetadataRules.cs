@@ -1,7 +1,7 @@
 ﻿using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.UiComposition.Entities;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 /// <summary>
 /// Keeps view-plan conflict decisions based on CodeMaster metadata. Physical

@@ -1,4 +1,4 @@
-﻿using CodeMaster.UiComposition.McpServer;
+﻿using CodeMaster.McpServer.Tools;
 
 namespace CodeMaster.UiComposition.Tests;
 

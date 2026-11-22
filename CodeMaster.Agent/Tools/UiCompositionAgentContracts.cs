@@ -4,7 +4,7 @@ using CodeMaster.Agent.Tools;
 using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.UiComposition.Dtos;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 public sealed class UiCompositionAgentContextQuery
 {

@@ -21,6 +21,7 @@
     <ProjectReference Include="..\CodeMaster.Application\CodeMaster.Application.csproj" />
     <ProjectReference Include="..\CodeMaster.Core\CodeMaster.Core.csproj" />
     <ProjectReference Include="..\CodeMaster.Domain\CodeMaster.Domain.csproj" />
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
   </ItemGroup>
 
 </Project>

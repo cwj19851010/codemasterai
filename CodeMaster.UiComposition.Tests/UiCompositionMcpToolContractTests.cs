@@ -1,6 +1,6 @@
 ﻿using System.Reflection;
 using CodeMaster.Core.Extensibility;
-using CodeMaster.UiComposition.McpServer;
+using CodeMaster.McpServer.Tools;
 using ModelContextProtocol.Server;
 
 namespace CodeMaster.UiComposition.Tests;

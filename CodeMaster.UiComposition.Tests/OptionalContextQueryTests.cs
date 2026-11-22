@@ -4,7 +4,7 @@ using CodeMaster.Agent.Services;
 using CodeMaster.Agent.Tools;
 using CodeMaster.Application.Dtos.CodeGen;
 using CodeMaster.Application.Services.CodeGen;
-using CodeMaster.UiComposition.Agent;
+using CodeMaster.Agent.Tools;
 using CodeMaster.UiComposition.Dtos;
 using Microsoft.Extensions.AI;
 

@@ -89,11 +89,6 @@
   </ItemGroup>
 
   <!-- 复杂页（UiComposition）自 2026-10-23 起是公共项目，全量版与公共版都要带。 -->
-  <Target Name="ValidateUiCompositionModule"
-          BeforeTargets="Publish"
-          Condition="!Exists('..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj')">
-    <Error Text="Missing CodeMaster.UiComposition project; the working tree is incomplete." />
-  </Target>
 
   <Target Name="ValidatePrintingModule"
           BeforeTargets="Publish"
@@ -101,16 +96,6 @@
     <Error Text="CodeMaster Full edition requires the Printing private module." />
   </Target>
 
-  <Target Name="BuildUiCompositionModules"
-          BeforeTargets="Publish"
-          Condition="Exists('..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj')">
-    <MSBuild Projects="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
-    <MSBuild Projects="..\CodeMaster.UiComposition.Agent\CodeMaster.UiComposition.Agent.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
-  </Target>
 
   <Target Name="BuildPrintingModule"
           BeforeTargets="Publish"
@@ -139,19 +124,6 @@
              Properties="Configuration=$(Configuration)" />
   </Target>
 
-  <Target Name="PublishUiCompositionModules"
-          AfterTargets="Publish"
-          Condition="Exists('..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj')">
-    <ItemGroup>
-      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
-      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
-      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
-      <UiModuleFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
-      <UiModuleFiles Include="..\CodeMaster.UiComposition.Agent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Agent.dll" />
-    </ItemGroup>
-    <MakeDir Directories="$(PublishDir)modules" />
-    <Copy SourceFiles="@(UiModuleFiles)" DestinationFolder="$(PublishDir)modules" />
-  </Target>
 
   <Target Name="PublishFullEditionModuleDirectory"
           AfterTargets="Publish"

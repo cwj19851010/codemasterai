@@ -7,8 +7,9 @@
     <Nullable>enable</Nullable>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\GeneratedFiles</CompilerGeneratedFilesOutputPath>
-    <!-- 默认数据库提供程序，可以通过 -p:DbProvider=MySql 等参数覆盖 -->
-    <DbProvider Condition="'$(DbProvider)'==''">PostgreSQL</DbProvider>
+    <!-- 默认使用 SQLite，克隆后无需安装数据库即可运行；
+         切换到其它数据库用 -p:DbProvider=PostgreSQL / MySql / SqlServer / Oracle 覆盖 -->
+    <DbProvider Condition="'$(DbProvider)'==''">Sqlite</DbProvider>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(DbProvider)'=='' OR '$(DbProvider)'=='SqlServer'">
@@ -72,6 +73,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CodeMaster.Domain\CodeMaster.Domain.csproj" />
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
     <ProjectReference Include="..\CodeMaster.SourceGenerator\CodeMaster.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
@@ -84,11 +86,6 @@
     </None>
   </ItemGroup>
 
-  <Target Name="ValidateUiCompositionMigratorModule"
-          BeforeTargets="Publish"
-          Condition="!Exists('..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
-    <Error Text="Missing CodeMaster.UiComposition.Migrator project; the working tree is incomplete." />
-  </Target>
 
   <Target Name="ValidatePrintingMigratorModule"
           BeforeTargets="Publish"
@@ -96,13 +93,6 @@
     <Error Text="CodeMaster Full edition requires the Printing migrator module." />
   </Target>
 
-  <Target Name="BuildUiCompositionMigratorModule"
-          BeforeTargets="Publish"
-          Condition="Exists('..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
-    <MSBuild Projects="..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);DbProvider=$(DbProvider);SkipUiCompositionWebApiCopy=true" />
-  </Target>
 
   <Target Name="BuildPrintingMigratorModule"
           BeforeTargets="Publish"
@@ -112,19 +102,6 @@
              Properties="Configuration=$(Configuration);DbProvider=$(DbProvider)" />
   </Target>
 
-  <Target Name="PublishUiCompositionMigratorModule"
-          AfterTargets="Publish"
-          Condition="Exists('..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj')">
-    <ItemGroup>
-      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
-      <UiCompositionMigratorFiles Include="..\CodeMaster.UiComposition.Migrator\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.Migrator.dll" />
-    </ItemGroup>
-    <MakeDir Directories="$(PublishDir)modules" />
-    <Copy SourceFiles="@(UiCompositionMigratorFiles)" DestinationFolder="$(PublishDir)modules" />
-  </Target>
 
   <Target Name="PublishFullEditionMigratorModuleDirectory"
           AfterTargets="Publish"

@@ -31,10 +31,16 @@ CodeMaster 现有代码生成以"一个实体 + 固定 pageType"为中心，擅�
 
 ### 1.1 当前模块边界
 
-实现按宿主拆分为 `UiComposition`（核心定义/生成/API）、
-`UiComposition.Agent`（结构化规划与审批适配）、`UiComposition.LocalAgent`
-（本地元数据与生成包）、`UiComposition.Migrator`（独立迁移与种子）。公开工程只保留
-通用扩展契约，删除私有目录后仍可恢复和构建。
+复杂页能力已全部并入独立项目，不再作为可剥离的插件存在：
+
+- `CodeMaster.UiComposition`：核心定义、生成与 API。
+- `CodeMaster.Agent`：结构化规划与审批适配（原 `UiComposition.Agent`，位于 `Tools/` 下）。
+- `CodeMaster.LocalAgent`：本地元数据与生成包（原 `UiComposition.LocalAgent`，位于 `Extensibility/` 下）。
+- `CodeMaster.McpServer`：MCP 工具（原 `UiComposition.McpServer`，位于 `Tools/` 下）。
+- `CodeMaster.Migrator`：表结构迁移与种子（原 `UiComposition.Migrator`，位于 `Persistence/UiComposition/` 下）。
+
+扩展通过 `ICodeMasterExtension` 在启动时扫描注册；宿主项目与自身程序集都在扫描范围内，
+不再依赖复制 DLL 到 `modules/` 目录。
 
 ---
 

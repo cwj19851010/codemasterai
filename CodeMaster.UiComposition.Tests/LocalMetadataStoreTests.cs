@@ -7,7 +7,6 @@ using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.LocalAgent.Extensibility;
 using CodeMaster.LocalAgent.Models;
 using CodeMaster.LocalAgent.Services;
-using CodeMaster.UiComposition.LocalAgent;
 using CodeMaster.UiComposition.Entities;
 using Microsoft.Extensions.Options;
 

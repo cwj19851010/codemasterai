@@ -37,7 +37,10 @@ builder.Services.AddSingleton<McpSessionResolver>();
 var optionalModules = CodeMasterModuleAssemblyLoader.LoadOptionalModules(
     AppContext.BaseDirectory,
     Environment.GetEnvironmentVariable("CODEMASTER_MCP_MODULE_PATHS"));
-builder.Services.AddCodeMasterExtensions(optionalModules);
+// Assemblies compiled into this host (including the merged UiComposition tools)
+// are not under modules/, so add the entry assembly explicitly.
+builder.Services.AddCodeMasterExtensions(
+    optionalModules.Append(typeof(Program).Assembly));
 
 builder.Services.AddTransient<AuthTool>();
 builder.Services.AddTransient<QueryTool>();

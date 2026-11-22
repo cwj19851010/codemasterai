@@ -1,7 +1,7 @@
 ﻿using System.Text.RegularExpressions;
 using CodeMaster.Application.Dtos.CodeGen;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 /// <summary>
 /// Derives the C# type of a view output column from the SELECT projection that produces it.

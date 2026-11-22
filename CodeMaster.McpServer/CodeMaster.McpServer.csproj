@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CodeMaster.LocalAgent\CodeMaster.LocalAgent.csproj" />
+    <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,11 +34,6 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="ValidateUiCompositionMcpModule"
-          BeforeTargets="Publish"
-          Condition="!Exists('..\CodeMaster.UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
-    <Error Text="Missing CodeMaster.UiComposition.McpServer project; the working tree is incomplete." />
-  </Target>
 
   <Target Name="ValidatePrintingLocalAgentMcpModule"
           BeforeTargets="Publish"
@@ -45,13 +41,6 @@
     <Error Text="CodeMaster Full edition requires the printing LocalAgent module." />
   </Target>
 
-  <Target Name="BuildUiCompositionMcpModule"
-          BeforeTargets="Publish"
-          Condition="Exists('..\CodeMaster.UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
-    <MSBuild Projects="..\CodeMaster.UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);SkipUiCompositionWebApiCopy=true" />
-  </Target>
 
   <Target Name="BuildPrintingLocalAgentMcpModule"
           BeforeTargets="Publish"
@@ -61,20 +50,6 @@
              Properties="Configuration=$(Configuration);SkipPrintingLocalAgentCopy=true" />
   </Target>
 
-  <Target Name="PublishUiCompositionMcpModule"
-          AfterTargets="Publish"
-          Condition="Exists('..\CodeMaster.UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj')">
-    <ItemGroup>
-      <UiCompositionMcpFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.dll" />
-      <UiCompositionMcpFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.dll" />
-      <UiCompositionMcpFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\Microsoft.OpenApi.Readers.dll" />
-      <UiCompositionMcpFiles Include="..\CodeMaster.UiComposition\bin\$(Configuration)\$(TargetFramework)\SharpYaml.dll" />
-      <UiCompositionMcpFiles Include="..\CodeMaster.UiComposition.LocalAgent\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.LocalAgent.dll" />
-      <UiCompositionMcpFiles Include="..\CodeMaster.UiComposition.McpServer\bin\$(Configuration)\$(TargetFramework)\CodeMaster.UiComposition.McpServer.dll" />
-    </ItemGroup>
-    <MakeDir Directories="$(PublishDir)modules" />
-    <Copy SourceFiles="@(UiCompositionMcpFiles)" DestinationFolder="$(PublishDir)modules" />
-  </Target>
 
   <Target Name="PublishPrintingLocalAgentMcpModule"
           AfterTargets="Publish"

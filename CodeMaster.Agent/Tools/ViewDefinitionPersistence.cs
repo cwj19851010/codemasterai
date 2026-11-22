@@ -6,7 +6,7 @@ using CodeMaster.Domain.Entities.CodeGen;
 using CodeMaster.UiComposition.Dtos;
 using CodeMaster.UiComposition.Entities;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 /// <summary>
 /// Persists the durable view definition before registering its generated read-only

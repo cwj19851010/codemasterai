@@ -1,7 +1,7 @@
 ﻿using System.Text.RegularExpressions;
 using CodeMaster.Application.Dtos.CodeGen;
 
-namespace CodeMaster.UiComposition.Agent;
+namespace CodeMaster.Agent.Tools;
 
 /// <summary>
 /// Repairs the column references a hand-written view SELECT gets wrong, before anything reads it.

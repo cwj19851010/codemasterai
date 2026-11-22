@@ -95,16 +95,16 @@ Templates                  Source template package used for generated projects
 
 ## Quick Start
 
-Install .NET SDK 10, Node.js 20+ and one supported database first. The steps below use MySQL 8 as an example. The repository only contains example configuration without real passwords; copy and edit the local files before the first run.
+Install .NET SDK 10 and Node.js 20+. The default configuration uses SQLite, so no database server is needed to get started; see "Switching Databases" below for MySQL and other providers.
 
-1. Create local configuration:
+1. Create local configuration (the repository only ships example files without real passwords):
 
 ```bash
 cp CodeMaster.WebApi/appsettings.example.json CodeMaster.WebApi/appsettings.json
 cp CodeMaster.Migrator/appsettings.example.json CodeMaster.Migrator/appsettings.json
 ```
 
-Set the MySQL password in both files and make sure they target the same `CodeMasterDB` database. The Migrator creates the database, initializes its schema and inserts seed data automatically.
+The examples default to `DbProvider=Sqlite` with `Data Source=../CodeMaster.db`. Both project folders are siblings, so they resolve to the same database file at the repository root.
 
 2. Restore and build:
 
@@ -113,13 +113,14 @@ dotnet restore CodeMaster.sln
 dotnet build CodeMaster.sln
 ```
 
-3. Build the migrator for MySQL and initialize the database:
+3. Initialize the database (schema and seed data):
 
 ```bash
 cd CodeMaster.Migrator
-dotnet build -p:DbProvider=MySql
-dotnet run --no-build
+dotnet run
 ```
+
+`CodeMaster.Migrator` defaults to `DbProvider=Sqlite`, matching the example configuration, so no extra argument is needed. If it was previously built for another provider, rebuild with `dotnet build -p:DbProvider=Sqlite`.
 
 4. Start the API:
 

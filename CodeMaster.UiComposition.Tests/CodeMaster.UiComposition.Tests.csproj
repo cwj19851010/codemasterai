@@ -24,10 +24,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CodeMaster.UiComposition\CodeMaster.UiComposition.csproj" />
-    <ProjectReference Include="..\CodeMaster.UiComposition.Agent\CodeMaster.UiComposition.Agent.csproj" />
-    <ProjectReference Include="..\CodeMaster.UiComposition.LocalAgent\CodeMaster.UiComposition.LocalAgent.csproj" />
-    <ProjectReference Include="..\CodeMaster.UiComposition.McpServer\CodeMaster.UiComposition.McpServer.csproj" />
-    <ProjectReference Include="..\CodeMaster.UiComposition.Migrator\CodeMaster.UiComposition.Migrator.csproj" />
+    <ProjectReference Include="..\CodeMaster.Agent\CodeMaster.Agent.csproj" />
+    <ProjectReference Include="..\CodeMaster.LocalAgent\CodeMaster.LocalAgent.csproj" />
+    <ProjectReference Include="..\CodeMaster.McpServer\CodeMaster.McpServer.csproj" />
+    <ProjectReference Include="..\CodeMaster.Migrator\CodeMaster.Migrator.csproj" />
     <ProjectReference Include="..\CodeMaster.CodeGenerator\CodeMaster.CodeGenerator.csproj" />
   </ItemGroup>
 

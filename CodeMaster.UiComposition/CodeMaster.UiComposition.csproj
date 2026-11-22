@@ -30,18 +30,5 @@
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <Target Name="CopyUiCompositionToWebApi"
-          AfterTargets="Build"
-          Condition="'$(SkipUiCompositionWebApiCopy)' != 'true'">
-    <ItemGroup>
-      <UiCompositionModuleFiles Include="$(TargetPath)" />
-      <UiCompositionModuleFiles Include="$(TargetDir)Microsoft.OpenApi.dll" />
-      <UiCompositionModuleFiles Include="$(TargetDir)Microsoft.OpenApi.Readers.dll" />
-      <UiCompositionModuleFiles Include="$(TargetDir)SharpYaml.dll" />
-    </ItemGroup>
-    <MakeDir Directories="..\CodeMaster.WebApi\bin\$(Configuration)\$(TargetFramework)\modules" />
-    <Copy SourceFiles="@(UiCompositionModuleFiles)"
-          DestinationFolder="..\CodeMaster.WebApi\bin\$(Configuration)\$(TargetFramework)\modules" />
-  </Target>
 
 </Project>

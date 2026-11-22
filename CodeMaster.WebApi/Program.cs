@@ -75,10 +75,18 @@ builder.Services.AddRepositories();
 
 // 获取 Application 程序集
 var applicationAssembly = Assembly.Load("CodeMaster.Application");
+// UiComposition 及其 Agent 扩展已合并进普通项目引用，不再走 modules 动态加载，
+// 因此需要显式加入扫描列表，否则扩展不会被注册。
+var hostExtensionAssemblies = new[]
+{
+    Assembly.Load("CodeMaster.Agent"),
+    Assembly.Load("CodeMaster.UiComposition")
+};
 var optionalModuleAssemblies = CodeMasterModuleAssemblyLoader.LoadOptionalModules(
     AppContext.BaseDirectory,
     Environment.GetEnvironmentVariable("CODEMASTER_MODULE_PATHS"));
 var applicationAssemblies = new[] { applicationAssembly }
+    .Concat(hostExtensionAssemblies)
     .Concat(optionalModuleAssemblies)
     .ToArray();
 if (optionalModuleAssemblies.Count > 0)

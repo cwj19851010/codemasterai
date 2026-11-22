@@ -9,7 +9,7 @@ using CodeMaster.McpServer.Services;
 using CodeMaster.Domain.Entities.CodeGen;
 using ModelContextProtocol.Server;
 
-namespace CodeMaster.UiComposition.McpServer;
+namespace CodeMaster.McpServer.Tools;
 
 public interface IUiCompositionMcpToolHandler : ICodeMasterExtension
 {
