@@ -345,6 +345,10 @@ public partial class ProjectInitializationService
         // 兼容历史模板 ZIP：开源版不含 SeedData/CodeGen，清掉孤立的 CodeGen/打印种子引用
         await RemoveDanglingCodeGenSeedReferencesAsync(projectPath, projectName);
 
+        // 兼容历史模板 ZIP：开源版不含 printReport.js，补一个空实现保证前端构建可过
+        await PrintReportStub.EnsureWrittenAsync(
+            Path.Combine(projectPath, $"{projectName}.Vue", "src", "utils"));
+
         if (!state.SolutionGenerated)
         {
             SendProgress(projectId, "generate_sln", "生成解决方案文件...", 60);
@@ -1910,6 +1914,10 @@ export default service
 
         // 兼容历史模板 ZIP：开源版不含 SeedData/CodeGen，清掉孤立的 CodeGen/打印种子引用
         await RemoveDanglingCodeGenSeedReferencesAsync(projectPath, projectName);
+
+        // 兼容历史模板 ZIP：开源版不含 printReport.js，补一个空实现保证前端构建可过
+        await PrintReportStub.EnsureWrittenAsync(
+            Path.Combine(projectPath, $"{projectName}.Vue", "src", "utils"));
     }
 
     /// <summary>

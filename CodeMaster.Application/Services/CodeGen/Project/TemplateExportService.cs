@@ -153,6 +153,12 @@ public class TemplateExportService
             await RemoveAgentDbContextReferencesAsync(tempDir);
             await RemoveCodeGenDbContextReferencesAsync(tempDir);
 
+            // 4.6 开源版补充报表打印占位实现（完整版由 overlay 注入真实实现，不受影响）
+            if (!config.Printing.Enabled)
+            {
+                await PrintReportStub.EnsureWrittenAsync(Path.Combine(tempDir, "CodeMaster.Vue", "src", "utils"));
+            }
+
             // 5. 复制 template.sln 并重命名
             await CopySolutionTemplateAsync(sourceDir, tempDir);
             ValidateCleanTemplateDirectory(sourceDir, tempDir, config);
