@@ -9,6 +9,11 @@ public static class GlobalTranslations
     {
         return new Dictionary<string, Dictionary<string, string>>
         {
+            // 顶级菜单目录：CreateTopLevelDirectoriesAsync 写入的 titleKey 必须有对应翻译，
+            // 否则前端 t(titleKey) 找不到 key 会回退显示英文 key 本身（system / monitor）。
+            { "system", new() { { "zh-CN", "系统管理" }, { "en-US", "System" } } },
+            { "monitor", new() { { "zh-CN", "监控管理" }, { "en-US", "Monitor" } } },
+
             // 应用标题
             { "app_title", new() { { "zh-CN", "CodeMaster" }, { "en-US", "CodeMaster" } } },
             { "login_title", new() { { "zh-CN", "CodeMaster 管理系统" }, { "en-US", "CodeMaster Admin System" } } },
