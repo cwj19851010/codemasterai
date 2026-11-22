@@ -213,6 +213,18 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException($"Missing configuration: ConnectionStrings:DefaultConnection. ContentRoot={builder.Environment.ContentRootPath}, Environment={builder.Environment.EnvironmentName}, appsettings.json exists={File.Exists(Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"))}");
 }
 
+// SQLite 的相对路径按进程工作目录解析，启动时把实际文件路径打出来，避免连错库
+if (!string.IsNullOrWhiteSpace(dbProvider) && dbProvider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    var dataSourceMatch = System.Text.RegularExpressions.Regex.Match(connectionString, @"Data\s*Source\s*=\s*([^;]+)");
+    if (dataSourceMatch.Success)
+    {
+        var rawPath = dataSourceMatch.Groups[1].Value.Trim();
+        var resolvedPath = Path.IsPathRooted(rawPath) ? rawPath : Path.GetFullPath(rawPath);
+        Console.WriteLine($"[Sqlite] 数据库文件: {rawPath} -> {resolvedPath}");
+    }
+}
+
 if (string.IsNullOrWhiteSpace(dbProvider))
 {
     throw new InvalidOperationException($"Missing configuration: DbProvider. ContentRoot={builder.Environment.ContentRootPath}, Environment={builder.Environment.EnvironmentName}, appsettings.json exists={File.Exists(Path.Combine(builder.Environment.ContentRootPath, "appsettings.json"))}");

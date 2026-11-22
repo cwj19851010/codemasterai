@@ -43,6 +43,19 @@ var dbProvider = configuration["DbProvider"] ?? "SqlServer";
 Console.WriteLine($"数据库提供程序: {dbProvider}");
 Console.WriteLine($"连接字符串: {MaskConnectionString(connectionString)}\n");
 
+// SQLite 的相对路径按进程工作目录解析，把实际落地的文件路径打出来，
+// 避免「迁移建了一个库、服务连了另一个库」这种排查成本很高的问题。
+if (dbProvider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    var dataSourceMatch = System.Text.RegularExpressions.Regex.Match(connectionString, @"Data\s*Source\s*=\s*([^;]+)");
+    if (dataSourceMatch.Success)
+    {
+        var rawPath = dataSourceMatch.Groups[1].Value.Trim();
+        var resolvedPath = Path.IsPathRooted(rawPath) ? rawPath : Path.GetFullPath(rawPath);
+        Console.WriteLine($"[Sqlite] 数据库文件: {rawPath} -> {resolvedPath}");
+    }
+}
+
 #if DB_MYSQL
 await EnsureMySqlDatabaseExistsAsync(connectionString);
 #endif

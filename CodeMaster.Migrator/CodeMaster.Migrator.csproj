@@ -10,6 +10,9 @@
     <!-- 默认使用 SQLite，克隆后无需安装数据库即可运行；
          切换到其它数据库用 -p:DbProvider=PostgreSQL / MySql / SqlServer / Oracle 覆盖 -->
     <DbProvider Condition="'$(DbProvider)'==''">Sqlite</DbProvider>
+    <!-- appsettings.json 里的 SQLite 连接串是相对路径（Data Source=../CodeMaster.db），
+         相对的是进程工作目录。固定成项目目录，保证 VS 调试与命令行 dotnet run 指向同一个库文件。 -->
+    <RunWorkingDirectory>$(MSBuildProjectDirectory)</RunWorkingDirectory>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(DbProvider)'=='' OR '$(DbProvider)'=='SqlServer'">
