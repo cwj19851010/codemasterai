@@ -2,8 +2,16 @@
   <el-container class="layout-container">
     <el-aside :width="isCollapse ? '64px' : '200px'" class="sidebar">
       <div class="logo">
-        <h2 v-if="!isCollapse">{{t('app_title')}}</h2>
-        <h2 v-else>CM</h2>
+        <a
+          class="logo-link"
+          href="https://www.codemasterai.top/"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="返回官网主页"
+        >
+          <h2 v-if="!isCollapse">{{t('app_title')}}</h2>
+          <h2 v-else>CM</h2>
+        </a>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -29,6 +37,11 @@
           <breadcrumb class="breadcrumb" />
         </div>
         <div class="header-right">
+          <nav class="quick-links" aria-label="快速链接">
+            <a href="https://www.codemasterai.top/" target="_blank" rel="noopener noreferrer">主页</a>
+            <a href="https://gitee.com/cwj19851010/codemasterai" target="_blank" rel="noopener noreferrer">源码</a>
+            <a href="javascript:void(0)" @click="goTemplateConfig">模板</a>
+          </nav>
           <el-tooltip content="AI 助手" placement="bottom">
             <el-button
               class="agent-trigger"
@@ -128,6 +141,11 @@ const toggleSidebar = () => {
   settingsStore.toggleSidebar()
 }
 
+// 顶栏「模板」入口：跳到代码管理下的模板配置页
+const goTemplateConfig = () => {
+  router.push('/codegen/templateConfig')
+}
+
 const handleLogout = async () => {
   ElMessageBox.confirm(t('logout_confirm'), t('prompt'), {
     confirmButtonText: t('confirm'),
@@ -182,6 +200,15 @@ onUnmounted(async () => {
     background: var(--sidebar-logo-bg, rgba(0, 0, 0, 0.16));
     border-bottom: 1px solid var(--sidebar-border, rgba(148, 163, 184, 0.16));
     transition: all 0.3s;
+
+    .logo-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      text-decoration: none;
+      cursor: pointer;
+    }
 
     h2 {
       color: var(--sidebar-logo-color, #fff);
@@ -272,6 +299,25 @@ onUnmounted(async () => {
     display: flex;
     align-items: center;
     gap: 10px;
+
+    .quick-links {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-right: 4px;
+      font-size: 13px;
+
+      a {
+        color: var(--app-text-muted, #64748b);
+        text-decoration: none;
+        white-space: nowrap;
+        transition: color 0.2s;
+
+        &:hover {
+          color: var(--el-color-primary, #2563eb);
+        }
+      }
+    }
 
     .header-item {
       display: flex;
