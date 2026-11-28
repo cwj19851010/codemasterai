@@ -226,6 +226,8 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Release Notes
 
+Current release: **2026.11** · Full list in [CHANGELOG.md](CHANGELOG.md) (Chinese)
+
 ### November 2026: build and initialization fixes
 
 This release targets the most common reports from the community — **generated projects that fail to build, and initializations that stop halfway**.
