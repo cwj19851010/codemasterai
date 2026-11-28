@@ -75,7 +75,7 @@
     </div>
 </section>
 
-<section class="section data-core">
+<section class="section data-core" id="workflow">
     <div class="section-head wide">
         <p class="eyebrow">One blueprint, every artifact</p>
         <h2>一份元数据，贯通 API、权限、数据库与前端</h2>
@@ -102,7 +102,7 @@
     </div>
 </section>
 
-<section class="section capabilities-section">
+<section class="section capabilities-section" id="features">
     <div class="feature-grid">
         <article>
             <strong>干净框架导出</strong>
@@ -112,7 +112,7 @@
             <strong>完整页面设计器</strong>
             <p>基于 Element Plus 的拖拽设计。稳定节点 ID 让布局、脚本与 Agent 修改可以持续重放。</p>
         </article>
-        <article>
+        <article id="agent">
             <strong>MCP + 内置 Agent</strong>
             <p>Codex、Claude Code 通过 MCP 协作；内置 Agent 读取蓝图、提交审批、执行生成并做真实构建验证。</p>
         </article>
@@ -137,6 +137,32 @@
             <img src="/site/images/product-project-list.png" alt="CodeMaster 项目实体管理与代码生成操作界面" loading="lazy" />
             <figcaption><strong>从实体到代码</strong><span>围绕实体执行设计、增量生成、全量生成、菜单和多语言同步。</span></figcaption>
         </figure>
+    </div>
+</section>
+
+<section class="section capabilities-section" id="architecture">
+    <div class="section-head wide">
+        <p class="eyebrow">Architecture</p>
+        <h2>标准技术栈，生成物可以独立演进</h2>
+        <p>平台与生成项目共用同一套约定，不依赖私有运行时。哪天不再用 CodeMaster，工程照样能构建、部署和继续开发。</p>
+    </div>
+    <div class="feature-grid">
+        <article>
+            <strong>后端</strong>
+            <p>.NET 10 / ASP.NET Core。动态 API、JWT 与权限策略、SqlSugar 数据访问、SignalR 通知，按约定自动注册。</p>
+        </article>
+        <article>
+            <strong>前端</strong>
+            <p>Vue 3 + Element Plus + Vite。路由、菜单与按钮权限同步生成，页面模板可以在线维护。</p>
+        </article>
+        <article>
+            <strong>数据</strong>
+            <p>EF Core Migrator 负责建表与种子数据，SQLite、MySQL、PostgreSQL、SQL Server 均可切换。</p>
+        </article>
+        <article>
+            <strong>集成</strong>
+            <p>MCP Server 对接 Codex、Claude Code；Tauri 桌面端承载本地 Agent 与项目初始化。</p>
+        </article>
     </div>
 </section>
 

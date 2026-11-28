@@ -42,6 +42,9 @@ public class AccountController : Controller
         try
         {
             var result = await _accountService.RegisterWithEmailAsync(dto);
+            // 注册即视为登录：写入与服务端渲染页面共用的 Cookie，
+            // 否则 /community 等门户页仍按未登录渲染。
+            WriteAuthCookie(result.AccessToken, result.ExpiresIn);
             return Ok(ApiResponse<LoginResultDto>.Success(result, "Registration successful."));
         }
         catch (Exception ex)
@@ -120,6 +123,9 @@ public class AccountController : Controller
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
 
+        // GitHub 登录同样要建立门户会话，否则 /community 仍显示未登录
+        WriteAuthCookie(result.AccessToken, result.ExpiresIn);
+
         return Content($"""
             <!doctype html>
             <html lang="zh-CN">
@@ -150,5 +156,27 @@ public class AccountController : Controller
 
         var separator = url.Contains('?') ? '&' : '?';
         return $"{url}{separator}{query}";
+    }
+
+    /// <summary>
+    /// 写入服务端渲染页面共用的认证 Cookie（与 AuthController 保持一致）。
+    /// </summary>
+    private void WriteAuthCookie(string token, int? expiresIn)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return;
+        }
+
+        Response.Cookies.Append("cm_token", token, new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = Request.IsHttps,
+            Path = "/",
+            Expires = expiresIn.HasValue && expiresIn.Value > 0
+                ? DateTimeOffset.UtcNow.AddSeconds(expiresIn.Value)
+                : DateTimeOffset.UtcNow.AddHours(2)
+        });
     }
 }
