@@ -268,7 +268,7 @@ Issues and pull requests are welcome while the project is stabilizing. Please re
 ## Community and Support
 
 - Issues and feature requests: [Gitee Issues](https://gitee.com/cwj19851010/codemasterai/issues) · [GitHub Issues](https://github.com/cwj19851010/codemasterai/issues)
-- QQ / WeChat group QR codes: [Contact page](https://www.codemasterai.top/contact)
+- QQ group (Chinese-speaking community): **1135890233** — the QR code is on the [Contact page](https://www.codemasterai.top/contact)
 - When reporting a build failure, include the full `dotnet build` / `npm run build` output and the template version used
 
 ## License

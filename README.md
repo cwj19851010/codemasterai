@@ -324,7 +324,11 @@ CodeMasterAI MCP Server 面向自然语言代码生成工作流，例如：
 ## 交流与反馈
 
 - 问题与需求：[Gitee Issues](https://gitee.com/cwj19851010/codemasterai/issues) · [GitHub Issues](https://github.com/cwj19851010/codemasterai/issues)
-- QQ 群 / 微信群二维码：[联系我们](https://www.codemasterai.top/contact)
+- QQ 交流群：**1135890233**（扫码或直接搜索群号加入）
+
+  <img src="docs/images/qq-group.jpg" alt="CodeMaster 交流群二维码" width="260" />
+
+- 微信群与商务合作：[联系我们](https://www.codemasterai.top/contact)
 - 提编译类问题时请附完整的 `dotnet build` / `npm run build` 输出，以及生成项目使用的模板版本
 
 ## 开源协议
