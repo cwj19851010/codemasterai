@@ -58,7 +58,8 @@
                 <button class="forum-btn primary lg" type="button" data-open-composer>发起讨论</button>
                 @if (!Model.CurrentUserId.HasValue)
                 {
-                    <a class="forum-btn lg" href="/register">注册 / 登录</a>
+                    <a class="forum-btn lg" href="/login">登录</a>
+                    <a class="forum-btn primary lg" href="/register">注册</a>
                 }
                 else
                 {
