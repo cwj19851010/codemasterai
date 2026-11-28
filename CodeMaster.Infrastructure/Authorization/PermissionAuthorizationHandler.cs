@@ -1,24 +1,34 @@
 using System.Security.Claims;
+using CodeMaster.Core.Authorization;
 using Microsoft.AspNetCore.Authorization;
 
 namespace CodeMaster.Infrastructure.Authorization;
 
 /// <summary>
-/// 权限授权处理器
+/// 权限授权处理器。
+/// JWT 只携带身份信息，权限优先从令牌声明读取（兼容 MCP PAT 与未过期的旧令牌），
+/// 读不到时按用户查询 <see cref="IUserPermissionProvider"/>（内部带缓存）。
 /// </summary>
 public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionRequirement>
 {
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
+    private readonly IUserPermissionProvider? _permissionProvider;
+
+    public PermissionAuthorizationHandler(IUserPermissionProvider? permissionProvider = null)
+    {
+        _permissionProvider = permissionProvider;
+    }
+
+    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
     {
         if (context.User?.Identity?.IsAuthenticated != true)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         if (IsHostAdmin(context.User))
         {
             context.Succeed(requirement);
-            return Task.CompletedTask;
+            return;
         }
 
         var permissionSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -39,17 +49,60 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
             }
         }
 
-        // 支持多个权限（OR 逻辑）：任意一个权限满足即可
+        if (IsSatisfied(permissionSet, requirement))
+        {
+            context.Succeed(requirement);
+            return;
+        }
+
+        // 令牌里没有权限声明（新签发的 JWT 就是这样），按用户查缓存。
+        if (_permissionProvider == null)
+        {
+            return;
+        }
+
+        var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier);
+        if (!long.TryParse(userIdClaim?.Value, out var userId))
+        {
+            return;
+        }
+
+        long.TryParse(context.User.FindFirst("TenantId")?.Value, out var tenantId);
+
+        try
+        {
+            var permissions = await _permissionProvider.GetPermissionsAsync(userId, tenantId);
+            foreach (var permission in permissions)
+            {
+                permissionSet.Add(permission);
+            }
+        }
+        catch
+        {
+            // 查权限失败按无权限处理，避免把异常抛成 500。
+            return;
+        }
+
+        if (IsSatisfied(permissionSet, requirement))
+        {
+            context.Succeed(requirement);
+        }
+    }
+
+    /// <summary>
+    /// 支持多个权限（OR 逻辑）：任意一个权限满足即可。
+    /// </summary>
+    private static bool IsSatisfied(HashSet<string> permissionSet, PermissionRequirement requirement)
+    {
         foreach (var requiredPermission in requirement.Permissions)
         {
             if (permissionSet.Contains(requiredPermission))
             {
-                context.Succeed(requirement);
-                return Task.CompletedTask;
+                return true;
             }
         }
 
-        return Task.CompletedTask;
+        return false;
     }
 
     private static bool IsHostAdmin(ClaimsPrincipal user)

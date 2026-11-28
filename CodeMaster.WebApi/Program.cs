@@ -320,6 +320,10 @@ builder.Services.AddAuthentication(options =>
 // 配置授权与权限策略
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
+// 权限不再随 JWT 下发，按用户查内存缓存（角色/菜单权限变更时可整体失效）
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<CodeMaster.Core.Authorization.IUserPermissionProvider,
+    CodeMaster.Application.Services.System.UserPermissionCache>();
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
 // 配置CORS（SignalR 需要支持 Credentials）

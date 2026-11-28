@@ -75,13 +75,10 @@ public class JwtService : IJwtService
         }
 
         // 权限
-        if (permissions != null)
-        {
-            foreach (var permission in permissions.Where(p => !string.IsNullOrWhiteSpace(p)))
-            {
-                claims.Add(new Claim("Permission", permission));
-            }
-        }
+        // 权限不再写入令牌：admin 有 100+ 权限码，会让 Set-Cookie 超过 4KB，
+        // 撞上 nginx/网关的响应头缓冲上限（表现为登录 502）。
+        // 授权时由 PermissionAuthorizationHandler 通过 IUserPermissionProvider 查缓存。
+        // 角色、租户与数据权限范围仍然保留在令牌里。
 
         // 数据权限范围（角色）
         if (dataScope.HasValue)

@@ -1,5 +1,14 @@
 # 更新日志
 
+## 未发布
+
+- **JWT 不再携带权限声明**：admin 有 100+ 权限码，登录时 `Set-Cookie` 约 4KB，超过
+  nginx 默认 `proxy_buffer_size`（4k），表现为「登录 502」。现在令牌只放
+  `userId / tenantId / roles / 数据权限范围`，权限由 `PermissionAuthorizationHandler`
+  通过 `IUserPermissionProvider`（内存缓存 5 分钟）按需查询；角色菜单变更时缓存立即失效。
+  令牌体积从约 4KB 降到约 0.9KB。
+- 兼容性：旧令牌（含 `Permission` 声明）与 MCP PAT 仍然按声明校验，不受影响。
+
 ## v1.1.0（2026-11-29）
 
 这一版主要在收编译和初始化的问题——社区里反馈最多的「生成出来编译不过、初始化跑不完」。同时把门户的注册登录和联系方式补齐了。

@@ -48,11 +48,16 @@ public class SysRoleService : ISysRoleService
 {
     private readonly IRepository<SysRole> _roleRepository;
     private readonly ISqlSugarClient _db;
+    private readonly CodeMaster.Core.Authorization.IUserPermissionProvider? _permissionProvider;
 
-    public SysRoleService(IRepository<SysRole> roleRepository, ISqlSugarClient db)
+    public SysRoleService(
+        IRepository<SysRole> roleRepository,
+        ISqlSugarClient db,
+        CodeMaster.Core.Authorization.IUserPermissionProvider? permissionProvider = null)
     {
         _roleRepository = roleRepository;
         _db = db;
+        _permissionProvider = permissionProvider;
     }
 
     public async Task<SysRoleDto?> GetByIdAsync(long id)
@@ -160,7 +165,9 @@ public class SysRoleService : ISysRoleService
             throw new Exception($"管理员角色 '{role.RoleName}' (RoleKey: {role.RoleKey}) 不允许删除");
         }
 
-        return await _db.SoftDeleteAsync<SysRole>(id);
+        var result = await _db.SoftDeleteAsync<SysRole>(id);
+        _permissionProvider?.InvalidateAll();
+        return result;
     }
 
     public async Task<List<SysRoleDto>> GetAllList()
@@ -215,6 +222,9 @@ public class SysRoleService : ISysRoleService
 
             await _db.Insertable(roleMenus).ExecuteCommandAsync();
         }
+
+        // 角色菜单变了，用户权限缓存立即失效，避免改完要等缓存过期才生效
+        _permissionProvider?.InvalidateAll();
     }
 
     private static bool IsProtectedAdminRole(SysRole role)
