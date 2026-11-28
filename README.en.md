@@ -2,7 +2,7 @@
 
 **An AI-assisted low-code platform for .NET 10 and Vue 3 that turns visual models into maintainable, independently deployable application source code.**
 
-[Website](https://www.codemasterai.top) · [Live Demo](http://124.221.136.83:8000) · [Introduction Video](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [简体中文](README.md)
+[Website](https://www.codemasterai.top) · [Live Demo](https://www.codemasterai.top/index.html#/login) · [Introduction Video](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [简体中文](README.md)
 
 CodeMasterAI targets enterprise management systems, internal business platforms and custom software delivery. Teams define projects, modules, entities, fields, relationships and page controls, then generate a complete solution containing backend services, DTOs, database migrations, permissions, menus, localization resources and Vue pages.
 
