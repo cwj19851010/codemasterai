@@ -272,7 +272,7 @@ CodeMasterAI MCP Server 面向自然语言代码生成工作流，例如：
 
 ## 版本更新说明
 
-当前版本：**2026.11** · 完整修复清单见 [CHANGELOG.md](CHANGELOG.md)
+当前版本：**v1.1.0**（2026-11-29 发布） · 完整修复清单见 [CHANGELOG.md](CHANGELOG.md)
 
 ### 2026-11 版本：集中修复生成项目的编译与初始化问题
 
