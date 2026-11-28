@@ -8,7 +8,9 @@
 
 内置 AI Agent 理解需求后直接建模——项目、模块、实体、字段、关系、控件——再生成后端服务、DTO、数据库迁移、权限菜单、国际化资源和前端页面。生成结果是**标准源码**，可以脱离本平台独立构建、部署和二次开发。
 
-[在线体验](http://124.221.136.83:8000) · [介绍视频](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [English](README.en.md)
+[官网](https://www.codemasterai.top) · [在线体验](http://124.221.136.83:8000) · [介绍视频](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [English](README.en.md)
+
+> **最新版本修复了 10 余项编译与初始化问题。** 如果你之前在生成项目时遇到 `dotnet build` / `npm run build` 失败、初始化中断、登录 400 等情况，请拉取最新代码并重新导出模板后再试。具体修复项见 [版本更新说明](#版本更新说明)。
 
 ## 和传统低代码的区别
 
@@ -267,6 +269,43 @@ CodeMasterAI MCP Server 面向自然语言代码生成工作流，例如：
 - 对可编辑模板、上传文件和生成代码流程做权限控制
 
 漏洞报告请查看 [SECURITY.md](SECURITY.md)。
+
+## 版本更新说明
+
+### 2026-11 版本：集中修复生成项目的编译与初始化问题
+
+这一版主要在收拾社区反馈里最多的一类问题——**生成出来的项目编译不过、初始化跑不完**。已修复的问题清单：
+
+**生成项目编译**
+
+- 开源版模板不再引用私有打印模块，修复 `CS0234: 命名空间 SeedData.CodeGen 中不存在类型`
+- 开源版模板补齐 `CodeMaster.Vue/src/utils/printReport.js` 占位实现，修复 `vite build` 报 `Could not load .../printReport`
+- 初始化时自动清理历史模板包里的孤立种子引用，旧模板也能构建通过
+
+**初始化与数据库**
+
+- 合并为单一 `DbContext` 并改为 EF 模块扫描，`Add-Migration` 不再报 `More than one DbContext was found`
+- 修正 SQLite 相对路径的工作目录，Migrator 与 WebApi 指向同一个数据库文件，修复「初始化完没有种子数据、登录 400」
+- 修复 Agent 批次适配器重复注册导致的 `An item with the same key has already been added: project_change_set`
+
+**建模与生成**
+
+- 编译器在实体阶段提前补齐关系外键字段，修复 `references missing target field` / `uses removed or renamed target field`
+- 补齐 `system` / `monitor` 两个顶级目录的多语言翻译，菜单不再回退显示英文 key
+- 模板 include 清单修正（`appsettings.Development.json` → `appsettings.example.json`），导出不再中途失败
+
+**界面结构**
+
+- 移除「数据源管理」，实体 / 视图 / API 收归「代码管理」
+- 菜单顺序调整为：项目、模块、实体、视图、API、复杂页面、模板配置、组件管理
+
+### 升级到本版本
+
+1. 拉取最新代码（Gitee 与 GitHub 已同步）
+2. 重新导出模板；或删除 `Templates/CodeMaster_Template_*.zip` 后重新生成
+3. 已经生成过的项目建议重新初始化，或对照上面的修复项手动处理
+
+如果仍然编译不过，请附上完整的 `dotnet build` / `npm run build` 输出提 Issue，方便定位。
 
 ## 路线图
 

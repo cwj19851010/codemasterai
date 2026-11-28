@@ -2,7 +2,7 @@
 
 **An AI-assisted low-code platform for .NET 10 and Vue 3 that turns visual models into maintainable, independently deployable application source code.**
 
-[Live Demo](http://124.221.136.83:8000) · [Introduction Video](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [简体中文](README.md)
+[Website](https://www.codemasterai.top) · [Live Demo](http://124.221.136.83:8000) · [Introduction Video](https://www.bilibili.com/video/BV1Cxg96nE73/) · [Gitee](https://gitee.com/cwj19851010/codemasterai) · [GitHub](https://github.com/cwj19851010/codemasterai) · [简体中文](README.md)
 
 CodeMasterAI targets enterprise management systems, internal business platforms and custom software delivery. Teams define projects, modules, entities, fields, relationships and page controls, then generate a complete solution containing backend services, DTOs, database migrations, permissions, menus, localization resources and Vue pages.
 
@@ -11,6 +11,8 @@ It is not a page builder that locks applications into a proprietary runtime. Gen
 > Current status: the project is under active development. The core framework, code generation, template designer, MCP integration and Tauri client workflow are usable, while template contracts and selected interactions continue to evolve.
 >
 > The project brand has changed from CodeMaster to CodeMasterAI. Existing solution names, namespaces and selected client identifiers remain under `CodeMaster.*` for compatibility.
+
+> **The latest release fixes 10+ build and initialization issues.** If you previously hit `dotnet build` or `npm run build` failures in generated projects, init errors, or a 400 on login, pull the latest code and re-export the template. See [Release Notes](#release-notes) for details.
 
 ## Introduction Video
 
@@ -221,6 +223,43 @@ Before publishing a fork or deployment:
 - review generated templates before exposing them to untrusted users
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+## Release Notes
+
+### November 2026: build and initialization fixes
+
+This release targets the most common reports from the community — **generated projects that fail to build, and initializations that stop halfway**.
+
+**Generated project build**
+
+- The open-source template no longer references the private printing module (`CS0234: SeedData.CodeGen does not exist`)
+- Added a `CodeMaster.Vue/src/utils/printReport.js` stub so `vite build` stops failing with `Could not load .../printReport`
+- Initialization now removes dangling seed references from older template packages
+
+**Initialization and database**
+
+- Merged into a single `DbContext` with EF module scanning; `Add-Migration` no longer reports `More than one DbContext was found`
+- Fixed the working directory for the relative SQLite connection string so Migrator and WebApi share one database file (fixes "no seed data after init" and the 400 on login)
+- Fixed duplicate registration of the agent batch adapter (`An item with the same key has already been added: project_change_set`)
+
+**Modeling and generation**
+
+- The compiler now creates relation foreign-key fields during the entity stage, fixing `references missing target field` / `uses removed or renamed target field`
+- Added translations for the `system` / `monitor` top-level menus so they no longer fall back to raw English keys
+- Corrected the template include list (`appsettings.Development.json` → `appsettings.example.json`) so exports complete reliably
+
+**Navigation**
+
+- Removed "Data Source Management"; entities, views and APIs now live under "Code Management"
+- Menu order: Projects, Modules, Entities, Views, APIs, Complex Pages, Template Config, Components
+
+### Upgrading
+
+1. Pull the latest code (Gitee and GitHub are in sync)
+2. Re-export the template, or delete `Templates/CodeMaster_Template_*.zip` and regenerate
+3. Re-initialize existing generated projects, or apply the fixes above manually
+
+If a project still fails to build, open an issue with the full `dotnet build` / `npm run build` output.
 
 ## Contributing
 
