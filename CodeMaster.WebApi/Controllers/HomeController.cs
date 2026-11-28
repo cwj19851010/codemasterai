@@ -157,6 +157,52 @@ public class HomeController : Controller
         return Redirect(appUrl);
     }
 
+    [HttpGet("/contact")]
+    public IActionResult Contact()
+    {
+        var section = _configuration.GetSection("Portal:Contact");
+        return View(new PortalContactViewModel
+        {
+            Email = TrimOrNull(section["Email"]),
+            QqGroupNumber = TrimOrNull(section["QqGroupNumber"]),
+            QqGroupQrImage = ResolveSiteImage(section["QqGroupQrImage"]),
+            WeChatQrImage = ResolveSiteImage(section["WeChatQrImage"]),
+            WeChatNote = TrimOrNull(section["WeChatNote"])
+        });
+    }
+
+    /// <summary>
+    /// 只返回真实存在的站内图片，避免配置写了但文件没放时出现破图。
+    /// </summary>
+    private string? ResolveSiteImage(string? value)
+    {
+        var path = TrimOrNull(value);
+        if (path == null)
+        {
+            return null;
+        }
+
+        if (!path.StartsWith('/'))
+        {
+            return path;
+        }
+
+        var webRoot = _environment.WebRootPath;
+        if (string.IsNullOrWhiteSpace(webRoot))
+        {
+            return null;
+        }
+
+        var physicalPath = Path.Combine(webRoot, path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+        return global::System.IO.File.Exists(physicalPath) ? path : null;
+    }
+
+    private static string? TrimOrNull(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
     [HttpGet("/community")]
     public async Task<IActionResult> Community(
         [FromQuery] long? categoryId,

@@ -265,6 +265,12 @@ If a project still fails to build, open an issue with the full `dotnet build` / 
 
 Issues and pull requests are welcome while the project is stabilizing. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening larger changes.
 
+## Community and Support
+
+- Issues and feature requests: [Gitee Issues](https://gitee.com/cwj19851010/codemasterai/issues) · [GitHub Issues](https://github.com/cwj19851010/codemasterai/issues)
+- QQ / WeChat group QR codes: [Contact page](https://www.codemasterai.top/contact)
+- When reporting a build failure, include the full `dotnet build` / `npm run build` output and the template version used
+
 ## License
 
 CodeMasterAI is released under the [Apache License 2.0](LICENSE).

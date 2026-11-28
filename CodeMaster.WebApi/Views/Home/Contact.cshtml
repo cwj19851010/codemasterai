@@ -1,0 +1,70 @@
+@model CodeMaster.WebApi.Models.PortalContactViewModel
+@{
+    ViewData["Title"] = "联系我们 - CodeMaster";
+    ViewData["Description"] = "加入 CodeMaster 交流群，或通过邮箱、Gitee / GitHub Issue 反馈问题、咨询私有化部署。";
+}
+
+<section class="section contact-page">
+    <div class="section-head wide">
+        <p class="eyebrow">Contact</p>
+        <h2>联系我们</h2>
+        <p>遇到问题优先提 Issue，附上版本号、完整报错和复现步骤，定位会快很多；日常交流可以进群。</p>
+    </div>
+
+    <div class="contact-grid">
+        @if (Model.HasChatChannel)
+        {
+            if (!string.IsNullOrWhiteSpace(Model.QqGroupQrImage) || !string.IsNullOrWhiteSpace(Model.QqGroupNumber))
+            {
+                <article class="contact-card">
+                    <h3>QQ 群</h3>
+                    @if (!string.IsNullOrWhiteSpace(Model.QqGroupQrImage))
+                    {
+                        <img class="contact-qr" src="@Model.QqGroupQrImage" alt="CodeMaster QQ 群二维码" loading="lazy" />
+                    }
+                    @if (!string.IsNullOrWhiteSpace(Model.QqGroupNumber))
+                    {
+                        <p>群号：<strong>@Model.QqGroupNumber</strong></p>
+                    }
+                    <p class="contact-note">QQ 群二维码长期有效，也可以直接搜索群号加入。</p>
+                </article>
+            }
+
+            if (!string.IsNullOrWhiteSpace(Model.WeChatQrImage))
+            {
+                <article class="contact-card">
+                    <h3>微信群</h3>
+                    <img class="contact-qr" src="@Model.WeChatQrImage" alt="CodeMaster 微信群二维码" loading="lazy" />
+                    <p class="contact-note">
+                        @(string.IsNullOrWhiteSpace(Model.WeChatNote)
+                            ? "微信群二维码 7 天过期，失效请在 Gitee / GitHub 提 Issue 获取新码。"
+                            : Model.WeChatNote)
+                    </p>
+                </article>
+            }
+        }
+        else
+        {
+            <article class="contact-card">
+                <h3>交流群筹备中</h3>
+                <p>群二维码还没放上来。在那之前，Issue 是最快的反馈方式。</p>
+            </article>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Model.Email))
+        {
+            <article class="contact-card">
+                <h3>邮箱</h3>
+                <p><a href="mailto:@Model.Email">@Model.Email</a></p>
+                <p class="contact-note">适合商务合作、私有化部署咨询。</p>
+            </article>
+        }
+
+        <article class="contact-card">
+            <h3>Issue</h3>
+            <p><a href="https://gitee.com/cwj19851010/codemasterai/issues" target="_blank" rel="noopener noreferrer">Gitee Issues</a></p>
+            <p><a href="https://github.com/cwj19851010/codemasterai/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a></p>
+            <p class="contact-note">生成项目编译失败时，请附完整的 dotnet build / npm run build 输出。</p>
+        </article>
+    </div>
+</section>

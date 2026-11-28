@@ -321,6 +321,12 @@ CodeMasterAI MCP Server 面向自然语言代码生成工作流，例如：
 
 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 交流与反馈
+
+- 问题与需求：[Gitee Issues](https://gitee.com/cwj19851010/codemasterai/issues) · [GitHub Issues](https://github.com/cwj19851010/codemasterai/issues)
+- QQ 群 / 微信群二维码：[联系我们](https://www.codemasterai.top/contact)
+- 提编译类问题时请附完整的 `dotnet build` / `npm run build` 输出，以及生成项目使用的模板版本
+
 ## 开源协议
 
 CodeMasterAI 基于 [Apache License 2.0](LICENSE) 开源。

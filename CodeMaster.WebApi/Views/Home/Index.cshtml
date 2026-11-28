@@ -5,8 +5,8 @@
     var clientDownloadUrl = ViewData["ClientDownloadUrl"] as string ?? "/download/client/windows/latest";
     var clientDownloadVersion = ViewData["ClientDownloadVersion"] as string;
     var clientDownloadSize = ViewData["ClientDownloadSize"] as string;
-    var githubRepositoryUrl = "https://github.com/cwj19851010/code-master";
-    var giteeRepositoryUrl = "https://gitee.com/cwj19851010/code-master";
+    var githubRepositoryUrl = "https://github.com/cwj19851010/codemasterai";
+    var giteeRepositoryUrl = "https://gitee.com/cwj19851010/codemasterai";
     var clientVersionLabel = string.IsNullOrWhiteSpace(clientDownloadVersion) ? "等待上传最新版" : $"最新版 v{clientDownloadVersion}";
     var clientVersionMeta = string.IsNullOrWhiteSpace(clientDownloadSize) ? clientVersionLabel : $"{clientVersionLabel} · {clientDownloadSize}";
     ViewData["Title"] = "CodeMaster - 从低代码工具到 AI 原生 .NET 开发平台";
